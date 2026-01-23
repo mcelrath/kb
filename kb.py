@@ -269,7 +269,7 @@ def render_html_page(title: str, content: str, sidebar: str = "") -> str:
     <style>
         body {{ font-family: system-ui, sans-serif; margin: 0; padding: 0; background: #1a1a1a; color: #e0e0e0; }}
         .container {{ display: flex; min-height: 100vh; }}
-        .sidebar {{ width: 220px; background: #151515; padding: 1rem; border-right: 1px solid #333; flex-shrink: 0; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }}
+        .sidebar {{ position: fixed; top: 0; left: 0; width: 220px; background: #151515; padding: 1rem; border-right: 1px solid #333; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; overflow-y: auto; }}
         .sidebar h3 {{ margin: 0.5rem 0; font-size: 0.85rem; color: #888; text-transform: uppercase; flex-shrink: 0; }}
         .sidebar > ul {{ list-style: none; padding: 0; margin: 0 0 1rem 0; flex-shrink: 0; }}
         .sidebar ul {{ list-style: none; padding: 0; margin: 0; }}
@@ -281,7 +281,7 @@ def render_html_page(title: str, content: str, sidebar: str = "") -> str:
         .sidebar .tags-scroll {{ flex: 1; overflow-y: auto; min-height: 0; }}
         .sidebar label {{ display: block; font-size: 0.9rem; padding: 0.3rem 0; cursor: pointer; flex-shrink: 0; }}
         .sidebar input[type="checkbox"] {{ margin-right: 0.5rem; }}
-        .main-with-sidebar {{ flex: 1; padding: 1rem; max-width: 900px; }}
+        .main-with-sidebar {{ flex: 1; padding: 1rem; max-width: 900px; margin-left: 240px; }}
         .main-full {{ flex: 1; padding: 1rem; max-width: 900px; margin: 0 auto; }}
         nav {{ margin-bottom: 1rem; }}
         nav a {{ color: #6db3f2; margin-right: 1rem; text-decoration: none; }}
