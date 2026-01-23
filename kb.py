@@ -1353,16 +1353,22 @@ Findings:
         self.conn.commit()
 
     def _validate_tags(self, tags: list[str] | None) -> list[str]:
-        """Validate and sanitize a list of tags.
+        """Validate, normalize, and sanitize a list of tags.
+
+        Normalization:
+        - Convert to lowercase
+        - Replace spaces with hyphens
+        - Strip trailing punctuation (., ?, ', ")
 
         Removes invalid tags:
         - Too short (< 2 chars) or too long (> 50 chars)
         - Contains garbage characters (multiple special chars, or invalid combos)
         - Unclosed parentheses like 'SO(3' or orphaned closing parens like 'n)'
         - Only punctuation
+        - Starts with 'source:' (file references, not semantic tags)
 
         Returns:
-            List of valid tags (may be empty if all invalid)
+            List of valid, normalized tags (may be empty if all invalid)
         """
         if not tags:
             return []
@@ -1372,6 +1378,16 @@ Findings:
             if not isinstance(t, str):
                 continue
             t = t.strip()
+
+            # Skip source: file references
+            if t.startswith('source:'):
+                continue
+
+            # Normalize: lowercase, spaces to hyphens, strip trailing punctuation
+            t = t.lower()
+            t = t.replace(' ', '-')
+            t = t.rstrip('.?\'"')
+
             # Length check
             if len(t) < 2 or len(t) > 50:
                 continue
@@ -1389,7 +1405,9 @@ Findings:
             if re.match(r'^[?.!,;:\'"()-]+$', t):
                 continue
             valid.append(t)
-        return valid
+
+        # Deduplicate while preserving order
+        return list(dict.fromkeys(valid))
 
     def _embed(self, text: str) -> bytes:
         """Generate embedding for text using remote endpoint.
@@ -4066,15 +4084,17 @@ def render_html_page(title: str, content: str, sidebar: str = "") -> str:
     <style>
         body {{ font-family: system-ui, sans-serif; margin: 0; padding: 0; background: #1a1a1a; color: #e0e0e0; }}
         .container {{ display: flex; min-height: 100vh; }}
-        .sidebar {{ width: 220px; background: #151515; padding: 1rem; border-right: 1px solid #333; flex-shrink: 0; overflow-y: auto; }}
-        .sidebar h3 {{ margin: 0.5rem 0; font-size: 0.85rem; color: #888; text-transform: uppercase; }}
-        .sidebar ul {{ list-style: none; padding: 0; margin: 0 0 1rem 0; }}
+        .sidebar {{ width: 220px; background: #151515; padding: 1rem; border-right: 1px solid #333; flex-shrink: 0; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }}
+        .sidebar h3 {{ margin: 0.5rem 0; font-size: 0.85rem; color: #888; text-transform: uppercase; flex-shrink: 0; }}
+        .sidebar > ul {{ list-style: none; padding: 0; margin: 0 0 1rem 0; flex-shrink: 0; }}
+        .sidebar ul {{ list-style: none; padding: 0; margin: 0; }}
         .sidebar li {{ margin: 0.2rem 0; }}
         .sidebar a {{ color: #e0e0e0; text-decoration: none; display: block; padding: 0.3rem 0.5rem; border-radius: 3px; font-size: 0.9rem; }}
         .sidebar a:hover {{ background: #252525; }}
         .sidebar a.active {{ background: #6db3f2; color: #000; }}
         .sidebar .count {{ color: #666; font-size: 0.8rem; }}
-        .sidebar label {{ display: block; font-size: 0.9rem; padding: 0.3rem 0; cursor: pointer; }}
+        .sidebar .tags-scroll {{ flex: 1; overflow-y: auto; min-height: 0; }}
+        .sidebar label {{ display: block; font-size: 0.9rem; padding: 0.3rem 0; cursor: pointer; flex-shrink: 0; }}
         .sidebar input[type="checkbox"] {{ margin-right: 0.5rem; }}
         .main-with-sidebar {{ flex: 1; padding: 1rem; max-width: 900px; }}
         .main-full {{ flex: 1; padding: 1rem; max-width: 900px; margin: 0 auto; }}
@@ -4196,16 +4216,14 @@ def render_sidebar(stats: dict, all_tags: list, current_filters: dict) -> str:
         lines.append(f'<li><a href="{build_url({"type": t})}" class="{active} {t}">{t} <span class="count">({count})</span></a></li>')
     lines.append('</ul>')
 
-    # Tags (show top 20)
+    # Tags (scrollable list)
     if all_tags:
-        lines.append('<h3>Tags</h3><ul>')
+        lines.append('<h3>Tags</h3><div class="tags-scroll"><ul>')
         lines.append(f'<li><a href="{build_url(remove_params=["tag"])}" class="{"active" if not tag else ""}">All</a></li>')
-        for t in all_tags[:20]:
+        for t in all_tags:
             active = 'active' if tag == t else ''
             lines.append(f'<li><a href="{build_url({"tag": t})}" class="{active}">{html.escape(t)}</a></li>')
-        if len(all_tags) > 20:
-            lines.append(f'<li><span class="count">+{len(all_tags) - 20} more</span></li>')
-        lines.append('</ul>')
+        lines.append('</ul></div>')
 
     # Superseded toggle
     lines.append('<h3>Status</h3>')
@@ -4930,7 +4948,7 @@ Examples:
                         tags_html = ' '.join(f'<span class="tag">{html.escape(t)}</span>' for t in f.get('tags', [])[:5])
                         items.append(f'''<div class="finding">
                             <span class="finding-type {type_class}">[{f['type']}]</span>
-                            <a href="/finding/{f['id']}">{f['id'][:12]}...</a>
+                            <a href="/finding/{f['id']}">{f['id']}</a>
                             <span class="meta">{proj}</span>
                             <p>{summary}</p>
                             {f'<div>{tags_html}</div>' if tags_html else ''}
@@ -4973,7 +4991,7 @@ Examples:
                             tags_html = ' '.join(f'<span class="tag">{html.escape(t)}</span>' for t in f.get('tags', [])[:5])
                             items.append(f'''<div class="finding">
                                 <span class="finding-type {type_class}">[{f['type']}]</span>
-                                <a href="/finding/{f['id']}">{f['id'][:12]}...</a>
+                                <a href="/finding/{f['id']}">{f['id']}</a>
                                 <span class="meta">sim={sim:.3f} {proj}</span>
                                 <p>{summary}</p>
                                 {f'<div>{tags_html}</div>' if tags_html else ''}
@@ -4994,7 +5012,7 @@ Examples:
 
                 md = format_finding_markdown(finding)
                 content = markdown_to_html(md)
-                return HTMLResponse(render_html_page(f"Finding {finding_id[:12]}...", content, sidebar))
+                return HTMLResponse(render_html_page(f"Finding {finding_id}", content, sidebar))
 
             # WebSocket for live updates
             connected_clients: set = set()
