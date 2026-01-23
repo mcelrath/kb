@@ -39,16 +39,22 @@ def validate_finding_content(content: str, tags: list[str] | None = None) -> lis
 
 
 def validate_tags(tags: list[object] | None) -> list[str]:
-    """Validate and sanitize a list of tags.
+    """Validate, normalize, and sanitize a list of tags.
+
+    Normalization:
+    - Convert to lowercase
+    - Replace spaces with hyphens
+    - Strip trailing punctuation (., ?, ', ")
 
     Removes invalid tags:
     - Too short (< 2 chars) or too long (> 50 chars)
     - Contains garbage characters (multiple special chars, or invalid combos)
     - Unclosed parentheses like 'SO(3' or orphaned closing parens like 'n)'
     - Only punctuation
+    - Starts with 'source:' (file references, not semantic tags)
 
     Returns:
-        List of valid tags (may be empty if all invalid)
+        List of valid, normalized tags (may be empty if all invalid)
     """
     if not tags:
         return []
@@ -58,6 +64,16 @@ def validate_tags(tags: list[object] | None) -> list[str]:
         if not isinstance(t, str):
             continue
         t = t.strip()
+
+        # Skip source: file references
+        if t.startswith('source:'):
+            continue
+
+        # Normalize: lowercase, spaces to hyphens, strip trailing punctuation
+        t = t.lower()
+        t = t.replace(' ', '-')
+        t = t.rstrip('.?\'"')
+
         # Length check
         if len(t) < 2 or len(t) > 50:
             continue
@@ -75,7 +91,9 @@ def validate_tags(tags: list[object] | None) -> list[str]:
         if re.match(r'^[?.!,;:\'"()-]+$', t):
             continue
         valid.append(t)
-    return valid
+
+    # Deduplicate while preserving order
+    return list(dict.fromkeys(valid))
 
 
 def serialize_f32(vector: list[float]) -> bytes:
