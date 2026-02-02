@@ -482,6 +482,8 @@ Finding 2: {candidate['content'][:300]}"""
         finding_type: str | None = None,
         include_superseded: bool = False,
         limit: int = 20,
+        offset: int = 0,
+        tag: str | None = None,
     ) -> list[dict[str, Any]]:
         """List findings with optional filters."""
         sql = "SELECT * FROM findings WHERE 1=1"
@@ -498,9 +500,13 @@ Finding 2: {candidate['content'][:300]}"""
         if finding_type:
             sql += " AND type = ?"
             params.append(finding_type)
+        if tag:
+            sql += " AND EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)"
+            params.append(tag)
 
-        sql += " ORDER BY created_at DESC LIMIT ?"
+        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.append(limit)
+        params.append(offset)
 
         rows = self.conn.execute(sql, params).fetchall()
 
