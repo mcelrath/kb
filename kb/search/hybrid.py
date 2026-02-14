@@ -72,8 +72,9 @@ class HybridSearch:
         vector_results: dict[str, dict[str, Any]] = {}
         fts_results: dict[str, dict[str, Any]] = {}
 
-        # Vector similarity search
-        query_embedding = self.embedding_service.embed(search_query)
+        # Vector similarity search (instruction prefix for query embeddings)
+        prefixed_query = f"Instruct: Given a search query, retrieve relevant research findings\nQuery: {search_query}"
+        query_embedding = self.embedding_service.embed(prefixed_query)
         sql = """
             SELECT f.*, v.distance
             FROM findings f
@@ -220,6 +221,13 @@ class HybridSearch:
 
         # Sort by final score
         results.sort(key=lambda x: x["score"], reverse=True)
+
+        # Normalize scores to 0-1 range relative to top result
+        if results:
+            max_score = results[0]["score"]
+            if max_score > 0:
+                for r in results:
+                    r["score"] = r["score"] / max_score
 
         return results[:limit]
 
