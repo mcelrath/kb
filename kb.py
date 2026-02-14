@@ -942,12 +942,13 @@ Examples:
                         type_class = f['type']
                         summary = f['content'][:200] + "..." if len(f['content']) > 200 else f['content']
                         proj = f"({f['project']})" if f.get('project') else ""
+                        score = f.get('score', 0)
                         sim = f.get('similarity', 0)
                         tags_html = ' '.join(f'<span class="tag">{html.escape(t)}</span>' for t in f.get('tags', [])[:5])
                         items.append(f'''<div class="finding">
                             <span class="finding-type {type_class}">[{f['type']}]</span>
                             <a href="/finding/{f['id']}">{f['id']}</a>
-                            <span class="meta">sim={sim:.3f} {proj}</span>
+                            <span class="meta">score={score:.4f} sim={sim:.3f} {proj}</span>
                             <p>{summary}</p>
                             {f'<div>{tags_html}</div>' if tags_html else ''}
                         </div>''')
@@ -1272,7 +1273,7 @@ Examples:
                     sys.exit(0)
 
             result = kb.reembed_all()
-            print(f"Re-embedded {result['count']} findings")
+            print(f"Re-embedded {result['updated']} findings ({result.get('failed', 0)} failed, {result.get('total', 0)} total)")
 
         elif args.command == "reconcile":
             try:

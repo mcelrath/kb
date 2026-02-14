@@ -132,7 +132,8 @@ class ScriptsRepository(EntityRepository):
         limit: int = 10,
     ) -> list[dict[str, object]]:
         """Search scripts by purpose using semantic similarity."""
-        embedding = self.embedding_service.embed(query)
+        prefixed = f"Instruct: Given a search query, retrieve relevant research findings\nQuery: {query}"
+        embedding = self.embedding_service.embed(prefixed)
 
         sql = """
             SELECT s.*, v.distance
