@@ -61,7 +61,7 @@ class LLMClient:
 
                 request_body: dict[str, object] = {
                     "messages": messages,
-                    "max_tokens": max_tokens,
+                    "max_tokens": -1,
                     "temperature": temperature,
                 }
 
@@ -76,7 +76,13 @@ class LLMClient:
                 )
                 with urlopen(req, timeout=timeout) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
-                    content = data["choices"][0]["message"]["content"].strip()
+                    msg = data["choices"][0]["message"]
+                    content = (msg.get("content") or "").strip()
+                    if not content:
+                        # Thinking models (e.g. Qwen3.5) put output in reasoning_content
+                        reasoning = (msg.get("reasoning_content") or "").strip()
+                        if reasoning:
+                            content = self._extract_from_thinking(reasoning)
                     return self._strip_thinking(content)
             else:
                 # Raw completion API
@@ -106,6 +112,24 @@ class LLMClient:
         # Remove thinking blocks (handles multiline)
         result = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL)
         return result.strip()
+
+    def _extract_from_thinking(self, reasoning: str) -> str:
+        """Extract the actual answer from a thinking model's reasoning_content.
+
+        Thinking models like Qwen3.5 may wrap their answer in JSON within
+        the reasoning_content field when content is empty.
+        """
+        # Try to parse as JSON and extract answer
+        try:
+            parsed = json.loads(reasoning)
+            if isinstance(parsed, dict):
+                for key in ["answer", "response", "output", "result", "content", "text"]:
+                    if key in parsed and isinstance(parsed[key], str) and parsed[key].strip():
+                        return parsed[key].strip()
+        except json.JSONDecodeError:
+            pass
+        # If not JSON, return the reasoning text itself (model may have just output text)
+        return reasoning
 
     def extract_text_from_json(self, text: str, keys: list[str] | None = None) -> str:
         """Extract text content from JSON-wrapped LLM responses.
