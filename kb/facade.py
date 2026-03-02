@@ -854,6 +854,7 @@ Finding 2: {s['content'][:300]}"""
         context = "\n\n".join(context_parts)
 
         system_prompt = """You are a knowledge base assistant. Answer questions based ONLY on the provided findings.
+Output JSON: {"answer": "..."}.
 - Cite findings by their number [1], [2], etc.
 - If findings conflict, explain the discrepancy
 - If findings don't fully answer the question, say what's missing
@@ -1307,17 +1308,12 @@ Return a JSON object with key "questions" containing an array of objects with "q
 
         context = "\n".join(context_parts)
 
-        prompt = f"""Summarize the current state of knowledge about "{topic}" based on these findings:
+        prompt = f"""Summarize the current state of knowledge about "{topic}" based on these findings.
+Output JSON: {{"summary": "..."}}.
 
 {context}
 
-Provide:
-1. A coherent 2-3 paragraph summary
-2. Key established facts (bullet points)
-3. Open questions or unresolved issues
-4. Contradictions or tensions if any
-
-Be specific and cite finding IDs where relevant."""
+Include: coherent summary, key facts, open questions, contradictions. Cite finding IDs."""
 
         response = self._llm.complete(prompt, max_tokens=1000)
 

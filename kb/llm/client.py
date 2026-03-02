@@ -51,66 +51,57 @@ class LLMClient:
             return None
 
         try:
+            # Build prompt using ChatML template for the raw /completion endpoint.
+            # This avoids the /v1/chat/completions endpoint which enables streaming
+            # thinking mode in Qwen3.5, causing pathological overthinking (8000+
+            # tokens for a simple summary). The raw endpoint keeps thinking minimal.
+            parts = []
             if use_chat:
-                # Use chat completion API for better format adherence
-                chat_url = self.llm_url.replace("/completion", "/v1/chat/completions")
-                messages: list[dict[str, str]] = []
                 if system_prompt:
-                    messages.append({"role": "system", "content": system_prompt})
-                messages.append({"role": "user", "content": prompt})
-
-                request_body: dict[str, object] = {
-                    "messages": messages,
-                    "max_tokens": -1,
-                    "temperature": temperature,
-                }
-
-                # Enable JSON mode if requested (llama.cpp supports this)
-                if json_mode:
-                    request_body["response_format"] = {"type": "json_object"}
-
-                req = Request(
-                    chat_url,
-                    data=json.dumps(request_body).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
-                with urlopen(req, timeout=timeout) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    msg = data["choices"][0]["message"]
-                    content = (msg.get("content") or "").strip()
-                    if not content:
-                        # Thinking models (e.g. Qwen3.5) put output in reasoning_content
-                        reasoning = (msg.get("reasoning_content") or "").strip()
-                        if reasoning:
-                            content = self._extract_from_thinking(reasoning)
-                    return self._strip_thinking(content)
+                    parts.append(f"<|im_start|>system\n{system_prompt}<|im_end|>")
+                parts.append(f"<|im_start|>user\n{prompt}<|im_end|>")
+                parts.append("<|im_start|>assistant\n")
+                full_prompt = "\n".join(parts)
+                stop_seqs = ["<|im_end|>"]
             else:
-                # Raw completion API
-                if stop is None:
-                    stop = ["\n\n"]
-                req = Request(
-                    self.llm_url,
-                    data=json.dumps({
-                        "prompt": prompt,
-                        "n_predict": max_tokens,
-                        "temperature": temperature,
-                        "stop": stop,
-                    }).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
-                with urlopen(req, timeout=timeout) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    content = data.get("content", "").strip()
-                    return self._strip_thinking(content)
+                full_prompt = prompt
+                stop_seqs = stop if stop is not None else ["\n\n"]
+
+            req = Request(
+                self.llm_url,
+                data=json.dumps({
+                    "prompt": full_prompt,
+                    "n_predict": max_tokens,
+                    "temperature": temperature,
+                    "stop": stop_seqs,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                content = data.get("content", "").strip()
+                return self._strip_thinking(content)
         except (URLError, TimeoutError, KeyError, json.JSONDecodeError):
             return None
 
     def _strip_thinking(self, text: str) -> str:
-        """Remove <think>...</think> blocks from LLM output."""
+        """Remove thinking blocks from LLM output.
+
+        Handles:
+        - <think>...</think> closed tags
+        - <think>... unclosed tags (token limit hit mid-think)
+        - Qwen-style 'Thinking Process:' text leaking into content
+        """
         if not text:
             return text
-        # Remove thinking blocks (handles multiline)
+        # Remove <think>...</think> closed blocks (handles multiline)
         result = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL)
+        # Remove unclosed <think> blocks (model ran out of tokens mid-think)
+        if '<think>' in result:
+            result = re.sub(r'<think>.*', '', result, flags=re.DOTALL)
+        # Detect Qwen-style thinking leak: content is entirely thinking text
+        if result.startswith("Thinking Process:") or result.startswith("Thinking:\n"):
+            return ""
         return result.strip()
 
     def _extract_from_thinking(self, reasoning: str) -> str:
