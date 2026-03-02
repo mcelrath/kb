@@ -31,8 +31,8 @@ class ContentAnalyzer:
             A short summary (max ~100 chars) or None on failure
         """
         system_prompt = (
-            "You write concise one-line summaries. Output ONLY the summary, "
-            "no intro phrases like 'This finding shows' or 'Summary:'. Max 80 chars."
+            "You write concise one-line summaries. Output ONLY JSON: "
+            '{\"summary\": \"...\"}. No intro phrases. Max 80 chars.'
         )
 
         # Normalize Unicode math symbols to ASCII to avoid confusing the LLM
@@ -263,7 +263,7 @@ Tags: {', '.join(tags) if tags else 'none'}"""
         if not issues:
             return None
 
-        system_prompt = """You fix knowledge base findings. Output ONLY the corrected content.
+        system_prompt = """You fix knowledge base findings. Output JSON: {"corrected": "..."}.
 Rules:
 - KEEP relative file paths to scripts/code (lib/foo.py, calculus_4d/bar.sage) - these are valuable references
 - REMOVE absolute paths (/home/user/...) - replace with relative paths
@@ -301,13 +301,12 @@ Corrected content (output ONLY the fixed text):"""
             return evidence
 
         prompt = f"""Summarize this evidence/output concisely, preserving key technical details.
+Output JSON: {{"summary": "..."}}.
 
 Evidence:
-{evidence[:1500]}
+{evidence[:1500]}"""
 
-Summary (max {max_length} chars):"""
-
-        result = self.llm_client.complete(prompt, max_tokens=100, temperature=0.2, stop=["\n\n"])
+        result = self.llm_client.complete(prompt, max_tokens=100, temperature=0.2)
         if result:
             result = self.llm_client.extract_text_from_json(result, keys=["summary", "text", "result"])
             return result[:max_length]
