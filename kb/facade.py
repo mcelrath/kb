@@ -784,8 +784,15 @@ Finding 2: {s['content'][:300]}"""
     # Utility methods
     # =========================================================================
 
-    def get_all_tags(self) -> list[str]:
-        """Get all unique tags."""
+    def get_all_tags(self, limit: int | None = None) -> list[str]:
+        """Get unique tags, optionally limited to the top N most-used."""
+        if limit is not None:
+            rows = self.conn.execute(
+                "SELECT value, COUNT(*) as cnt FROM findings, json_each(findings.tags) "
+                "WHERE findings.tags IS NOT NULL GROUP BY value ORDER BY cnt DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            return sorted(row[0] for row in rows)
         tags: set[str] = set()
         for row in self.conn.execute("SELECT DISTINCT tags FROM findings WHERE tags IS NOT NULL").fetchall():
             if row[0]:

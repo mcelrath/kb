@@ -269,17 +269,17 @@ def render_html_page(title: str, content: str, sidebar: str = "") -> str:
     <style>
         body {{ font-family: system-ui, sans-serif; margin: 0; padding: 0; background: #1a1a1a; color: #e0e0e0; }}
         .container {{ display: flex; min-height: 100vh; }}
-        .sidebar {{ position: fixed; top: 0; left: 0; width: 220px; background: #151515; padding: 1rem; border-right: 1px solid #333; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; overflow-y: auto; }}
-        .sidebar h3 {{ margin: 0.5rem 0; font-size: 0.85rem; color: #888; text-transform: uppercase; flex-shrink: 0; }}
-        .sidebar > ul {{ list-style: none; padding: 0; margin: 0 0 1rem 0; flex-shrink: 0; }}
+        .sidebar {{ position: fixed; top: 0; left: 0; width: 220px; background: #151515; padding: 1rem; border-right: 1px solid #333; height: 100vh; box-sizing: border-box; overflow-y: auto; }}
+        .sidebar h3 {{ margin: 0.5rem 0; font-size: 0.85rem; color: #888; text-transform: uppercase; }}
+        .sidebar > ul {{ list-style: none; padding: 0; margin: 0 0 1rem 0; }}
         .sidebar ul {{ list-style: none; padding: 0; margin: 0; }}
         .sidebar li {{ margin: 0.2rem 0; }}
         .sidebar a {{ color: #e0e0e0; text-decoration: none; display: block; padding: 0.3rem 0.5rem; border-radius: 3px; font-size: 0.9rem; }}
         .sidebar a:hover {{ background: #252525; }}
         .sidebar a.active {{ background: #6db3f2; color: #000; }}
         .sidebar .count {{ color: #666; font-size: 0.8rem; }}
-        .sidebar .tags-scroll {{ flex: 1; overflow-y: auto; min-height: 0; }}
-        .sidebar label {{ display: block; font-size: 0.9rem; padding: 0.3rem 0; cursor: pointer; flex-shrink: 0; }}
+        .sidebar .scroll-list {{ max-height: 300px; overflow-y: auto; }}
+        .sidebar label {{ display: block; font-size: 0.9rem; padding: 0.3rem 0; cursor: pointer; }}
         .sidebar input[type="checkbox"] {{ margin-right: 0.5rem; }}
         .main-with-sidebar {{ flex: 1; padding: 1rem; max-width: 900px; margin-left: 240px; }}
         .main-full {{ flex: 1; padding: 1rem; max-width: 900px; margin: 0 auto; }}
@@ -392,12 +392,12 @@ def render_sidebar(stats: dict, all_tags: list, current_filters: dict) -> str:
     lines = []
 
     # Projects
-    lines.append('<h3>Projects</h3><ul>')
+    lines.append('<h3>Projects</h3><div class="scroll-list"><ul>')
     lines.append(f'<li><a href="{build_url(remove_params=["project"])}" class="{"active" if not project else ""}">All</a></li>')
     for proj, count in sorted(stats.get('by_project', {}).items()):
         active = 'active' if project == proj else ''
         lines.append(f'<li><a href="{build_url({"project": proj})}" class="{active}">{html.escape(proj)} <span class="count">({count})</span></a></li>')
-    lines.append('</ul>')
+    lines.append('</ul></div>')
 
     # Types
     lines.append('<h3>Types</h3><ul>')
@@ -409,7 +409,7 @@ def render_sidebar(stats: dict, all_tags: list, current_filters: dict) -> str:
 
     # Tags (scrollable list)
     if all_tags:
-        lines.append('<h3>Tags</h3><div class="tags-scroll"><ul>')
+        lines.append('<h3>Tags</h3><div class="scroll-list"><ul>')
         lines.append(f'<li><a href="{build_url(remove_params=["tag"])}" class="{"active" if not tag else ""}">All</a></li>')
         for t in all_tags:
             active = 'active' if tag == t else ''
@@ -891,14 +891,15 @@ Examples:
 
                 # Build HTML
                 stats = kb.stats()
-                all_tags = kb.get_all_tags()
+                all_tags = kb.get_all_tags(limit=100)
                 sidebar = render_sidebar(stats, all_tags, filters)
 
                 items = []
                 for f in findings:
                     type_class = f['type']
-                    summary = f['content'][:200] + "..." if len(f['content']) > 200 else f['content']
-                    proj = f"({f['project']})" if f.get('project') else ""
+                    raw = f['content'][:200] + "..." if len(f['content']) > 200 else f['content']
+                    summary = html.escape(raw)
+                    proj = f"({html.escape(f['project'])})" if f.get('project') else ""
                     tags_html = ' '.join(f'<span class="tag">{html.escape(t)}</span>' for t in f.get('tags', [])[:5])
                     items.append(f'''<div class="finding">
                         <span class="finding-type {type_class}">[{f['type']}]</span>
@@ -932,7 +933,7 @@ Examples:
             async def search_page(request):
                 query = request.query_params.get('q', '')
                 stats = kb.stats()
-                all_tags = kb.get_all_tags()
+                all_tags = kb.get_all_tags(limit=100)
                 sidebar = render_sidebar(stats, all_tags, {})
 
                 if query:
@@ -940,8 +941,9 @@ Examples:
                     items = []
                     for f in results:
                         type_class = f['type']
-                        summary = f['content'][:200] + "..." if len(f['content']) > 200 else f['content']
-                        proj = f"({f['project']})" if f.get('project') else ""
+                        raw = f['content'][:200] + "..." if len(f['content']) > 200 else f['content']
+                        summary = html.escape(raw)
+                        proj = f"({html.escape(f['project'])})" if f.get('project') else ""
                         score = f.get('score', 0)
                         sim = f.get('similarity', 0)
                         tags_html = ' '.join(f'<span class="tag">{html.escape(t)}</span>' for t in f.get('tags', [])[:5])
@@ -975,7 +977,7 @@ Examples:
                     return HTMLResponse(render_html_page("Not Found", "<p>Finding not found.</p>"), status_code=404)
 
                 stats = kb.stats()
-                all_tags = kb.get_all_tags()
+                all_tags = kb.get_all_tags(limit=100)
                 sidebar = render_sidebar(stats, all_tags, {})
 
                 md = format_finding_markdown(finding)
