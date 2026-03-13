@@ -60,7 +60,10 @@ class LLMClient:
                 if system_prompt:
                     parts.append(f"<|im_start|>system\n{system_prompt}<|im_end|>")
                 parts.append(f"<|im_start|>user\n{prompt}<|im_end|>")
-                parts.append("<|im_start|>assistant\n")
+                if json_mode:
+                    parts.append("<|im_start|>assistant\n{")
+                else:
+                    parts.append("<|im_start|>assistant\n")
                 full_prompt = "\n".join(parts)
                 stop_seqs = ["<|im_end|>"]
             else:
@@ -80,7 +83,10 @@ class LLMClient:
             with urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 content = data.get("content", "").strip()
-                return self._strip_thinking(content)
+                content = self._strip_thinking(content)
+                if json_mode and content and not content.startswith("{"):
+                    content = "{" + content
+                return content
         except (URLError, TimeoutError, KeyError, json.JSONDecodeError):
             return None
 
