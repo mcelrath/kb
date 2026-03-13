@@ -15,6 +15,7 @@ from typing import Annotated
 from mcp.server.fastmcp import FastMCP
 
 from kb import KnowledgeBase, FINDING_TYPES, validate_finding_content
+from kb.validation import normalize_project_name, detect_project_from_cwd
 
 mcp = FastMCP(
     name="knowledge-base",
@@ -102,6 +103,7 @@ def kb_add(
     Use structural fields (assumptions, method, verified, implications, constraints,
     open_questions, caveats) instead of embedding this information in content text.
     """
+    project = normalize_project_name(project) or detect_project_from_cwd()
     data: dict = {"content": content}
     if finding_type:
         data["type"] = finding_type
@@ -231,6 +233,7 @@ def kb_search(
     Returns findings ranked by relevance to your query.
     By default, excludes superseded findings and demotes INDEX entries.
     """
+    project = normalize_project_name(project)
     kb = get_kb()
 
     results = kb.search(
@@ -318,6 +321,7 @@ def kb_list(
     Use to see all findings for a project or sprint.
     By default shows only current (non-superseded) findings.
     """
+    project = normalize_project_name(project)
     kb = get_kb()
 
     results = kb.list_findings(
@@ -453,6 +457,7 @@ def get_recent_findings() -> str:
 @mcp.resource("kb://recent/{project}")
 def get_project_findings(project: str) -> str:
     """Recent findings for a specific project."""
+    project = normalize_project_name(project) or project
     kb = get_kb()
     results = kb.list_findings(project=project, limit=20)
 

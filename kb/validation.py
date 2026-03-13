@@ -4,10 +4,65 @@ Content Validation
 Functions for validating finding content and tags.
 """
 
+import json
 import math
 import re
 import struct
+from pathlib import Path
 from .constants import CONTENT_WARNINGS
+
+
+_PROJECT_ALIASES: dict[str, str] | None = None
+_ALIASES_PATH = Path.home() / ".cache" / "kb" / "project_aliases.json"
+
+
+def _load_aliases() -> dict[str, str]:
+    global _PROJECT_ALIASES
+    if _PROJECT_ALIASES is not None:
+        return _PROJECT_ALIASES
+    if _ALIASES_PATH.exists():
+        _PROJECT_ALIASES = json.loads(_ALIASES_PATH.read_text())
+    else:
+        _PROJECT_ALIASES = {}
+    return _PROJECT_ALIASES
+
+
+_AUTO_PROJECT: str | None = None
+_AUTO_PROJECT_CHECKED = False
+
+
+def detect_project_from_cwd() -> str | None:
+    global _AUTO_PROJECT, _AUTO_PROJECT_CHECKED
+    if _AUTO_PROJECT_CHECKED:
+        return _AUTO_PROJECT
+    _AUTO_PROJECT_CHECKED = True
+    cwd = Path.cwd()
+    for d in [cwd, *cwd.parents]:
+        for candidate in [d / ".claude" / "CLAUDE.md", d / "CLAUDE.md"]:
+            if candidate.exists():
+                try:
+                    for line in candidate.read_text().splitlines()[:5]:
+                        m = re.match(r'^project:\s*(\S+)', line)
+                        if m:
+                            _AUTO_PROJECT = m.group(1).lower()
+                            return _AUTO_PROJECT
+                except OSError:
+                    continue
+    return None
+
+
+def normalize_project_name(name: str | None) -> str | None:
+    if not name:
+        return name
+    n = name.strip().lower()
+    n = re.sub(r'^~/', '', n)
+    n = re.sub(r'^/home/[^/]+/', '', n)
+    n = n.rstrip('/')
+    n = n.replace(' ', '-')
+    aliases = _load_aliases()
+    if n in aliases:
+        n = aliases[n]
+    return n
 
 
 def validate_finding_content(content: str, tags: list[str] | None = None) -> list[dict[str, str]]:

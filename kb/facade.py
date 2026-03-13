@@ -22,7 +22,7 @@ from .constants import (
     NOTATION_DOMAINS,
     GREEK_MEANINGS,
 )
-from .validation import validate_finding_content, validate_tags, serialize_f32
+from .validation import validate_finding_content, validate_tags, serialize_f32, normalize_project_name, detect_project_from_cwd
 from .core.connection import DatabaseConnection
 from .core.schema import init_schema
 from .core.embedding import EmbeddingService
@@ -246,6 +246,8 @@ Finding 2: {candidate['content'][:300]}"""
 
     def search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
         """Search findings."""
+        if "project" in kwargs:
+            kwargs["project"] = normalize_project_name(kwargs["project"])
         return self._search.search(query, **kwargs)
 
     def related(self, finding_id: str, limit: int = 5, include_superseded: bool = False) -> list[dict[str, Any]]:
@@ -307,6 +309,7 @@ Finding 2: {candidate['content'][:300]}"""
         max_evidence_length: int = 500,
     ) -> dict[str, Any]:
         """Add a new finding."""
+        project = normalize_project_name(project) or detect_project_from_cwd()
         result: dict[str, Any] = {
             "id": None,
             "tags_suggested": False,
@@ -486,6 +489,7 @@ Finding 2: {candidate['content'][:300]}"""
         tag: str | None = None,
     ) -> list[dict[str, Any]]:
         """List findings with optional filters."""
+        project = normalize_project_name(project)
         sql = "SELECT * FROM findings WHERE 1=1"
         params: list[Any] = []
 

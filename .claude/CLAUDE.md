@@ -1,3 +1,5 @@
+project: kb
+
 # Knowledge Base Project - Development Guide
 
 ## Architecture

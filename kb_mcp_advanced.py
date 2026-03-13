@@ -23,6 +23,7 @@ from typing import Annotated
 from mcp.server.fastmcp import FastMCP
 
 from kb import KnowledgeBase, FINDING_TYPES, NOTATION_DOMAINS, validate_finding_content
+from kb.validation import normalize_project_name, detect_project_from_cwd
 
 # Initialize MCP server
 mcp = FastMCP(
