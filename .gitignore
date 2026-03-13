@@ -10,3 +10,7 @@ build/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
