@@ -163,3 +163,58 @@ class EmbeddingService:
         embedding = l2_normalize(embedding)
         self._cache_put(text_hash, embedding)
         return embedding
+
+    def embed_batch(self, texts: list[str]) -> list[bytes]:
+        """Generate embeddings for multiple texts in one request (batch API).
+
+        Returns list of serialized embeddings (same order as input).
+        Falls back to single embed if batch request fails.
+        """
+        if not self.embedding_url:
+            raise RuntimeError("KB_EMBEDDING_URL not configured.")
+
+        # Check cache first
+        hashes = [hashlib.sha256(t.encode()).hexdigest()[:16] for t in texts]
+        results: list[bytes | None] = [None] * len(texts)
+        uncached_indices = []
+        for i, h in enumerate(hashes):
+            cached = self._cache_get(h)
+            if cached is not None:
+                results[i] = serialize_f32(cached)
+            else:
+                uncached_indices.append(i)
+
+        if not uncached_indices:
+            return results  # type: ignore
+
+        uncached_texts = [texts[i] for i in uncached_indices]
+        req = Request(
+            self.embedding_url,
+            data=json.dumps({"content": uncached_texts}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                # llama.cpp batch format: list of [{"index": N, "embedding": [[...]]}]
+                for idx, item in enumerate(data):
+                    orig_i = uncached_indices[idx]
+                    token_embeddings = item["embedding"]
+                    if len(token_embeddings) == 1:
+                        vec = list(token_embeddings[0])
+                    else:
+                        dim = len(token_embeddings[0])
+                        pooled = [0.0] * dim
+                        for tok_emb in token_embeddings:
+                            for j, v in enumerate(tok_emb):
+                                pooled[j] += v
+                        vec = [v / len(token_embeddings) for v in pooled]
+                    vec = l2_normalize(vec)
+                    self._cache_put(hashes[orig_i], vec)
+                    results[orig_i] = serialize_f32(vec)
+        except Exception:
+            # Fallback: embed one at a time
+            for i in uncached_indices:
+                results[i] = self.embed(texts[i])
+
+        return results  # type: ignore

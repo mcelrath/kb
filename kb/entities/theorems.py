@@ -110,15 +110,17 @@ class TheoremRepository(EntityRepository):
             params.append(project)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-        vec_results = self.conn.execute(
-            f"""SELECT v.id, v.distance
-                FROM lean_theorems_vec v
-                JOIN lean_theorems t ON t.id = v.id
-                WHERE v.embedding MATCH ? AND k = ?
-                {"AND " + " AND ".join(conditions) if conditions else ""}
-                ORDER BY v.distance""",
-            (embedding, limit * 2, *params),
-        ).fetchall()
+        vec_results = []
+        if embedding is not None:
+            vec_results = self.conn.execute(
+                f"""SELECT v.id, v.distance
+                    FROM lean_theorems_vec v
+                    JOIN lean_theorems t ON t.id = v.id
+                    WHERE v.embedding MATCH ? AND k = ?
+                    {"AND " + " AND ".join(conditions) if conditions else ""}
+                    ORDER BY v.distance""",
+                (embedding, limit * 2, *params),
+            ).fetchall()
 
         fts_results = self.conn.execute(
             f"""SELECT t.id, rank
@@ -132,7 +134,8 @@ class TheoremRepository(EntityRepository):
 
         seen: dict[str, float] = {}
         for tid, dist in vec_results:
-            seen[tid] = 1 - (dist ** 2) / 2
+            if dist is not None:
+                seen[tid] = 1 - (dist ** 2) / 2
         for tid, rank in fts_results:
             if tid not in seen:
                 seen[tid] = 0.6
