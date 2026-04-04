@@ -41,11 +41,44 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # ---------------------------------------------------------------------------
 
 def _patch_leandojo_local_paths():
+    import lean_dojo_v2.lean_dojo.data_extraction.lean as _lean_mod
     from lean_dojo_v2.lean_dojo.data_extraction.lean import (
         LeanGitRepo,
         _LAKEFILE_TOML_REQUIREMENT_REGEX,
+        RepoType,
     )
     from git import Repo as GitRepo
+
+    # Patch url_to_repo to use the local lean4 elan toolchain instead of
+    # hitting the GitHub API. For GitHub URLs, return a GitRepo pointing at
+    # the local elan toolchain path.
+    _orig_url_to_repo = _lean_mod.url_to_repo
+
+    def _url_to_repo_patched(url, repo_type=None, tmp_dir=None):
+        import subprocess as _sp, re as _re, os as _os
+        repo_type = repo_type or _lean_mod.get_repo_type(url)
+        if repo_type == RepoType.GITHUB:
+            # Resolve via local elan instead of GitHub API
+            try:
+                prefix = _sp.check_output(["lean", "--print-prefix"], text=True).strip()
+                # prefix is like ~/.elan/toolchains/leanprover--lean4---v4.29.0-rc6
+                toolchain_root = _os.path.dirname(prefix)  # ~/.elan/toolchains
+                # Find matching toolchain by URL fragment
+                name_fragment = url.split("/")[-1]  # e.g. "lean4"
+                candidates = [d for d in _os.listdir(toolchain_root) if name_fragment in d]
+                if candidates:
+                    local_path = _os.path.join(toolchain_root, candidates[0])
+                    if _os.path.isdir(local_path):
+                        # Initialize a bare-minimum git repo object without remote
+                        try:
+                            return GitRepo(local_path)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        return _orig_url_to_repo(url, repo_type=repo_type, tmp_dir=tmp_dir)
+
+    _lean_mod.url_to_repo = _url_to_repo_patched
 
     def _parse_lakefile_toml_dependencies_patched(
         self, path: Union[str, Path, None]
@@ -98,6 +131,59 @@ def _patch_leandojo_local_paths():
 _patch_leandojo_local_paths()
 
 from lean_dojo_v2.lean_dojo import LeanGitRepo, TracedRepo, trace  # noqa: E402
+from lean_dojo_v2.lean_dojo.data_extraction.trace import (  # noqa: E402
+    LEAN4_DATA_EXTRACTOR_PATH,
+    check_files,
+    launch_progressbar,
+)
+from lean_dojo_v2.utils.common import execute  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# In-place tracing: run ExtractData.lean on an already-built repo,
+# skipping the clone + lake build steps.
+# ---------------------------------------------------------------------------
+
+def trace_inplace(repo_path: Path, dst_dir: Path) -> TracedRepo:
+    """Run LeanDojo's AST extraction on an already-built repo in repo_path.
+
+    Skips `git clone` and `lake build` — assumes the repo is already compiled.
+    Copies ExtractData.lean into the repo, runs it, then builds a TracedRepo.
+    """
+    import shutil
+    from lean_dojo_v2.utils.constants import NUM_PROCS
+
+    lean_prefix = execute("lean --print-prefix", capture_output=True)[0].strip()
+    packages_path = repo_path / ".lake" / "packages"
+    build_path = repo_path / ".lake" / "build"
+
+    # Copy Lean stdlib into packages (LeanDojo needs it there)
+    lean4_pkg = packages_path / "lean4"
+    if not lean4_pkg.exists():
+        print("  Copying Lean stdlib into .lake/packages/lean4 ...")
+        shutil.copytree(lean_prefix, str(lean4_pkg), dirs_exist_ok=True)
+
+    # Copy ExtractData.lean and run it
+    extractor_dst = repo_path / LEAN4_DATA_EXTRACTOR_PATH.name
+    shutil.copyfile(LEAN4_DATA_EXTRACTOR_PATH, extractor_dst)
+    try:
+        orig_dir = Path.cwd()
+        import os
+        os.chdir(repo_path)
+        print("  Running ExtractData.lean ...")
+        with launch_progressbar([build_path]):
+            execute(f"lake env lean --threads {NUM_PROCS} --run ExtractData.lean noDeps")
+        check_files(packages_path, no_deps=True)
+    finally:
+        os.chdir(orig_dir)
+        extractor_dst.unlink(missing_ok=True)
+
+    traced = TracedRepo.from_traced_files(repo_path, build_deps=False)
+    traced.save_to_disk()
+
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(repo_path, dst_dir, dirs_exist_ok=True)
+    return traced
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +236,7 @@ def ingest_traced_repo(
     theorem_id_map: dict[str, str] = {}  # lean_name -> kb id
 
     for thm in theorems:
-        if thm.is_private():
+        if thm.is_private:
             skipped += 1
             continue
 
@@ -177,7 +263,7 @@ def ingest_traced_repo(
 
         if dry_run:
             print(f"  [DRY] {lean_name}: {stmt[:80]}")
-            skipped += 1
+            added += 1
             continue
 
         result = kb.theorem_add(
@@ -203,7 +289,7 @@ def ingest_traced_repo(
     dep_added = 0
     if not dry_run:
         for thm in theorems:
-            if thm.is_private():
+            if thm.is_private:
                 continue
             lean_name = thm.theorem.full_name
             src_id = theorem_id_map.get(lean_name)
@@ -296,8 +382,8 @@ def main():
         print(f"Loading cached trace from {trace_dst}")
         traced = TracedRepo.load_from_disk(trace_dst)
     else:
-        print(f"Running LeanDojo trace (this may take a long time on first run)...")
-        traced = trace(repo, dst_dir=trace_dst)
+        print(f"Running ExtractData.lean in-place (skipping lake build) ...")
+        traced = trace_inplace(repo_path, trace_dst)
 
     from kb import KnowledgeBase
     kb = KnowledgeBase()
