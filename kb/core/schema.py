@@ -158,6 +158,91 @@ SCHEMA_SQL = """
         INSERT INTO findings_fts(rowid, content, evidence, tags)
         VALUES (new.rowid, new.content, new.evidence, new.tags);
     END;
+
+    -- Lean theorem index
+    CREATE TABLE IF NOT EXISTS lean_theorems (
+        id TEXT PRIMARY KEY,
+        lean_name TEXT NOT NULL,
+        name TEXT NOT NULL,
+        statement TEXT NOT NULL,
+        statement_pure TEXT,
+        declaration TEXT NOT NULL,
+        module TEXT,
+        file TEXT NOT NULL,
+        line INTEGER,
+        tex_source TEXT,
+        project TEXT,
+        tags TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_lean_theorems_project ON lean_theorems(project);
+    CREATE INDEX IF NOT EXISTS idx_lean_theorems_module ON lean_theorems(module);
+    CREATE INDEX IF NOT EXISTS idx_lean_theorems_lean_name ON lean_theorems(lean_name);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS lean_theorems_fts USING fts5(
+        name, statement, statement_pure, lean_name,
+        content='lean_theorems',
+        content_rowid='rowid'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS lean_theorems_ai AFTER INSERT ON lean_theorems BEGIN
+        INSERT INTO lean_theorems_fts(rowid, name, statement, statement_pure, lean_name)
+        VALUES (new.rowid, new.name, new.statement, new.statement_pure, new.lean_name);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS lean_theorems_ad AFTER DELETE ON lean_theorems BEGIN
+        INSERT INTO lean_theorems_fts(lean_theorems_fts, rowid, name, statement, statement_pure, lean_name)
+        VALUES ('delete', old.rowid, old.name, old.statement, old.statement_pure, old.lean_name);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS lean_theorems_au AFTER UPDATE ON lean_theorems BEGIN
+        INSERT INTO lean_theorems_fts(lean_theorems_fts, rowid, name, statement, statement_pure, lean_name)
+        VALUES ('delete', old.rowid, old.name, old.statement, old.statement_pure, old.lean_name);
+        INSERT INTO lean_theorems_fts(rowid, name, statement, statement_pure, lean_name)
+        VALUES (new.rowid, new.name, new.statement, new.statement_pure, new.lean_name);
+    END;
+
+    -- Concept register
+    CREATE TABLE IF NOT EXISTS concepts (
+        id TEXT PRIMARY KEY,
+        domain TEXT NOT NULL,
+        status TEXT DEFAULT 'open'
+            CHECK(status IN ('open','active','verified','superseded','procedure')),
+        claim TEXT NOT NULL,
+        correct_framing TEXT,
+        supersedes_id TEXT REFERENCES concepts(id),
+        project TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_concepts_project ON concepts(project);
+    CREATE INDEX IF NOT EXISTS idx_concepts_domain ON concepts(domain);
+    CREATE INDEX IF NOT EXISTS idx_concepts_status ON concepts(status);
+
+    -- Pointer tables
+    CREATE TABLE IF NOT EXISTS concept_theorems (
+        concept_id TEXT REFERENCES concepts(id) ON DELETE CASCADE,
+        theorem_id TEXT REFERENCES lean_theorems(id) ON DELETE CASCADE,
+        role TEXT DEFAULT 'evidence'
+            CHECK(role IN ('evidence','depends_on','motivates')),
+        PRIMARY KEY (concept_id, theorem_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS concept_findings (
+        concept_id TEXT REFERENCES concepts(id) ON DELETE CASCADE,
+        finding_id TEXT REFERENCES findings(id) ON DELETE CASCADE,
+        role TEXT DEFAULT 'evidence',
+        PRIMARY KEY (concept_id, finding_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS theorem_dependencies (
+        theorem_id TEXT REFERENCES lean_theorems(id) ON DELETE CASCADE,
+        depends_on_id TEXT REFERENCES lean_theorems(id) ON DELETE CASCADE,
+        PRIMARY KEY (theorem_id, depends_on_id)
+    );
 """
 
 
@@ -176,6 +261,20 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
     # Create vector table for script purpose embeddings
     _ = conn.execute(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS scripts_vec USING vec0(
+            id TEXT PRIMARY KEY,
+            embedding float[{embedding_dim}]
+        )
+    """)
+
+    # Create vector tables for theorems and concepts
+    _ = conn.execute(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS lean_theorems_vec USING vec0(
+            id TEXT PRIMARY KEY,
+            embedding float[{embedding_dim}]
+        )
+    """)
+    _ = conn.execute(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS concepts_vec USING vec0(
             id TEXT PRIMARY KEY,
             embedding float[{embedding_dim}]
         )

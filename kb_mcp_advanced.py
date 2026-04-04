@@ -1959,6 +1959,174 @@ def get_stats_resource() -> str:
 
 
 # ============================================================================
+# THEOREM INDEX — Advanced tools
+# ============================================================================
+
+
+@mcp.tool()
+def theorem_add(
+    lean_name: Annotated[str, "Lean qualified name (e.g. Mathlib.Algebra.foo)"],
+    name: Annotated[str, "Short human-readable name"],
+    statement: Annotated[str, "Original Lean statement (source of truth)"],
+    declaration: Annotated[str, "Full theorem declaration line(s)"],
+    file: Annotated[str, "File path relative to proof root"],
+    statement_pure: Annotated[str | None, "Pure-math restatement for prefill injection"] = None,
+    module: Annotated[str | None, "Lean module path (for routing)"] = None,
+    line: Annotated[int | None, "Line number in file"] = None,
+    tex_source: Annotated[str | None, "Cross-ref e.g. 'LAGRANGIAN.tex line 47'"] = None,
+    project: Annotated[str | None, "Project name"] = None,
+    tags: Annotated[list[str] | None, "Tags"] = None,
+) -> str:
+    """Add a Lean theorem to the index."""
+    kb = get_kb()
+    project = normalize_project_name(project) or detect_project_from_cwd()
+    result = kb.theorem_add(
+        lean_name=lean_name, name=name, statement=statement,
+        declaration=declaration, file=file, statement_pure=statement_pure,
+        module=module, line=line, tex_source=tex_source, project=project, tags=tags,
+    )
+    if result["is_new"]:
+        return f"Theorem added: {result['id']}"
+    return f"Theorem already exists: {result['id']}"
+
+
+@mcp.tool()
+def theorem_get(
+    theorem_id: Annotated[str, "Theorem ID (thm-...)"],
+) -> str:
+    """Get a theorem by ID with full details."""
+    kb = get_kb()
+    result = kb.theorem_get(theorem_id)
+    if not result:
+        return f"Theorem {theorem_id} not found."
+    lines = [
+        f"[{result['id']}] {result['name']}",
+        f"  lean_name: {result['lean_name']}",
+        f"  file: {result['file']}:{result.get('line','')}",
+    ]
+    if result.get("module"):
+        lines.append(f"  module: {result['module']}")
+    lines.append(f"  statement: {result['statement']}")
+    if result.get("statement_pure"):
+        lines.append(f"  statement_pure: {result['statement_pure']}")
+    if result.get("tex_source"):
+        lines.append(f"  tex_source: {result['tex_source']}")
+    if result.get("dependencies"):
+        lines.append(f"  depends_on: {', '.join(result['dependencies'])}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def theorem_list_module(
+    module_path: Annotated[str, "Module path prefix (e.g. Physics.ExteriorAlgebra)"],
+) -> str:
+    """List all theorems in a module or submodule."""
+    kb = get_kb()
+    results = kb.theorem_list_module(module_path)
+    if not results:
+        return f"No theorems found in module {module_path}."
+    lines = [f"Theorems in {module_path}:\n"]
+    for r in results:
+        stmt = r.get("statement_pure") or r.get("statement", "")
+        lines.append(f"[{r['id']}] {r['name']} ({r['file']}:{r.get('line','')})")
+        lines.append(f"  {stmt[:160]}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def theorem_update_pure(
+    theorem_id: Annotated[str, "Theorem ID"],
+    statement_pure: Annotated[str, "New pure-math restatement"],
+) -> str:
+    """Update the pure-math restatement of a theorem and re-embed."""
+    kb = get_kb()
+    kb.theorem_update_statement_pure(theorem_id, statement_pure)
+    return f"Updated statement_pure for {theorem_id}"
+
+
+@mcp.tool()
+def theorem_link_dependency(
+    theorem_id: Annotated[str, "Theorem that has the dependency"],
+    depends_on_id: Annotated[str, "Theorem it depends on"],
+) -> str:
+    """Record a dependency between two theorems."""
+    kb = get_kb()
+    kb.theorem_add_dependency(theorem_id, depends_on_id)
+    return f"Dependency added: {theorem_id} depends on {depends_on_id}"
+
+
+# ============================================================================
+# CONCEPT REGISTER — Advanced tools
+# ============================================================================
+
+
+@mcp.tool()
+def concept_verify(
+    concept_id: Annotated[str, "Concept ID to verify"],
+) -> str:
+    """Mark a concept as verified."""
+    kb = get_kb()
+    kb.concept_verify(concept_id)
+    return f"Concept {concept_id} marked as verified."
+
+
+@mcp.tool()
+def concept_supersede(
+    concept_id: Annotated[str, "Concept ID to supersede"],
+    new_claim: Annotated[str, "New pure-math claim"],
+    domain: Annotated[str | None, "Domain override"] = None,
+    project: Annotated[str | None, "Project override"] = None,
+) -> str:
+    """Supersede a concept with a revised claim."""
+    kb = get_kb()
+    result = kb.concept_supersede(concept_id, new_claim, domain, project)
+    return f"Superseded {result['supersedes']} → new concept: {result['id']}"
+
+
+@mcp.tool()
+def concept_link_theorem(
+    concept_id: Annotated[str, "Concept ID"],
+    theorem_id: Annotated[str, "Theorem ID to link"],
+    role: Annotated[str, "evidence|depends_on|motivates"] = "evidence",
+) -> str:
+    """Link a theorem to a concept."""
+    kb = get_kb()
+    kb.concept_link_theorem(concept_id, theorem_id, role)
+    return f"Linked theorem {theorem_id} to concept {concept_id} as {role}."
+
+
+@mcp.tool()
+def concept_link_finding(
+    concept_id: Annotated[str, "Concept ID"],
+    finding_id: Annotated[str, "Finding ID to link"],
+    role: Annotated[str, "Role of finding"] = "evidence",
+) -> str:
+    """Link a finding to a concept."""
+    kb = get_kb()
+    kb.concept_link_finding(concept_id, finding_id, role)
+    return f"Linked finding {finding_id} to concept {concept_id} as {role}."
+
+
+@mcp.tool()
+def concept_list(
+    domain: Annotated[str | None, "Domain filter"] = None,
+    status: Annotated[str | None, "open|active|verified|superseded|procedure"] = None,
+    project: Annotated[str | None, "Project filter"] = None,
+) -> str:
+    """List concepts with optional filters."""
+    kb = get_kb()
+    results = kb.concept_list(domain=domain, status=status, project=project)
+    if not results:
+        return "No concepts found."
+    lines = []
+    for r in results:
+        lines.append(f"[{r['id']}] [{r['status']}] {r['claim']}")
+        lines.append(f"  domain: {r['domain']}")
+    return "\n".join(lines)
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 

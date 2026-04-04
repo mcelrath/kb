@@ -33,6 +33,8 @@ from .entities.scripts import ScriptsRepository
 from .entities.notations import NotationsRepository
 from .entities.errors import ErrorsRepository
 from .entities.documents import DocumentsRepository
+from .entities.theorems import TheoremRepository
+from .entities.concepts import ConceptRepository
 
 
 class KnowledgeBase:
@@ -93,6 +95,8 @@ class KnowledgeBase:
     _notations: NotationsRepository
     _errors: ErrorsRepository
     _documents: DocumentsRepository
+    _theorems: TheoremRepository
+    _concepts: ConceptRepository
 
     def __init__(
         self,
@@ -132,6 +136,8 @@ class KnowledgeBase:
             normalize_signature=self._analyzer.normalize_error_signature
         )
         self._documents = DocumentsRepository(self.conn)
+        self._theorems = TheoremRepository(self.conn, self._embedding)
+        self._concepts = ConceptRepository(self.conn, self._embedding)
 
     # =========================================================================
     # Backward-compatible methods delegating to subsystems
@@ -1437,6 +1443,65 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
         self.conn.commit()
         return {"updated": updated, "failed": failed, "total": len(findings)}
+
+    # =========================================================================
+    # Theorem index methods
+    # =========================================================================
+
+    def theorem_add(self, **kwargs: Any) -> dict[str, Any]:
+        return self._theorems.add(**kwargs)
+
+    def theorem_get(self, theorem_id: str) -> dict[str, Any] | None:
+        return self._theorems.get(theorem_id)
+
+    def theorem_search(self, query: str, module: str | None = None, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+        return self._theorems.search(query, module=module, project=project, limit=limit)
+
+    def theorem_search_by_tex(self, tex_ref: str) -> list[dict[str, Any]]:
+        return self._theorems.search_by_tex_source(tex_ref)
+
+    def theorem_list_module(self, module_path: str) -> list[dict[str, Any]]:
+        return self._theorems.list_module(module_path)
+
+    def theorem_add_dependency(self, theorem_id: str, depends_on_id: str) -> None:
+        self._theorems.add_dependency(theorem_id, depends_on_id)
+
+    def theorem_get_dependencies(self, theorem_id: str) -> list[dict[str, Any]]:
+        return self._theorems.get_dependencies(theorem_id)
+
+    def theorem_update_statement_pure(self, theorem_id: str, statement_pure: str) -> None:
+        self._theorems.update_statement_pure(theorem_id, statement_pure)
+
+    # =========================================================================
+    # Concept register methods
+    # =========================================================================
+
+    def concept_add(self, domain: str, claim: str, status: str = "open", correct_framing: str | None = None, project: str | None = None) -> dict[str, Any]:
+        return self._concepts.add(domain, claim, status, correct_framing, project)
+
+    def concept_get(self, concept_id: str) -> dict[str, Any] | None:
+        return self._concepts.get(concept_id)
+
+    def concept_list(self, domain: str | None = None, status: str | None = None, project: str | None = None) -> list[dict[str, Any]]:
+        return self._concepts.list(domain, status, project)
+
+    def concept_search(self, query: str, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+        return self._concepts.search(query, project=project, limit=limit)
+
+    def concept_verify(self, concept_id: str) -> None:
+        self._concepts.verify(concept_id)
+
+    def concept_supersede(self, concept_id: str, new_claim: str, domain: str | None = None, project: str | None = None) -> dict[str, Any]:
+        return self._concepts.supersede(concept_id, new_claim, domain, project)
+
+    def concept_link_theorem(self, concept_id: str, theorem_id: str, role: str = "evidence") -> None:
+        self._concepts.link_theorem(concept_id, theorem_id, role)
+
+    def concept_link_finding(self, concept_id: str, finding_id: str, role: str = "evidence") -> None:
+        self._concepts.link_finding(concept_id, finding_id, role)
+
+    def concept_render_register(self, project: str | None = None, max_tokens: int = 600, framework_hints: list[str] | None = None, technique_hints: list[str] | None = None) -> str:
+        return self._concepts.render_register(project, max_tokens, framework_hints, technique_hints)
 
     def close(self) -> None:
         """Close the database connection."""

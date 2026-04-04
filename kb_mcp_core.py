@@ -481,6 +481,88 @@ def get_stats_resource() -> str:
     return kb_stats()
 
 
+@mcp.tool()
+def theorem_search(
+    query: Annotated[str, "Search query in pure math language"],
+    module: Annotated[str | None, "Lean module prefix to restrict search"] = None,
+    project: Annotated[str | None, "Project name filter"] = None,
+    limit: Annotated[int, "Max results"] = 10,
+) -> str:
+    """Search Lean theorems by semantic similarity."""
+    kb = get_kb()
+    results = kb.theorem_search(query, module=module, project=project, limit=limit)
+    if not results:
+        return "No theorems found."
+    lines = []
+    for r in results:
+        lines.append(f"[{r['id']}] {r['name']} ({r['lean_name']})")
+        stmt = r.get("statement_pure") or r.get("statement", "")
+        lines.append(f"  {stmt[:200]}")
+        if r.get("file"):
+            lines.append(f"  file: {r['file']}:{r.get('line','')}")
+        lines.append(f"  similarity: {r.get('similarity', 0):.3f}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def concept_add(
+    domain: Annotated[str, "Routing domain (not rendered in prefill)"],
+    claim: Annotated[str, "One-line pure math statement (<30 tokens)"],
+    status: Annotated[str, "open|active|verified|superseded|procedure"] = "open",
+    correct_framing: Annotated[str | None, "Positive restatement for ambiguous cases"] = None,
+    project: Annotated[str | None, "Project name"] = None,
+) -> str:
+    """Add a concept to the register."""
+    kb = get_kb()
+    project = normalize_project_name(project) or detect_project_from_cwd()
+    result = kb.concept_add(domain, claim, status, correct_framing, project)
+    return f"Concept added: {result['id']}"
+
+
+@mcp.tool()
+def concept_get(
+    concept_id: Annotated[str, "Concept ID (con-...)"],
+) -> str:
+    """Get a concept with its linked theorems and findings."""
+    kb = get_kb()
+    result = kb.concept_get(concept_id)
+    if not result:
+        return f"Concept {concept_id} not found."
+    lines = [
+        f"[{result['id']}] {result['claim']}",
+        f"  domain: {result['domain']}  status: {result['status']}",
+    ]
+    if result.get("correct_framing"):
+        lines.append(f"  framing: {result['correct_framing']}")
+    if result.get("theorems"):
+        lines.append("  theorems:")
+        for t in result["theorems"]:
+            stmt = t.get("statement_pure") or t.get("statement", "")
+            lines.append(f"    [{t['id']}] {t['name']}: {stmt[:120]}")
+    if result.get("findings"):
+        lines.append("  findings:")
+        for f in result["findings"]:
+            lines.append(f"    [{f['id']}] {f['content'][:120]}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def concept_render_register(
+    project: Annotated[str | None, "Project to render register for"] = None,
+    max_tokens: Annotated[int, "Token budget"] = 600,
+    framework_hints: Annotated[list[str] | None, "FRAMEWORK header items"] = None,
+    technique_hints: Annotated[list[str] | None, "TECHNIQUE header items"] = None,
+) -> str:
+    """Render the concept register for thinking-block prefill."""
+    kb = get_kb()
+    project = normalize_project_name(project) or detect_project_from_cwd()
+    text = kb.concept_render_register(project, max_tokens, framework_hints, technique_hints)
+    if not text.strip():
+        return "No active concepts found for this project."
+    return text
+
+
 def main():
     asyncio.run(mcp.run_stdio_async())
 
