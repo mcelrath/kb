@@ -236,7 +236,7 @@ def ingest_traced_repo(
     theorem_id_map: dict[str, str] = {}  # lean_name -> kb id
 
     for thm in theorems:
-        if thm.is_private:
+        if str(thm.is_private).lower() == "true":
             skipped += 1
             continue
 

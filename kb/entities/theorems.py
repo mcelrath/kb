@@ -114,10 +114,10 @@ class TheoremRepository(EntityRepository):
             f"""SELECT v.id, v.distance
                 FROM lean_theorems_vec v
                 JOIN lean_theorems t ON t.id = v.id
-                {where}
-                ORDER BY v.distance
-                LIMIT ?""",
-            (*params, limit * 2),
+                WHERE v.embedding MATCH ? AND k = ?
+                {"AND " + " AND ".join(conditions) if conditions else ""}
+                ORDER BY v.distance""",
+            (embedding, limit * 2, *params),
         ).fetchall()
 
         fts_results = self.conn.execute(
