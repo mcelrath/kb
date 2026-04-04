@@ -1371,35 +1371,100 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         return (row["cnt"] or 0, row["latest"] or "")
 
     def reembed_all(self) -> dict[str, Any]:
-        """Re-generate embeddings for all findings.
+        """Re-generate embeddings for all entities across all vec tables.
 
-        Use this after fixing the embedding model or algorithm.
-        Returns stats on what was re-embedded.
+        Use this after switching embedding models. Covers:
+        - findings (content + evidence)
+        - scripts (purpose)
+        - lean_theorems (statement_pure fallback statement)
+        - concepts (claim)
+        Returns per-table stats.
         """
         import sys
 
-        findings = self.conn.execute(
-            "SELECT id, content, evidence FROM findings"
-        ).fetchall()
+        stats: dict[str, Any] = {}
 
-        updated = 0
-        failed = 0
-
-        for row in findings:
+        # findings
+        rows = self.conn.execute("SELECT id, content, evidence FROM findings").fetchall()
+        updated = failed = 0
+        for row in rows:
             try:
-                text = row["content"] + " " + (row["evidence"] or "")
-                embedding = self._embed(text)
+                text = row["content"] + (" " + row["evidence"] if row["evidence"] else "")
+                emb = self._embed(text)
+                self.conn.execute("DELETE FROM findings_vec WHERE id = ?", (row["id"],))
                 self.conn.execute(
-                    "UPDATE findings_vec SET embedding = ? WHERE id = ?",
-                    (embedding, row["id"])
+                    "INSERT INTO findings_vec (id, embedding) VALUES (?, ?)",
+                    (row["id"], emb),
                 )
                 updated += 1
             except Exception as e:
-                print(f"Failed to re-embed {row['id']}: {e}", file=sys.stderr)
+                print(f"findings {row['id']}: {e}", file=sys.stderr)
                 failed += 1
-
         self.conn.commit()
-        return {"updated": updated, "failed": failed, "total": len(findings)}
+        stats["findings"] = {"updated": updated, "failed": failed, "total": len(rows)}
+        print(f"findings: {updated}/{len(rows)} re-embedded", file=sys.stderr)
+
+        # scripts
+        rows = self.conn.execute("SELECT id, purpose FROM scripts").fetchall()
+        updated = failed = 0
+        for row in rows:
+            try:
+                emb = self._embed(row["purpose"])
+                self.conn.execute("DELETE FROM scripts_vec WHERE id = ?", (row["id"],))
+                self.conn.execute(
+                    "INSERT INTO scripts_vec (id, embedding) VALUES (?, ?)",
+                    (row["id"], emb),
+                )
+                updated += 1
+            except Exception as e:
+                print(f"scripts {row['id']}: {e}", file=sys.stderr)
+                failed += 1
+        self.conn.commit()
+        stats["scripts"] = {"updated": updated, "failed": failed, "total": len(rows)}
+        print(f"scripts: {updated}/{len(rows)} re-embedded", file=sys.stderr)
+
+        # lean_theorems
+        rows = self.conn.execute(
+            "SELECT id, statement_pure, statement FROM lean_theorems"
+        ).fetchall()
+        updated = failed = 0
+        for row in rows:
+            try:
+                text = row["statement_pure"] if row["statement_pure"] else row["statement"]
+                emb = self._embed(text)
+                self.conn.execute("DELETE FROM lean_theorems_vec WHERE id = ?", (row["id"],))
+                self.conn.execute(
+                    "INSERT INTO lean_theorems_vec (id, embedding) VALUES (?, ?)",
+                    (row["id"], emb),
+                )
+                updated += 1
+            except Exception as e:
+                print(f"lean_theorems {row['id']}: {e}", file=sys.stderr)
+                failed += 1
+        self.conn.commit()
+        stats["lean_theorems"] = {"updated": updated, "failed": failed, "total": len(rows)}
+        print(f"lean_theorems: {updated}/{len(rows)} re-embedded", file=sys.stderr)
+
+        # concepts
+        rows = self.conn.execute("SELECT id, claim FROM concepts").fetchall()
+        updated = failed = 0
+        for row in rows:
+            try:
+                emb = self._embed(row["claim"])
+                self.conn.execute("DELETE FROM concepts_vec WHERE id = ?", (row["id"],))
+                self.conn.execute(
+                    "INSERT INTO concepts_vec (id, embedding) VALUES (?, ?)",
+                    (row["id"], emb),
+                )
+                updated += 1
+            except Exception as e:
+                print(f"concepts {row['id']}: {e}", file=sys.stderr)
+                failed += 1
+        self.conn.commit()
+        stats["concepts"] = {"updated": updated, "failed": failed, "total": len(rows)}
+        print(f"concepts: {updated}/{len(rows)} re-embedded", file=sys.stderr)
+
+        return stats
 
     def backfill_summaries(
         self, project: str | None = None, batch_size: int = 20

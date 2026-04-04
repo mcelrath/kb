@@ -52,8 +52,9 @@ class ConceptRepository(EntityRepository):
         )
 
         embedding = self.embedding_service.embed(claim)
+        self.conn.execute("DELETE FROM concepts_vec WHERE id = ?", (cid,))
         self.conn.execute(
-            "INSERT OR REPLACE INTO concepts_vec (id, embedding) VALUES (?, ?)",
+            "INSERT INTO concepts_vec (id, embedding) VALUES (?, ?)",
             (cid, embedding),
         )
         self.conn.commit()
@@ -184,8 +185,9 @@ class ConceptRepository(EntityRepository):
             (new_id, new_domain, new_claim, concept_id, new_project, now, now),
         )
         embedding = self.embedding_service.embed(new_claim)
+        self.conn.execute("DELETE FROM concepts_vec WHERE id = ?", (new_id,))
         self.conn.execute(
-            "INSERT OR REPLACE INTO concepts_vec (id, embedding) VALUES (?, ?)",
+            "INSERT INTO concepts_vec (id, embedding) VALUES (?, ?)",
             (new_id, embedding),
         )
         self.conn.commit()

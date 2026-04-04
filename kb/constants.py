@@ -11,7 +11,7 @@ from pathlib import Path
 DEFAULT_DB_PATH = Path.home() / ".cache" / "kb" / "knowledge.db"
 
 # Embedding configuration (REQUIRED - no local fallback)
-DEFAULT_EMBEDDING_URL = os.environ.get("KB_EMBEDDING_URL", "")
+DEFAULT_EMBEDDING_URL = os.environ.get("KB_EMBEDDING_URL", "http://ash:8081/embedding")
 DEFAULT_EMBEDDING_DIM = int(os.environ.get("KB_EMBEDDING_DIM", "4096"))
 
 # LLM configuration for query expansion

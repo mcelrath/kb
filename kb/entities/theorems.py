@@ -64,8 +64,9 @@ class TheoremRepository(EntityRepository):
 
         embed_text = statement_pure if statement_pure else statement
         embedding = self.embedding_service.embed(embed_text)
+        self.conn.execute("DELETE FROM lean_theorems_vec WHERE id = ?", (tid,))
         self.conn.execute(
-            "INSERT OR REPLACE INTO lean_theorems_vec (id, embedding) VALUES (?, ?)",
+            "INSERT INTO lean_theorems_vec (id, embedding) VALUES (?, ?)",
             (tid, embedding),
         )
         self.conn.commit()
@@ -194,8 +195,9 @@ class TheoremRepository(EntityRepository):
             (statement_pure, now, theorem_id),
         )
         embedding = self.embedding_service.embed(statement_pure)
+        self.conn.execute("DELETE FROM lean_theorems_vec WHERE id = ?", (theorem_id,))
         self.conn.execute(
-            "INSERT OR REPLACE INTO lean_theorems_vec (id, embedding) VALUES (?, ?)",
+            "INSERT INTO lean_theorems_vec (id, embedding) VALUES (?, ?)",
             (theorem_id, embedding),
         )
         self.conn.commit()
