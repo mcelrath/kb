@@ -2,257 +2,323 @@
 """
 Lean Theorem Ingestion Script
 
-Walks ~/Physics/claude/proofs/ and ingests top-level theorem/lemma declarations
-into the KB theorem index. Only processes files with a MATHEMATICAL OVERVIEW
-header comment (heuristic for meaningful theorems).
+Uses LeanDojo to trace Lean 4 projects and ingest theorem declarations
+into the KB theorem index with compiler-accurate extraction and real
+dependency edges.
 
-For each theorem:
-1. Parses name, statement, full declaration, file, line
-2. Derives module from directory structure
-3. Optionally calls local LLM to generate statement_pure
-4. Parses -- source: FILE.tex line N comments for tex_source cross-refs
-5. Stores via kb.theorem_add()
+Supports two sources:
+  --source=proofs  : ~/Physics/claude/proofs/ (private project)
+  --source=mathlib : ~/Physics/mathlib4 (local Mathlib fork)
+
+For private proofs, patches LeanDojo to resolve local path dependencies
+(e.g. path = "../../mathlib4") to their git remote URL + HEAD commit.
+
+Requires Python 3.12 and lean-dojo:
+    python3.12 -m venv .venv-lean && .venv-lean/bin/pip install lean-dojo
 
 Usage:
-    python scripts/ingest_lean.py [--proof-root PATH] [--project NAME]
-        [--no-llm] [--dry-run] [--module-filter PREFIX] [--limit N]
+    python scripts/ingest_lean.py [--source proofs|mathlib]
+        [--project NAME] [--no-llm] [--dry-run] [--limit N]
+        [--trace-cache DIR] [--module-filter PREFIX]
 """
 
 import argparse
 import re
 import sys
 from pathlib import Path
-
+from typing import Union, List, Tuple, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from kb import KnowledgeBase
+
+# ---------------------------------------------------------------------------
+# Monkey-patch LeanDojo to support local path dependencies.
+# When a lakefile.toml has  path = "../../mathlib4",  resolve the path to its
+# git repo, read the origin remote URL and HEAD commit, and construct a
+# LeanGitRepo from those.  This lets LeanDojo trace projects that depend on a
+# local Mathlib checkout rather than a pinned GitHub URL.
+# ---------------------------------------------------------------------------
+
+def _patch_leandojo_local_paths():
+    from lean_dojo.data_extraction.lean import (
+        LeanGitRepo,
+        _LAKEFILE_TOML_REQUIREMENT_REGEX,
+    )
+    from git import Repo as GitRepo
+
+    def _parse_lakefile_toml_dependencies_patched(
+        self, path: Union[str, Path, None]
+    ) -> List[Tuple[str, "LeanGitRepo"]]:
+        lakefile = (
+            self.get_config("lakefile.toml")
+            if path is None
+            else (Path(path) / "lakefile.toml").open().read()
+        )
+        if isinstance(lakefile, dict) and "require" in lakefile:
+            matches = lakefile["require"]
+        else:
+            if "content" in lakefile:
+                lakefile = lakefile["content"]
+            matches = []
+            for req in _LAKEFILE_TOML_REQUIREMENT_REGEX.finditer(lakefile):
+                match: dict = {}
+                for line in req.group().strip().splitlines():
+                    key, value = line.split("=")
+                    match[key.strip()] = value.strip().strip('"')
+                matches.append(match)
+
+        resolved = []
+        repo_root = Path(path or self.url)
+        for match in matches:
+            if "path" in match:
+                dep_path = (repo_root / match["path"]).resolve()
+                git = GitRepo(dep_path)
+                url = git.remotes["origin"].url
+                commit = git.head.commit.hexsha
+                print(
+                    f"  [local dep] {match.get('name', dep_path.name)}: "
+                    f"{url} @ {commit[:12]}",
+                    file=sys.stderr,
+                )
+                resolved.append((match.get("name", dep_path.name), LeanGitRepo(url, commit)))
+            else:
+                if "git" in match:
+                    match["url"] = match["git"]
+                    del match["git"]
+                resolved.extend(self._parse_deps([match]))
+
+        return resolved
+
+    LeanGitRepo._parse_lakefile_toml_dependencies = (
+        _parse_lakefile_toml_dependencies_patched
+    )
 
 
-MATH_OVERVIEW_RE = re.compile(r"MATHEMATICAL OVERVIEW", re.IGNORECASE)
+_patch_leandojo_local_paths()
 
-DECL_RE = re.compile(
-    r"^(?P<kw>theorem|lemma|def|noncomputable def)\s+(?P<name>\S+)",
-    re.MULTILINE,
-)
+from lean_dojo import LeanGitRepo, TracedRepo, trace  # noqa: E402
 
-STATEMENT_RE = re.compile(
-    r"^(?:theorem|lemma)\s+\S+\s*(?:\([^)]*\)|\{[^}]*\}|\[[^\]]*\]|\s)*:\s*(?P<stmt>.*?)(?:\s*:=|\s*where\b)",
-    re.DOTALL,
-)
+
+# ---------------------------------------------------------------------------
+# tex_source extraction
+# ---------------------------------------------------------------------------
 
 TEX_SOURCE_RE = re.compile(r"--\s*source:\s*(.+)", re.IGNORECASE)
 
-PURE_MATH_PROMPT = """\
-Restate the following Lean theorem in pure mathematical language. \
-Use no domain-specific physics framing. Use standard mathematical notation. \
-Keep it under 30 tokens. Return only the restatement, no preamble.
 
-Lean statement:
-{statement}
-
-Pure math restatement:"""
-
-
-def has_math_overview(text: str) -> bool:
-    return bool(MATH_OVERVIEW_RE.search(text))
-
-
-def extract_declarations(text: str, kind: tuple[str, ...] = ("theorem", "lemma")) -> list[dict]:
-    """Extract theorem/lemma declarations from Lean source."""
-    results = []
-    lines = text.split("\n")
-
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        m = re.match(r"^(theorem|lemma)\s+(\S+)", line.strip())
-        if m and m.group(1) in kind:
-            kw = m.group(1)
-            name = m.group(2).rstrip("(:{[")
-            decl_start = i
-
-            decl_lines = []
-            j = i
-            depth = 0
-            while j < min(i + 40, len(lines)):
-                dl = lines[j]
-                decl_lines.append(dl)
-                depth += dl.count("(") + dl.count("{") + dl.count("[")
-                depth -= dl.count(")") + dl.count("}") + dl.count("]")
-                if ":=" in dl or "where" in dl.split("--")[0]:
-                    break
-                if j > i and depth <= 0 and dl.strip() and not dl.strip().startswith("--"):
-                    break
-                j += 1
-
-            declaration = "\n".join(decl_lines)
-
-            stmt_match = re.search(
-                r":\s*(.*?)(?::=|where\b)",
-                declaration.replace("\n", " "),
-                re.DOTALL,
-            )
-            statement = stmt_match.group(1).strip() if stmt_match else name
-
-            tex_source = None
-            for tl in lines[max(0, decl_start - 5):decl_start + 3]:
-                tsm = TEX_SOURCE_RE.search(tl)
-                if tsm:
-                    tex_source = tsm.group(1).strip()
-                    break
-
-            results.append({
-                "name": name,
-                "lean_name": name,
-                "statement": statement,
-                "declaration": declaration,
-                "line": decl_start + 1,
-                "tex_source": tex_source,
-            })
-        i += 1
-
-    return results
-
-
-def derive_module(file_path: Path, proof_root: Path) -> str:
-    """Derive Lean module name from file path relative to proof root."""
+def extract_tex_source(lean_file: Path, line: int, window: int = 5) -> Optional[str]:
+    """Scan lines near `line` for a -- source: FILE.tex line N comment."""
     try:
-        rel = file_path.relative_to(proof_root)
-    except ValueError:
-        return file_path.stem
-    parts = list(rel.parts)
-    parts[-1] = parts[-1].replace(".lean", "")
-    return ".".join(parts)
-
-
-def generate_statement_pure(llm_client, statement: str) -> str | None:
-    """Call LLM to generate pure-math restatement."""
-    prompt = PURE_MATH_PROMPT.format(statement=statement[:800])
-    try:
-        result = llm_client.complete(
-            prompt,
-            max_tokens=80,
-            temperature=0.2,
-            use_chat=False,
-        )
-        if result:
-            return result.strip().strip('"').strip("'")
-    except Exception as e:
-        print(f"  LLM error: {e}", file=sys.stderr)
+        lines = lean_file.read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    start = max(0, line - window - 1)
+    end = min(len(lines), line + window)
+    for ln in lines[start:end]:
+        m = TEX_SOURCE_RE.search(ln)
+        if m:
+            return m.group(1).strip()
     return None
 
 
-def ingest_file(
-    lean_file: Path,
-    proof_root: Path,
-    kb: KnowledgeBase,
+# ---------------------------------------------------------------------------
+# Ingestion
+# ---------------------------------------------------------------------------
+
+def ingest_traced_repo(
+    traced: TracedRepo,
+    kb,
     project: str,
+    proof_root: Path,
     use_llm: bool,
     dry_run: bool,
+    limit: Optional[int],
+    module_filter: Optional[str],
 ) -> dict:
-    text = lean_file.read_text(encoding="utf-8", errors="replace")
+    theorems = list(traced.get_traced_theorems())
 
-    if not has_math_overview(text):
-        return {"skipped": True, "reason": "no MATHEMATICAL OVERVIEW"}
+    if module_filter:
+        theorems = [
+            t for t in theorems
+            if module_filter in str(t.traced_file.path)
+        ]
+    if limit:
+        theorems = theorems[:limit]
 
-    rel_path = str(lean_file.relative_to(proof_root.parent))
-    module = derive_module(lean_file, proof_root)
-    decls = extract_declarations(text)
+    added = skipped = 0
+    theorem_id_map: dict[str, str] = {}  # lean_name -> kb id
 
-    if not decls:
-        return {"skipped": True, "reason": "no theorems/lemmas"}
+    for thm in theorems:
+        if thm.is_private():
+            skipped += 1
+            continue
 
-    added = 0
-    skipped = 0
-    for d in decls:
+        lean_name = thm.theorem.full_name
+        file_rel = str(thm.theorem.file_path)
+        stmt = thm.get_theorem_statement() or ""
+        line = thm.start.line_nb if thm.start else None
+
+        # Short name: last component of qualified name
+        name = lean_name.split(".")[-1]
+
+        # Module: everything before the last component
+        parts = lean_name.split(".")
+        module = ".".join(parts[:-1]) if len(parts) > 1 else None
+
+        # tex_source from comment scan
+        abs_file = proof_root / file_rel if not Path(file_rel).is_absolute() else Path(file_rel)
+        tex_source = extract_tex_source(abs_file, line or 0) if abs_file.exists() else None
+
+        # statement_pure via LLM
         statement_pure = None
-        if use_llm and not dry_run:
-            statement_pure = generate_statement_pure(kb._llm, d["statement"])
+        if use_llm and not dry_run and stmt:
+            statement_pure = _generate_statement_pure(kb._llm, stmt)
 
         if dry_run:
-            print(f"  [DRY] {d['name']}: {d['statement'][:80]}")
+            print(f"  [DRY] {lean_name}: {stmt[:80]}")
             skipped += 1
             continue
 
         result = kb.theorem_add(
-            lean_name=f"{module}.{d['name']}",
-            name=d["name"],
-            statement=d["statement"],
-            declaration=d["declaration"],
-            file=rel_path,
+            lean_name=lean_name,
+            name=name,
+            statement=stmt,
+            declaration=stmt,
+            file=file_rel,
             statement_pure=statement_pure,
             module=module,
-            line=d["line"],
-            tex_source=d.get("tex_source"),
+            line=line,
+            tex_source=tex_source,
             project=project,
         )
+        kb_id = result["id"]
+        theorem_id_map[lean_name] = kb_id
         if result["is_new"]:
             added += 1
         else:
             skipped += 1
 
-    return {"added": added, "skipped": skipped, "total": len(decls)}
+    # Second pass: dependency edges
+    dep_added = 0
+    if not dry_run:
+        for thm in theorems:
+            if thm.is_private():
+                continue
+            lean_name = thm.theorem.full_name
+            src_id = theorem_id_map.get(lean_name)
+            if not src_id:
+                continue
+            for prem in thm.get_premise_full_names():
+                dep_id = theorem_id_map.get(prem)
+                if dep_id:
+                    kb.theorem_add_dependency(src_id, dep_id)
+                    dep_added += 1
 
+    return {"added": added, "skipped": skipped, "total": len(theorems), "deps": dep_added}
+
+
+PURE_MATH_PROMPT = (
+    "Restate the following Lean theorem in pure mathematical language. "
+    "Use no domain-specific framing. Keep it under 30 tokens. "
+    "Return only the restatement.\n\nLean statement:\n{statement}\n\nPure math restatement:"
+)
+
+
+def _generate_statement_pure(llm_client, statement: str) -> Optional[str]:
+    try:
+        result = llm_client.complete(
+            PURE_MATH_PROMPT.format(statement=statement[:800]),
+            max_tokens=80,
+            temperature=0.2,
+            use_chat=False,
+        )
+        return result.strip().strip('"').strip("'") if result else None
+    except Exception as e:
+        print(f"  LLM error: {e}", file=sys.stderr)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Ingest Lean theorems into KB")
+    parser = argparse.ArgumentParser(description="Ingest Lean theorems into KB using LeanDojo")
     parser.add_argument(
-        "--proof-root",
-        default=str(Path.home() / "Physics/claude/proofs"),
-        help="Root directory of Lean proofs",
+        "--source",
+        choices=["proofs", "mathlib"],
+        default="proofs",
+        help="Which repo to trace (default: proofs)",
     )
-    parser.add_argument("--project", default="exterior_algebra")
-    parser.add_argument("--no-llm", action="store_true", help="Skip LLM rewrite of statement_pure")
-    parser.add_argument("--dry-run", action="store_true", help="Parse without storing")
-    parser.add_argument("--module-filter", default=None, help="Only process files matching this prefix")
-    parser.add_argument("--limit", type=int, default=None, help="Stop after N files")
+    parser.add_argument(
+        "--proofs-root",
+        default=str(Path.home() / "Physics/claude/proofs"),
+        help="Path to private proofs repo",
+    )
+    parser.add_argument(
+        "--mathlib-root",
+        default=str(Path.home() / "Physics/mathlib4"),
+        help="Path to local Mathlib fork",
+    )
+    parser.add_argument("--project", default=None)
+    parser.add_argument("--no-llm", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--module-filter", default=None)
+    parser.add_argument(
+        "--trace-cache",
+        default=str(Path.home() / ".cache/lean_dojo"),
+        help="Directory for LeanDojo trace cache",
+    )
     args = parser.parse_args()
 
-    proof_root = Path(args.proof_root).expanduser()
-    if not proof_root.exists():
-        print(f"Proof root not found: {proof_root}", file=sys.stderr)
+    if args.source == "proofs":
+        repo_path = Path(args.proofs_root).expanduser()
+        default_project = "exterior_algebra"
+    else:
+        repo_path = Path(args.mathlib_root).expanduser()
+        default_project = "mathlib"
+
+    project = args.project or default_project
+
+    if not repo_path.exists():
+        print(f"Repo not found: {repo_path}", file=sys.stderr)
         sys.exit(1)
 
+    print(f"Tracing {repo_path} ...")
+    repo = LeanGitRepo.from_path(repo_path)
+    print(f"  URL:    {repo.url}")
+    print(f"  Commit: {repo.commit}")
+
+    trace_dst = Path(args.trace_cache) / f"{repo_path.name}-{repo.commit[:12]}"
+    if trace_dst.exists():
+        print(f"Loading cached trace from {trace_dst}")
+        traced = TracedRepo.load_from_disk(trace_dst)
+    else:
+        print(f"Running LeanDojo trace (this may take a long time on first run)...")
+        traced = trace(repo, dst_dir=trace_dst)
+
+    from kb import KnowledgeBase
     kb = KnowledgeBase()
 
-    lean_files = sorted(
-        f for f in proof_root.rglob("*.lean")
-        if ".lake" not in f.parts and ".elan" not in f.parts
+    print(f"Ingesting into project={project} ...")
+    result = ingest_traced_repo(
+        traced=traced,
+        kb=kb,
+        project=project,
+        proof_root=repo_path,
+        use_llm=not args.no_llm,
+        dry_run=args.dry_run,
+        limit=args.limit,
+        module_filter=args.module_filter,
     )
-    if args.module_filter:
-        lean_files = [f for f in lean_files if args.module_filter in str(f)]
-    if args.limit:
-        lean_files = lean_files[: args.limit]
 
-    total_added = 0
-    total_skipped_files = 0
-    total_theorems = 0
-    total_added_theorems = 0
-
-    for idx, lean_file in enumerate(lean_files):
-        rel = lean_file.relative_to(proof_root.parent)
-        result = ingest_file(
-            lean_file, proof_root, kb,
-            project=args.project,
-            use_llm=not args.no_llm,
-            dry_run=args.dry_run,
-        )
-        if result.get("skipped") and "total" not in result:
-            total_skipped_files += 1
-            continue
-
-        added = result.get("added", 0)
-        total = result.get("total", 0)
-        total_theorems += total
-        total_added_theorems += added
-
-        if total > 0:
-            print(f"[{idx+1}/{len(lean_files)}] {rel}: {added}/{total} added")
-
-    print(f"\nDone. Files: {len(lean_files)} ({total_skipped_files} skipped)")
-    print(f"Theorems: {total_added_theorems} added / {total_theorems} found")
-    print(f"Total in DB: {kb._theorems.count(project=args.project)}")
+    print(f"\nDone.")
+    print(f"  Theorems added:  {result['added']}")
+    print(f"  Theorems skipped: {result['skipped']}")
+    print(f"  Total processed: {result['total']}")
+    print(f"  Dependency edges: {result['deps']}")
+    print(f"  Total in DB (project={project}): {kb._theorems.count(project=project)}")
 
 
 if __name__ == "__main__":
