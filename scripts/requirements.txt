@@ -1,3 +1,17 @@
-# Requirements for scripts/ — requires Python 3.9-3.12 (lean-dojo incompatible with 3.13+)
-# Setup: python3.12 -m venv scripts/.venv && scripts/.venv/bin/pip install -r scripts/requirements.txt
-lean-dojo>=4.20.0
+# Requirements for ingest_lean.py
+# Install into the main KB venv:
+#   pip install --no-deps lean-dojo-v2 loguru PyGithub
+#
+# After installing, apply two patches to fix broken imports in the venv:
+#   SITE=.venv/lib/python3.14/site-packages
+#   sed -i 's/    GITHUB\.get_user()\.login/    pass  # token validation removed/' \
+#       $SITE/lean_dojo_v2/lean_dojo/data_extraction/lean.py
+#   sed -i 's/^from deepspeed\.utils\.zero_to_fp32 import.*/# deepspeed removed/' \
+#       $SITE/lean_dojo_v2/utils/common.py
+#   sed -i 's/^from pytorch_lightning\.strategies\.deepspeed import.*/# pytorch_lightning removed/' \
+#       $SITE/lean_dojo_v2/utils/common.py
+#
+# GITHUB_ACCESS_TOKEN env var must be set (can be any valid token; used for GitHub API rate limits).
+lean-dojo-v2>=1.0.8
+loguru>=0.6.0
+PyGithub>=1.58.0

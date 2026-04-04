@@ -7,14 +7,14 @@ into the KB theorem index with compiler-accurate extraction and real
 dependency edges.
 
 Supports two sources:
-  --source=proofs  : ~/Physics/claude/proofs/ (private project)
+  --source=proofs  : ~/Physics/claude/proofs/ (now its own git repo)
   --source=mathlib : ~/Physics/mathlib4 (local Mathlib fork)
 
 For private proofs, patches LeanDojo to resolve local path dependencies
 (e.g. path = "../../mathlib4") to their git remote URL + HEAD commit.
 
-Requires Python 3.12 and lean-dojo:
-    python3.12 -m venv .venv-lean && .venv-lean/bin/pip install lean-dojo
+Requires lean-dojo-v2:
+    pip install --no-deps lean-dojo-v2 loguru PyGithub
 
 Usage:
     python scripts/ingest_lean.py [--source proofs|mathlib]
@@ -25,6 +25,7 @@ Usage:
 import argparse
 import re
 import sys
+import types
 from pathlib import Path
 from typing import Union, List, Tuple, Optional
 
@@ -40,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # ---------------------------------------------------------------------------
 
 def _patch_leandojo_local_paths():
-    from lean_dojo.data_extraction.lean import (
+    from lean_dojo_v2.lean_dojo.data_extraction.lean import (
         LeanGitRepo,
         _LAKEFILE_TOML_REQUIREMENT_REGEX,
     )
@@ -96,7 +97,7 @@ def _patch_leandojo_local_paths():
 
 _patch_leandojo_local_paths()
 
-from lean_dojo import LeanGitRepo, TracedRepo, trace  # noqa: E402
+from lean_dojo_v2.lean_dojo import LeanGitRepo, TracedRepo, trace  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
