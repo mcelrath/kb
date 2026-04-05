@@ -122,14 +122,15 @@ class TheoremRepository(EntityRepository):
                 (embedding, limit * 2, *params),
             ).fetchall()
 
+        fts_and = ("AND " + " AND ".join(conditions)) if conditions else ""
         fts_results = self.conn.execute(
             f"""SELECT t.id, rank
                 FROM lean_theorems_fts f
                 JOIN lean_theorems t ON t.rowid = f.rowid
-                {where}
                 WHERE lean_theorems_fts MATCH ?
+                {fts_and}
                 LIMIT ?""",
-            (*params, query, limit),
+            (query, *params, limit),
         ).fetchall() if query.strip() else []
 
         seen: dict[str, float] = {}
