@@ -695,6 +695,17 @@ Examples:
     # Reembed command
     reembed_parser = subparsers.add_parser("reembed", help="Re-generate all embeddings")
     reembed_parser.add_argument("--force", action="store_true", help="Skip confirmation")
+    reembed_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip rows that already have a vec row (use after a kill/crash; ONLY safe if existing vecs are from the current embedding model)",
+    )
+    reembed_parser.add_argument(
+        "--commit-every",
+        type=int,
+        default=50,
+        help="COMMIT after every N successful rows so partial progress survives a kill (default 50)",
+    )
 
     # Reconcile command
     reconcile_parser = subparsers.add_parser("reconcile", help="Reconcile KB with source document")
@@ -1274,8 +1285,18 @@ Examples:
                     print("Cancelled")
                     sys.exit(0)
 
-            result = kb.reembed_all()
-            print(f"Re-embedded {result['updated']} findings ({result.get('failed', 0)} failed, {result.get('total', 0)} total)")
+            result = kb.reembed_all(
+                resume=getattr(args, "resume", False),
+                commit_every=getattr(args, "commit_every", 50),
+            )
+            # Per-table dict; print all four tables' summaries.
+            for table, s in result.items():
+                print(
+                    f"{table}: {s.get('updated', 0)} re-embedded "
+                    f"({s.get('failed', 0)} failed, {s.get('total', 0)}/{s.get('total_all', s.get('total', 0))} processed, "
+                    f"{s.get('skipped_already_done', 0)} skipped) "
+                    f"in {s.get('elapsed_sec', 0)/60.0:.1f}m"
+                )
 
         elif args.command == "reconcile":
             try:

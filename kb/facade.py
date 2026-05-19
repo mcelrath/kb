@@ -1370,7 +1370,12 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         ).fetchone()
         return (row["cnt"] or 0, row["latest"] or "")
 
-    def reembed_all(self) -> dict[str, Any]:
+    def reembed_all(
+        self,
+        *,
+        resume: bool = False,
+        commit_every: int = 50,
+    ) -> dict[str, Any]:
         """Re-generate embeddings for all entities across all vec tables.
 
         Use this after switching embedding models. Covers:
@@ -1379,6 +1384,17 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         - lean_theorems (statement_pure fallback statement)
         - concepts (claim)
         Returns per-table stats. Progress meter is printed to stderr.
+
+        Args:
+            resume: If True, skip rows whose id is already present in the
+                vec table. Use after a crash/kill to continue without
+                re-embedding what's already done. WARNING: only safe if
+                the existing vec rows are from the CURRENT embedding model
+                — if you've switched embedding endpoints/dims, do NOT
+                resume; do a fresh full re-embed.
+            commit_every: COMMIT after every N successful rows. Default
+                50. Smaller values = less work lost on kill but more
+                fsync overhead.
         """
         import sys
         import time
@@ -1405,11 +1421,26 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
         def _do_table(table: str, select_sql: str, vec_table: str, text_fn) -> None:
             t0 = time.monotonic()
-            rows = self.conn.execute(select_sql).fetchall()
+            all_rows = self.conn.execute(select_sql).fetchall()
+            total_all = len(all_rows)
+            already_done: set = set()
+            if resume:
+                already_done = {
+                    r[0] for r in self.conn.execute(f"SELECT id FROM {vec_table}").fetchall()
+                }
+            rows = [r for r in all_rows if r["id"] not in already_done]
             total = len(rows)
-            updated = failed = 0
+            skipped = total_all - total
+            updated = failed = since_commit = 0
             # Pick a sensible print interval: ~every 1% but at least every 10 rows.
             interval = max(10, total // 100) if total else 1
+            print(
+                f"  [{table}] starting: {total} to process"
+                + (f" ({skipped} already-done skipped)" if skipped else "")
+                + f"; commit_every={commit_every}",
+                file=sys.stderr,
+                flush=True,
+            )
             for i, row in enumerate(rows, 1):
                 try:
                     emb = self._embed(text_fn(row))
@@ -1419,6 +1450,10 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
                         (row["id"], emb),
                     )
                     updated += 1
+                    since_commit += 1
+                    if since_commit >= commit_every:
+                        self.conn.commit()
+                        since_commit = 0
                 except Exception as e:
                     print(f"{table} {row['id']}: {e}", file=sys.stderr, flush=True)
                     failed += 1
@@ -1443,12 +1478,14 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
                 "updated": updated,
                 "failed": failed,
                 "total": total,
+                "total_all": total_all,
+                "skipped_already_done": skipped,
                 "elapsed_sec": time.monotonic() - t0,
             }
             print(
                 f"{table}: {updated}/{total} re-embedded in "
                 f"{stats[table]['elapsed_sec']/60.0:.1f}m "
-                f"({failed} failed)",
+                f"({failed} failed, {skipped} skipped)",
                 file=sys.stderr,
                 flush=True,
             )
