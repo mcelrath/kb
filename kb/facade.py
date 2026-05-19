@@ -1378,91 +1378,105 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         - scripts (purpose)
         - lean_theorems (statement_pure fallback statement)
         - concepts (claim)
-        Returns per-table stats.
+        Returns per-table stats. Progress meter is printed to stderr.
         """
         import sys
+        import time
 
         stats: dict[str, Any] = {}
 
-        # findings
-        rows = self.conn.execute("SELECT id, content, evidence FROM findings").fetchall()
-        updated = failed = 0
-        for row in rows:
-            try:
-                text = row["content"] + (" " + row["evidence"] if row["evidence"] else "")
-                emb = self._embed(text)
-                self.conn.execute("DELETE FROM findings_vec WHERE id = ?", (row["id"],))
-                self.conn.execute(
-                    "INSERT INTO findings_vec (id, embedding) VALUES (?, ?)",
-                    (row["id"], emb),
-                )
-                updated += 1
-            except Exception as e:
-                print(f"findings {row['id']}: {e}", file=sys.stderr)
-                failed += 1
-        self.conn.commit()
-        stats["findings"] = {"updated": updated, "failed": failed, "total": len(rows)}
-        print(f"findings: {updated}/{len(rows)} re-embedded", file=sys.stderr)
+        # Up-front totals so the user sees the big picture before any embeds.
+        counts = {
+            "findings": self.conn.execute("SELECT COUNT(*) FROM findings").fetchone()[0],
+            "scripts": self.conn.execute("SELECT COUNT(*) FROM scripts").fetchone()[0],
+            "lean_theorems": self.conn.execute("SELECT COUNT(*) FROM lean_theorems").fetchone()[0],
+            "concepts": self.conn.execute("SELECT COUNT(*) FROM concepts").fetchone()[0],
+        }
+        grand_total = sum(counts.values())
+        print(
+            f"reembed_all: findings={counts['findings']} "
+            f"scripts={counts['scripts']} "
+            f"lean_theorems={counts['lean_theorems']} "
+            f"concepts={counts['concepts']} "
+            f"GRAND_TOTAL={grand_total}",
+            file=sys.stderr,
+            flush=True,
+        )
 
-        # scripts
-        rows = self.conn.execute("SELECT id, purpose FROM scripts").fetchall()
-        updated = failed = 0
-        for row in rows:
-            try:
-                emb = self._embed(row["purpose"])
-                self.conn.execute("DELETE FROM scripts_vec WHERE id = ?", (row["id"],))
-                self.conn.execute(
-                    "INSERT INTO scripts_vec (id, embedding) VALUES (?, ?)",
-                    (row["id"], emb),
-                )
-                updated += 1
-            except Exception as e:
-                print(f"scripts {row['id']}: {e}", file=sys.stderr)
-                failed += 1
-        self.conn.commit()
-        stats["scripts"] = {"updated": updated, "failed": failed, "total": len(rows)}
-        print(f"scripts: {updated}/{len(rows)} re-embedded", file=sys.stderr)
+        def _do_table(table: str, select_sql: str, vec_table: str, text_fn) -> None:
+            t0 = time.monotonic()
+            rows = self.conn.execute(select_sql).fetchall()
+            total = len(rows)
+            updated = failed = 0
+            # Pick a sensible print interval: ~every 1% but at least every 10 rows.
+            interval = max(10, total // 100) if total else 1
+            for i, row in enumerate(rows, 1):
+                try:
+                    emb = self._embed(text_fn(row))
+                    self.conn.execute(f"DELETE FROM {vec_table} WHERE id = ?", (row["id"],))
+                    self.conn.execute(
+                        f"INSERT INTO {vec_table} (id, embedding) VALUES (?, ?)",
+                        (row["id"], emb),
+                    )
+                    updated += 1
+                except Exception as e:
+                    print(f"{table} {row['id']}: {e}", file=sys.stderr, flush=True)
+                    failed += 1
+                if i % interval == 0 or i == total:
+                    elapsed = time.monotonic() - t0
+                    rate = i / elapsed if elapsed > 0 else 0.0
+                    remaining = total - i
+                    eta_sec = remaining / rate if rate > 0 else 0.0
+                    eta_min = eta_sec / 60.0
+                    pct = 100.0 * i / total if total else 100.0
+                    print(
+                        f"  [{table}] {i}/{total} ({pct:5.1f}%) "
+                        f"rate={rate:6.2f}/s "
+                        f"elapsed={elapsed/60.0:6.1f}m "
+                        f"eta={eta_min:6.1f}m "
+                        f"updated={updated} failed={failed}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+            self.conn.commit()
+            stats[table] = {
+                "updated": updated,
+                "failed": failed,
+                "total": total,
+                "elapsed_sec": time.monotonic() - t0,
+            }
+            print(
+                f"{table}: {updated}/{total} re-embedded in "
+                f"{stats[table]['elapsed_sec']/60.0:.1f}m "
+                f"({failed} failed)",
+                file=sys.stderr,
+                flush=True,
+            )
 
-        # lean_theorems
-        rows = self.conn.execute(
-            "SELECT id, statement_pure, statement FROM lean_theorems"
-        ).fetchall()
-        updated = failed = 0
-        for row in rows:
-            try:
-                text = row["statement_pure"] if row["statement_pure"] else row["statement"]
-                emb = self._embed(text)
-                self.conn.execute("DELETE FROM lean_theorems_vec WHERE id = ?", (row["id"],))
-                self.conn.execute(
-                    "INSERT INTO lean_theorems_vec (id, embedding) VALUES (?, ?)",
-                    (row["id"], emb),
-                )
-                updated += 1
-            except Exception as e:
-                print(f"lean_theorems {row['id']}: {e}", file=sys.stderr)
-                failed += 1
-        self.conn.commit()
-        stats["lean_theorems"] = {"updated": updated, "failed": failed, "total": len(rows)}
-        print(f"lean_theorems: {updated}/{len(rows)} re-embedded", file=sys.stderr)
-
-        # concepts
-        rows = self.conn.execute("SELECT id, claim FROM concepts").fetchall()
-        updated = failed = 0
-        for row in rows:
-            try:
-                emb = self._embed(row["claim"])
-                self.conn.execute("DELETE FROM concepts_vec WHERE id = ?", (row["id"],))
-                self.conn.execute(
-                    "INSERT INTO concepts_vec (id, embedding) VALUES (?, ?)",
-                    (row["id"], emb),
-                )
-                updated += 1
-            except Exception as e:
-                print(f"concepts {row['id']}: {e}", file=sys.stderr)
-                failed += 1
-        self.conn.commit()
-        stats["concepts"] = {"updated": updated, "failed": failed, "total": len(rows)}
-        print(f"concepts: {updated}/{len(rows)} re-embedded", file=sys.stderr)
+        _do_table(
+            "findings",
+            "SELECT id, content, evidence FROM findings",
+            "findings_vec",
+            lambda r: r["content"] + (" " + r["evidence"] if r["evidence"] else ""),
+        )
+        _do_table(
+            "scripts",
+            "SELECT id, purpose FROM scripts",
+            "scripts_vec",
+            lambda r: r["purpose"] or "",
+        )
+        _do_table(
+            "lean_theorems",
+            "SELECT id, statement_pure, statement FROM lean_theorems",
+            "lean_theorems_vec",
+            lambda r: r["statement_pure"] if r["statement_pure"] else r["statement"],
+        )
+        _do_table(
+            "concepts",
+            "SELECT id, claim FROM concepts",
+            "concepts_vec",
+            lambda r: r["claim"] or "",
+        )
 
         return stats
 
