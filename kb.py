@@ -719,6 +719,24 @@ Examples:
     audit_parser.add_argument("document", type=Path, help="Source document")
     audit_parser.add_argument("-p", "--project", help="Project name")
 
+    # Flush-pending: drain ~/.claude/pending-kb-adds/*.txt when embedding server is up.
+    # Files use a structured header (# type/project/sprint/tags/evidence) + blank line + content.
+    flush_parser = subparsers.add_parser(
+        "flush-pending",
+        help="Drain ~/.claude/pending-kb-adds/*.txt (kb-down fallback queue)",
+    )
+    flush_parser.add_argument(
+        "--queue-dir",
+        type=Path,
+        default=Path.home() / ".claude" / "pending-kb-adds",
+        help="Queue directory (default ~/.claude/pending-kb-adds)",
+    )
+    flush_parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress per-file output; only print summary line",
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -1338,6 +1356,79 @@ Examples:
             print(f"  Matched: {result['matched']}")
             print(f"  Missing from KB: {result['missing']}")
             print(f"  Conflicts: {result['conflicts']}")
+
+        elif args.command == "flush-pending":
+            import os
+            qdir = args.queue_dir
+            if not qdir.is_dir():
+                if not args.quiet:
+                    print(f"queue dir empty/missing: {qdir}")
+                sys.exit(0)
+
+            files = sorted(qdir.glob("*.txt"))
+            if not files:
+                if not args.quiet:
+                    print("no pending entries")
+                sys.exit(0)
+
+            ok = fail = 0
+            for f in files:
+                # Atomic-claim via rename so a concurrent flush doesn't double-process.
+                claimed = f.with_suffix(f.suffix + ".flushing")
+                try:
+                    f.rename(claimed)
+                except OSError:
+                    continue  # someone else got it
+                try:
+                    raw = claimed.read_text()
+                    headers = {}
+                    body_lines = []
+                    in_body = False
+                    for line in raw.splitlines():
+                        if in_body:
+                            body_lines.append(line)
+                            continue
+                        if line.startswith("# ") and ":" in line:
+                            k, v = line[2:].split(":", 1)
+                            headers[k.strip().lower()] = v.strip()
+                        elif line.strip() == "":
+                            in_body = True
+                        else:
+                            body_lines.append(line)
+                            in_body = True
+                    content = "\n".join(body_lines).strip()
+                    if not content:
+                        raise ValueError("empty content")
+                    tags_str = headers.get("tags", "")
+                    tags = [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else None
+                    result = kb.add(
+                        content=content,
+                        finding_type=headers.get("type", "discovery"),
+                        project=headers.get("project") or None,
+                        sprint=headers.get("sprint") or None,
+                        tags=tags,
+                        evidence=headers.get("evidence") or None,
+                        check_duplicate=False,  # caller already decided to queue
+                    )
+                    finding_id = result.get("id") if isinstance(result, dict) else result
+                    if not finding_id:
+                        raise RuntimeError(f"kb.add returned no id: {result}")
+                    claimed.unlink()
+                    ok += 1
+                    if not args.quiet:
+                        print(f"flushed {f.name} -> {finding_id}")
+                except Exception as e:
+                    # Restore so a later flush can retry
+                    try:
+                        claimed.rename(f)
+                    except OSError:
+                        pass
+                    fail += 1
+                    if not args.quiet:
+                        print(f"FAILED {f.name}: {e}")
+
+            print(f"flush-pending: {ok} ok, {fail} failed, {len(files)} total")
+            sys.exit(0 if fail == 0 else 1)
 
     except KeyboardInterrupt:
         print("\nInterrupted")
