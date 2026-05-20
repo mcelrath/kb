@@ -96,7 +96,7 @@ class EmbeddingService:
                 headers={"Content-Type": "application/json"},
             )
             try:
-                with urlopen(req, timeout=60) as resp:
+                with urlopen(req, timeout=180) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     # llama.cpp format: [{"index": 0, "embedding": [[tok1], [tok2], ...]}]
                     # Mean pool across all token embeddings
@@ -194,7 +194,7 @@ class EmbeddingService:
             headers={"Content-Type": "application/json"},
         )
         try:
-            with urlopen(req, timeout=120) as resp:
+            with urlopen(req, timeout=300) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 # llama.cpp batch format: list of [{"index": N, "embedding": [[...]]}]
                 for idx, item in enumerate(data):
