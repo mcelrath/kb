@@ -41,6 +41,64 @@ except ImportError:
     SERVE_AVAILABLE = False
 
 
+PENDING_QUEUE_DIR = Path.home() / ".claude" / "pending-kb-adds"
+
+
+def _queue_async_add(
+    content: str,
+    finding_type: str | None,
+    project: str | None,
+    sprint: str | None,
+    tags: list[str] | None,
+    evidence: str | None,
+) -> None:
+    """Write a queue file readable by `kb flush-pending` and detach a flusher.
+
+    Returns immediately; the flusher runs in its own session so the parent shell
+    (and the agent) does not wait on embedding/LLM I/O.
+    """
+    import os
+    import subprocess
+    import secrets
+    from datetime import datetime, timezone
+
+    PENDING_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    rand = secrets.token_hex(3)
+    qfile = PENDING_QUEUE_DIR / f"{stamp}-{rand}.txt"
+
+    header_lines = []
+    if finding_type:
+        header_lines.append(f"# type: {finding_type}")
+    if project:
+        header_lines.append(f"# project: {project}")
+    if sprint:
+        header_lines.append(f"# sprint: {sprint}")
+    if tags:
+        header_lines.append(f"# tags: {','.join(tags)}")
+    if evidence:
+        # Header is single-line; multi-line evidence belongs in content.
+        header_lines.append(f"# evidence: {evidence}")
+    payload = "\n".join(header_lines) + ("\n\n" if header_lines else "") + content + "\n"
+
+    tmp = qfile.with_suffix(".txt.partial")
+    tmp.write_text(payload)
+    tmp.rename(qfile)  # atomic publish
+
+    # Detach a flusher. Same interpreter, same script. The flusher probes the
+    # embedding server itself and exits silently if it's down.
+    subprocess.Popen(
+        [sys.executable, str(Path(__file__).resolve()), "flush-pending", "--quiet"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+    print(f"Queued: {qfile.name}")
+
+
 def parse_markdown_findings(file_path: Path) -> list[dict]:
     """Parse a markdown file and extract findings.
 
@@ -487,6 +545,10 @@ Examples:
     add_parser.add_argument("-f", "--file", type=Path, help="Read content from file")
     add_parser.add_argument("--no-duplicate-check", action="store_true", help="Skip duplicate checking")
     add_parser.add_argument("--no-auto-tag", action="store_true", help="Skip auto-tagging")
+    add_parser.add_argument("--sync", action="store_true",
+        help="Run synchronously, contacting embedding+LLM servers and printing the kb-id. "
+             "Default is fire-and-forget: write a queue file under ~/.claude/pending-kb-adds "
+             "and detach `kb flush-pending` to drain it.")
 
     # Search command
     search_parser = subparsers.add_parser("search", help="Search findings")
@@ -742,6 +804,28 @@ Examples:
     if not args.command:
         parser.print_help()
         sys.exit(1)
+
+    # Async `kb add`: write a queue file and detach a flusher. No DB / no network.
+    if args.command == "add" and not args.sync:
+        if args.file:
+            content = args.file.read_text().strip()
+        elif args.content:
+            content = args.content
+        else:
+            print("Error: Either content or --file required")
+            sys.exit(1)
+        if not content:
+            print("Error: empty content")
+            sys.exit(1)
+        _queue_async_add(
+            content=content,
+            finding_type=args.type,
+            project=args.project,
+            sprint=args.sprint,
+            tags=args.tags,
+            evidence=args.evidence,
+        )
+        sys.exit(0)
 
     # Initialize KB
     kb = KnowledgeBase(
@@ -1359,6 +1443,8 @@ Examples:
 
         elif args.command == "flush-pending":
             import os
+            from urllib.parse import urlsplit, urlunsplit
+            from urllib.request import urlopen
             qdir = args.queue_dir
             if not qdir.is_dir():
                 if not args.quiet:
@@ -1369,6 +1455,19 @@ Examples:
             if not files:
                 if not args.quiet:
                     print("no pending entries")
+                sys.exit(0)
+
+            # Probe the embedding server's /health endpoint. If it's not up,
+            # leave files in the queue and exit silently — a later flush retries.
+            parts = urlsplit(kb.embedding_url)
+            health_url = urlunsplit((parts.scheme, parts.netloc, "/health", "", ""))
+            try:
+                with urlopen(health_url, timeout=5) as resp:
+                    if resp.status >= 400:
+                        raise RuntimeError(f"health HTTP {resp.status}")
+            except Exception as e:
+                if not args.quiet:
+                    print(f"embedding server not healthy ({health_url}): {e}; leaving {len(files)} file(s) queued")
                 sys.exit(0)
 
             ok = fail = 0

@@ -6,6 +6,7 @@ Handles text embedding generation via remote endpoint with caching.
 
 import hashlib
 import json
+import os
 import random
 import sys
 import time
@@ -62,7 +63,7 @@ class EmbeddingService:
         self._cache_order.append(text_hash)
 
     def _embed_remote(
-        self, text: str, max_retries: int = 5, base_delay: float = 2.0
+        self, text: str, max_retries: int = 2, base_delay: float = 2.0
     ) -> list[float]:
         """Get embedding from remote endpoint (llama.cpp style).
 
@@ -96,7 +97,7 @@ class EmbeddingService:
                 headers={"Content-Type": "application/json"},
             )
             try:
-                with urlopen(req, timeout=180) as resp:
+                with urlopen(req, timeout=int(os.environ.get("KB_EMBED_TIMEOUT", "180"))) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     # llama.cpp format: [{"index": 0, "embedding": [[tok1], [tok2], ...]}]
                     # Mean pool across all token embeddings
@@ -194,7 +195,7 @@ class EmbeddingService:
             headers={"Content-Type": "application/json"},
         )
         try:
-            with urlopen(req, timeout=300) as resp:
+            with urlopen(req, timeout=int(os.environ.get("KB_EMBED_BATCH_TIMEOUT", "300"))) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 # llama.cpp batch format: list of [{"index": N, "embedding": [[...]]}]
                 for idx, item in enumerate(data):
