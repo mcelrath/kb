@@ -1443,6 +1443,7 @@ Examples:
 
         elif args.command == "flush-pending":
             import os
+            import fcntl
             from urllib.parse import urlsplit, urlunsplit
             from urllib.request import urlopen
             qdir = args.queue_dir
@@ -1450,6 +1451,23 @@ Examples:
                 if not args.quiet:
                     print(f"queue dir empty/missing: {qdir}")
                 sys.exit(0)
+
+            # Only one flusher at a time. Detached spawns from rapid `kb add`
+            # calls all try to grab this lock; losers exit silently so they
+            # don't pile up behind the slow embedding server.
+            lock_path = qdir / ".flush.lock"
+            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                if not args.quiet:
+                    print("another flush-pending is running; exiting")
+                os.close(lock_fd)
+                sys.exit(0)
+
+            # Give the embedding server time to finish slow CPU work.
+            # The flusher is detached; nothing waits on it.
+            os.environ.setdefault("KB_EMBED_TIMEOUT", "900")
 
             files = sorted(qdir.glob("*.txt"))
             if not files:
