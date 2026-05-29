@@ -63,7 +63,7 @@ class EmbeddingService:
         self._cache_order.append(text_hash)
 
     def _embed_remote(
-        self, text: str, max_retries: int = 2, base_delay: float = 2.0
+        self, text: str, max_retries: int | None = None, base_delay: float = 2.0
     ) -> list[float]:
         """Get embedding from remote endpoint (llama.cpp style).
 
@@ -75,12 +75,17 @@ class EmbeddingService:
 
         Args:
             text: Text to embed
-            max_retries: Maximum number of retry attempts (default 5 for overloaded servers)
+            max_retries: Maximum number of retry attempts. If None, uses
+                KB_EMBED_MAX_RETRIES env var (default 2). Interactive `kb add`
+                sets this to 1 for fast-fail-and-queue behavior; flush-pending
+                and reembed leave it at the default for their longer retry budget.
             base_delay: Base delay in seconds (doubles each retry with jitter)
 
         Raises:
             RuntimeError: If all retries fail
         """
+        if max_retries is None:
+            max_retries = int(os.environ.get("KB_EMBED_MAX_RETRIES", "2"))
         last_error: Exception | None = None
 
         for attempt in range(max_retries + 1):
