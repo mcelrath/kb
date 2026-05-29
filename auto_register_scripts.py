@@ -86,7 +86,7 @@ def main():
             [str(venv_python), "kb.py", "script", "list", "-n", "1000"],
             capture_output=True, text=True, cwd=Path(__file__).parent,
             env={**os.environ,
-                 "KB_EMBEDDING_URL": "http://ash:8080/embedding",
+                 "KB_EMBEDDING_URL": "http://ash:8081/embedding",
                  "KB_EMBEDDING_DIM": "4096"}
         )
         # Parse output to get filenames (crude but works)
@@ -118,7 +118,7 @@ def main():
                      "--purpose", purpose, "-p", args.project],
                     capture_output=True, text=True, cwd=Path(__file__).parent,
                     env={**os.environ,
-                         "KB_EMBEDDING_URL": "http://ash:8080/embedding",
+                         "KB_EMBEDDING_URL": "http://ash:8081/embedding",
                          "KB_EMBEDDING_DIM": "4096"}
                 )
                 if result.returncode == 0:
