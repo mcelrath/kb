@@ -51,42 +51,78 @@ class LLMClient:
             return None
 
         try:
-            # Build prompt using ChatML template for the raw /completion endpoint.
-            # This avoids the /v1/chat/completions endpoint which enables streaming
-            # thinking mode in Qwen3.5, causing pathological overthinking (8000+
-            # tokens for a simple summary). The raw endpoint keeps thinking minimal.
-            parts = []
             if use_chat:
-                if system_prompt:
-                    parts.append(f"<|im_start|>system\n{system_prompt}<|im_end|>")
-                parts.append(f"<|im_start|>user\n{prompt}<|im_end|>")
-                if json_mode:
-                    parts.append("<|im_start|>assistant\n{")
-                else:
-                    parts.append("<|im_start|>assistant\n")
-                full_prompt = "\n".join(parts)
-                stop_seqs = ["<|im_end|>"]
-            else:
-                full_prompt = prompt
-                stop_seqs = stop if stop is not None else ["\n\n"]
+                # /v1/chat/completions with chat_template_kwargs.enable_thinking=false.
+                # The Qwen3.6 jinja template honors this and produces a direct
+                # answer in `content` instead of burning the token budget on
+                # `reasoning_content`. Raw /completion with hand-built ChatML
+                # does NOT suppress thinking because the chat template still
+                # injects <think> after the assistant token.
+                chat_url = self.llm_url
+                if chat_url.endswith("/completion"):
+                    chat_url = chat_url[: -len("/completion")] + "/v1/chat/completions"
+                elif not chat_url.endswith("/v1/chat/completions"):
+                    chat_url = chat_url.rstrip("/") + "/v1/chat/completions"
 
-            req = Request(
-                self.llm_url,
-                data=json.dumps({
-                    "prompt": full_prompt,
-                    "n_predict": max_tokens,
+                messages: list[dict[str, str]] = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                messages.append({"role": "user", "content": prompt})
+
+                body: dict[str, object] = {
+                    "model": "qwen3.6",
+                    "messages": messages,
+                    "max_tokens": max_tokens,
                     "temperature": temperature,
-                    "stop": stop_seqs,
-                }).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-            )
-            with urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                content = data.get("content", "").strip()
-                content = self._strip_thinking(content)
-                if json_mode and content and not content.startswith("{"):
-                    content = "{" + content
-                return content
+                    "chat_template_kwargs": {"enable_thinking": False},
+                }
+                if json_mode:
+                    body["response_format"] = {"type": "json_object"}
+                if stop:
+                    body["stop"] = stop
+
+                req = Request(
+                    chat_url,
+                    data=json.dumps(body).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with urlopen(req, timeout=timeout) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    choice = (data.get("choices") or [{}])[0]
+                    msg = choice.get("message") or {}
+                    content = (msg.get("content") or "").strip()
+                    # Defensive: some setups still leak <think>; strip if present
+                    content = self._strip_thinking(content)
+                    if not content:
+                        # Last-resort fallback: try reasoning_content (if the
+                        # template was ignored and reasoning ate the budget,
+                        # the model sometimes still wrote the answer there).
+                        reasoning = (msg.get("reasoning_content") or "").strip()
+                        if reasoning:
+                            content = self._extract_from_thinking(reasoning)
+                    if json_mode and content and not content.startswith("{"):
+                        content = "{" + content
+                    return content or None
+            else:
+                # Raw completion path (no chat template, no thinking control).
+                # Used by expand_query and other shapes that hand-build the prompt.
+                req = Request(
+                    self.llm_url,
+                    data=json.dumps({
+                        "prompt": prompt,
+                        "n_predict": max_tokens,
+                        "temperature": temperature,
+                        "stop": stop if stop is not None else ["\n\n"],
+                    }).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with urlopen(req, timeout=timeout) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    content = data.get("content", "").strip()
+                    content = self._strip_thinking(content)
+                    if json_mode and content and not content.startswith("{"):
+                        content = "{" + content
+                    return content
         except (URLError, TimeoutError, KeyError, json.JSONDecodeError):
             return None
 

@@ -769,6 +769,23 @@ Examples:
         help="COMMIT after every N successful rows so partial progress survives a kill (default 50)",
     )
 
+    # Resummarize command: backfill missing summary column on existing findings.
+    # Useful for entries added when the LLM was unreachable (kb-down queue) or
+    # before the summary feature existed.
+    resum_parser = subparsers.add_parser(
+        "resummarize",
+        help="Regenerate summary column for findings missing one (idempotent)",
+    )
+    resum_parser.add_argument("-p", "--project", help="Restrict to one project")
+    resum_parser.add_argument("--all", action="store_true",
+        help="Regenerate ALL summaries (default: only rows with NULL or empty summary)")
+    resum_parser.add_argument("-n", "--limit", type=int, default=0,
+        help="Max rows to process (0 = no limit)")
+    resum_parser.add_argument("--dry-run", action="store_true",
+        help="Print would-be summaries without writing to DB")
+    resum_parser.add_argument("--commit-every", type=int, default=20,
+        help="COMMIT every N successful updates (default 20)")
+
     # Reconcile command
     reconcile_parser = subparsers.add_parser("reconcile", help="Reconcile KB with source document")
     reconcile_parser.add_argument("document", type=Path, help="Source document to reconcile against")
@@ -1399,6 +1416,47 @@ Examples:
                     f"{s.get('skipped_already_done', 0)} skipped) "
                     f"in {s.get('elapsed_sec', 0)/60.0:.1f}m"
                 )
+
+        elif args.command == "resummarize":
+            sql = "SELECT id, project, content, evidence FROM findings WHERE status = 'current'"
+            params: list = []
+            if not args.all:
+                sql += " AND (summary IS NULL OR summary = '')"
+            if args.project:
+                sql += " AND project = ?"
+                params.append(args.project)
+            sql += " ORDER BY created_at DESC"
+            if args.limit:
+                sql += f" LIMIT {int(args.limit)}"
+            rows = kb.conn.execute(sql, params).fetchall()
+            print(f"resummarize: {len(rows)} rows to process "
+                  f"(project={args.project or 'ALL'}, all={args.all}, dry={args.dry_run})")
+            ok = fail = 0
+            import time as _time
+            t0 = _time.time()
+            for i, (fid, project, content, evidence) in enumerate(rows, 1):
+                summary = kb._analyzer.generate_summary(content, evidence)
+                if summary and len(summary) >= 10:
+                    if args.dry_run:
+                        print(f"[DRY] {fid} ({project}): {summary}")
+                    else:
+                        kb.conn.execute(
+                            "UPDATE findings SET summary = ?, updated_at = datetime('now') WHERE id = ?",
+                            (summary, fid),
+                        )
+                        if (i % args.commit_every) == 0:
+                            kb.conn.commit()
+                    ok += 1
+                else:
+                    fail += 1
+                    print(f"  FAIL {fid} ({project}): {(content or '')[:60]!r}")
+                if (i % 20) == 0 or i == len(rows):
+                    print(f"  {i}/{len(rows)}  ok={ok} fail={fail}  "
+                          f"elapsed={_time.time()-t0:.0f}s", flush=True)
+            if not args.dry_run:
+                kb.conn.commit()
+            print(f"resummarize done: ok={ok} fail={fail} total={len(rows)} "
+                  f"elapsed={_time.time()-t0:.1f}s")
 
         elif args.command == "reconcile":
             try:
