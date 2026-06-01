@@ -74,12 +74,17 @@ class ContentAnalyzer:
                 summary = re.sub(r'[\x00-\x1f\x7f]', '', summary)
                 summary = ''.join(c for c in summary if ord(c) < 128 or c in ALLOWED_UNICODE)
                 summary = re.sub(r'  +', ' ', summary).strip()
-                # Check for garbage: need real words and reasonable letter ratio
+                # Check for garbage: need real words. The letter-ratio gate
+                # used to be > 0.5, but technically-dense summaries like
+                # "Qwen3.5-35B-A3B Q4_K_M achieves PPL 2.15 at 262k context
+                # on 2x RX 7900 XTX." are ~46% letters (lots of model names,
+                # SKUs, units, numbers) and were being wrongly rejected,
+                # forcing the fallback to first-sentence on perfect output.
                 words = re.findall(r'[a-zA-Z]{3,}', summary)
                 letter_ratio = sum(1 for c in summary if c.isalpha()) / max(len(summary), 1)
                 if (summary and not summary.startswith("{") and len(summary) > 10
-                        and len(words) >= 3 and letter_ratio > 0.5):
-                    return summary[:100]
+                        and len(words) >= 3 and letter_ratio > 0.3):
+                    return summary[:120]
 
         # Fallback: first sentence or truncated content
         first_sentence = content.split('.')[0]
