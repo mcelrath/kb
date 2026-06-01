@@ -52,14 +52,19 @@ def detect_project_from_cwd() -> str | None:
 
 
 def normalize_project_name(name: str | None) -> str | None:
+    # Apply alias lookup even for empty/None so historical empties (project
+    # column never set) can be routed by the alias map. The empty-string
+    # alias key is the canonical hook.
+    aliases = _load_aliases()
     if not name:
+        if "" in aliases:
+            return aliases[""]
         return name
     n = name.strip().lower()
     n = re.sub(r'^~/', '', n)
     n = re.sub(r'^/home/[^/]+/', '', n)
     n = n.rstrip('/')
     n = n.replace(' ', '-')
-    aliases = _load_aliases()
     if n in aliases:
         n = aliases[n]
     return n

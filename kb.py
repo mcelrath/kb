@@ -8,6 +8,7 @@ including web server functionality. The core library is in the kb/ package.
 
 import argparse
 import html
+import json
 import re
 import sys
 from pathlib import Path
@@ -769,6 +770,31 @@ Examples:
         help="COMMIT after every N successful rows so partial progress survives a kill (default 50)",
     )
 
+    # Consolidate-projects: re-apply normalize_project_name (which honors
+    # ~/.cache/kb/project_aliases.json) to every finding's project column.
+    # Idempotent. Useful after editing the aliases file.
+    consol_parser = subparsers.add_parser(
+        "consolidate-projects",
+        help="Re-canonicalize project column on all findings via project_aliases.json",
+    )
+    consol_parser.add_argument("--dry-run", action="store_true",
+        help="Show what would change without writing")
+
+    # Retag: regenerate tags via LLM. Symmetric to resummarize.
+    retag_parser = subparsers.add_parser(
+        "retag",
+        help="Regenerate tags column for findings missing one (idempotent)",
+    )
+    retag_parser.add_argument("-p", "--project", help="Restrict to one project")
+    retag_parser.add_argument("--all", action="store_true",
+        help="Regenerate ALL tags (default: only rows with no tags)")
+    retag_parser.add_argument("-n", "--limit", type=int, default=0,
+        help="Max rows to process (0 = no limit)")
+    retag_parser.add_argument("--dry-run", action="store_true",
+        help="Print would-be tags without writing")
+    retag_parser.add_argument("--commit-every", type=int, default=20,
+        help="COMMIT every N successful updates (default 20)")
+
     # Resummarize command: backfill missing summary column on existing findings.
     # Useful for entries added when the LLM was unreachable (kb-down queue) or
     # before the summary feature existed.
@@ -1416,6 +1442,72 @@ Examples:
                     f"{s.get('skipped_already_done', 0)} skipped) "
                     f"in {s.get('elapsed_sec', 0)/60.0:.1f}m"
                 )
+
+        elif args.command == "consolidate-projects":
+            from kb.validation import normalize_project_name
+            rows = kb.conn.execute(
+                "SELECT id, project FROM findings"
+            ).fetchall()
+            changes: dict[str, dict[str, int]] = {}
+            for fid, project in rows:
+                canon = normalize_project_name(project)
+                if canon != project:
+                    key = f"{project!r} -> {canon!r}"
+                    changes.setdefault(key, {"count": 0})["count"] += 1
+                    if not args.dry_run:
+                        kb.conn.execute(
+                            "UPDATE findings SET project = ?, updated_at = datetime('now') WHERE id = ?",
+                            (canon, fid),
+                        )
+            if not args.dry_run:
+                kb.conn.commit()
+            total = sum(c["count"] for c in changes.values())
+            label = "would update" if args.dry_run else "updated"
+            print(f"consolidate-projects: {label} {total} rows across {len(changes)} project renames")
+            for k in sorted(changes.keys()):
+                print(f"  {changes[k]['count']:>5}  {k}")
+
+        elif args.command == "retag":
+            sql = "SELECT id, project, content FROM findings WHERE status = 'current'"
+            params: list = []
+            if not args.all:
+                sql += " AND (tags IS NULL OR tags = '' OR tags = '[]')"
+            if args.project:
+                sql += " AND project = ?"
+                params.append(args.project)
+            sql += " ORDER BY created_at DESC"
+            if args.limit:
+                sql += f" LIMIT {int(args.limit)}"
+            rows = kb.conn.execute(sql, params).fetchall()
+            print(f"retag: {len(rows)} rows to process "
+                  f"(project={args.project or 'ALL'}, all={args.all}, dry={args.dry_run})")
+            ok = fail = 0
+            import time as _time
+            t0 = _time.time()
+            for i, (fid, project, content) in enumerate(rows, 1):
+                tags = kb.suggest_tags(content, project)
+                if tags:
+                    tags_json = json.dumps(tags)
+                    if args.dry_run:
+                        print(f"[DRY] {fid} ({project}): {tags}")
+                    else:
+                        kb.conn.execute(
+                            "UPDATE findings SET tags = ?, updated_at = datetime('now') WHERE id = ?",
+                            (tags_json, fid),
+                        )
+                        if (i % args.commit_every) == 0:
+                            kb.conn.commit()
+                    ok += 1
+                else:
+                    fail += 1
+                    print(f"  FAIL {fid} ({project}): {(content or '')[:60]!r}")
+                if (i % 20) == 0 or i == len(rows):
+                    print(f"  {i}/{len(rows)}  ok={ok} fail={fail}  "
+                          f"elapsed={_time.time()-t0:.0f}s", flush=True)
+            if not args.dry_run:
+                kb.conn.commit()
+            print(f"retag done: ok={ok} fail={fail} total={len(rows)} "
+                  f"elapsed={_time.time()-t0:.1f}s")
 
         elif args.command == "resummarize":
             sql = "SELECT id, project, content, evidence FROM findings WHERE status = 'current'"
