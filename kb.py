@@ -292,6 +292,33 @@ _TYPE_ABBREV = {
 }
 
 
+_TYPE_ABBREV_AGENT = {
+    "correction": "COR", "discovery": "DIS", "success": "SUC",
+    "failure": "FAI", "experiment": "EXP",
+}
+# Tags that add no information in the one-liner (they duplicate the type field)
+_SKIP_TAGS = frozenset({"discovery", "success", "failure", "experiment", "correction",
+                        "core-result", "technique", "detail", "proven", "heuristic",
+                        "open-problem"})
+
+
+def _fmt_age(created_at: str | None) -> str:
+    """Human-readable age: 3d, 2w, 4m, 1y."""
+    if not created_at:
+        return ""
+    try:
+        from datetime import datetime
+        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        days = (datetime.now(created.tzinfo) - created).days
+        if days < 1:   return "today"
+        if days < 14:  return f"{days}d"
+        if days < 60:  return f"{days // 7}w"
+        if days < 365: return f"{days // 30}m"
+        return f"{days // 365}y"
+    except Exception:
+        return ""
+
+
 def _fmt_one_line(finding: dict) -> str:
     """One-line summary for search/list/related. Colored in user mode, plain in agent mode."""
     text = finding.get("summary") or finding["content"].split("\n")[0][:100]
@@ -299,7 +326,16 @@ def _fmt_one_line(finding: dict) -> str:
 
     if AGENT_MODE:
         sim_str = f" ({sim:.2f})" if sim is not None else ""
-        return f"{finding['id']}{sim_str}  {text}"
+        type_abbr = _TYPE_ABBREV_AGENT.get(finding.get("type", ""), "???")
+        age = _fmt_age(finding.get("created_at"))
+        tags = [t for t in (finding.get("tags") or []) if t not in _SKIP_TAGS]
+        meta_parts = [type_abbr]
+        if age:
+            meta_parts.append(age)
+        if tags:
+            meta_parts.append(",".join(tags[:3]))
+        meta = "[" + " ".join(meta_parts) + "]"
+        return f"{finding['id']}{sim_str} {meta}  {text}"
 
     dim   = "\033[2m"
     reset = "\033[0m"
@@ -935,6 +971,8 @@ def main():
         help="KB IDs to exclude from results (auto-loaded from session seen file)")
     search_parser.add_argument("--no-dedup", action="store_true",
         help="Disable automatic exclusion of session-seen IDs")
+    search_parser.add_argument("--json", action="store_true",
+        help="Output results as JSON array (full metadata, for hook/script use)")
 
     # List command
     list_parser = _add_parser("list", "List findings", agent_visible=True)
@@ -1174,7 +1212,9 @@ def main():
                 exclude_ids=exclude_ids or None,
             )
             results = results[:args.limit]
-            if not results:
+            if args.json:
+                print(json.dumps(results, indent=2, default=str))
+            elif not results:
                 print("No results found")
             elif args.long:
                 for finding in results:

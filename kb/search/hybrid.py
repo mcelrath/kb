@@ -203,6 +203,7 @@ class HybridSearch:
                 "tags": json.loads(row["tags"] or "[]"),
                 "summary": row["summary"],
                 "content": row["content"],
+                "created_at": str(row["created_at"]) if row["created_at"] else None,
                 "similarity": data["vector_sim"],
                 "score": final_score,
             })
