@@ -4,7 +4,6 @@ Content Validation
 Functions for validating finding content and tags.
 """
 
-import json
 import math
 import re
 import struct
@@ -12,26 +11,12 @@ from pathlib import Path
 from .constants import CONTENT_WARNINGS
 
 
-_PROJECT_ALIASES: dict[str, str] | None = None
-_ALIASES_PATH = Path.home() / ".cache" / "kb" / "project_aliases.json"
-
-
-def _load_aliases() -> dict[str, str]:
-    global _PROJECT_ALIASES
-    if _PROJECT_ALIASES is not None:
-        return _PROJECT_ALIASES
-    if _ALIASES_PATH.exists():
-        _PROJECT_ALIASES = json.loads(_ALIASES_PATH.read_text())
-    else:
-        _PROJECT_ALIASES = {}
-    return _PROJECT_ALIASES
-
-
 _AUTO_PROJECT: str | None = None
 _AUTO_PROJECT_CHECKED = False
 
 
 def detect_project_from_cwd() -> str | None:
+    """Read project name from the nearest CLAUDE.md (project: <name> on first 5 lines)."""
     global _AUTO_PROJECT, _AUTO_PROJECT_CHECKED
     if _AUTO_PROJECT_CHECKED:
         return _AUTO_PROJECT
@@ -52,21 +37,19 @@ def detect_project_from_cwd() -> str | None:
 
 
 def normalize_project_name(name: str | None) -> str | None:
-    # Apply alias lookup even for empty/None so historical empties (project
-    # column never set) can be routed by the alias map. The empty-string
-    # alias key is the canonical hook.
-    aliases = _load_aliases()
+    """Normalize a project name: lowercase, strip paths, replace spaces with hyphens.
+
+    project_aliases.json was removed 2026-06-06 after a one-time DB migration
+    consolidated all variant names. Canonical names now live in each project's
+    CLAUDE.md (project: <name>) and are enforced at add-time via detect_project_from_cwd().
+    """
     if not name:
-        if "" in aliases:
-            return aliases[""]
         return name
     n = name.strip().lower()
     n = re.sub(r'^~/', '', n)
     n = re.sub(r'^/home/[^/]+/', '', n)
     n = n.rstrip('/')
     n = n.replace(' ', '-')
-    if n in aliases:
-        n = aliases[n]
     return n
 
 

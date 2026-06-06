@@ -15,7 +15,7 @@ DEFAULT_EMBEDDING_URL = os.environ.get("KB_EMBEDDING_URL", "http://ash:8081/embe
 DEFAULT_EMBEDDING_DIM = int(os.environ.get("KB_EMBEDDING_DIM", "4096"))
 
 # LLM configuration for query expansion
-DEFAULT_LLM_URL = os.environ.get("KB_LLM_URL", "http://ash:8014/completion")
+DEFAULT_LLM_URL = os.environ.get("KB_LLM_URL", "http://tardis:9510/completion")
 
 # Finding types
 FINDING_TYPES = ["success", "failure", "experiment", "discovery", "correction"]
