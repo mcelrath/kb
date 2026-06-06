@@ -1096,6 +1096,12 @@ def main():
     audit_parser.add_argument("document", type=Path, help="Source document")
     audit_parser.add_argument("-p", "--project", help="Project name")
 
+    # lean-verify subcommand: re-run lean-audit on cited file, flag proof drift
+    lean_verify_parser = _add_parser("lean-verify", "Re-run lean-audit on a lean:proven entry's cited file and flag drift")
+    lean_verify_parser.add_argument("id", help="KB entry ID to verify")
+    lean_verify_parser.add_argument("--search-path", nargs="*", metavar="DIR",
+        help="Additional directories to search for the .lean file")
+
     # Flush-pending (user/debugging only — automatic via hooks and --async spawner)
     flush_parser = _add_parser(
         "flush-pending",
@@ -1799,6 +1805,123 @@ def main():
             print(f"  Matched: {result['matched']}")
             print(f"  Missing from KB: {result['missing']}")
             print(f"  Conflicts: {result['conflicts']}")
+
+        elif args.command == "lean-verify":
+            import subprocess as _sp
+
+            finding = kb.get(args.id)
+            if not finding:
+                print(f"Finding not found: {args.id}")
+                sys.exit(1)
+
+            tags = finding.get("tags") or []
+            lean_tags = [t for t in tags if t.startswith("lean:")]
+            if not lean_tags:
+                print(f"No lean: tags on {args.id}; nothing to verify.")
+                sys.exit(0)
+
+            # Extract file:line from content + evidence
+            combined_text = finding["content"] + " " + (finding["evidence"] or "")
+            file_line_match = re.search(r'(\S+\.lean):(\d+)', combined_text)
+            if not file_line_match:
+                print(f"No file:line reference found in {args.id}.")
+                print(f"  Content preview: {finding['content'][:200]}")
+                print("  lean-verify requires 'path/to/File.lean:N' in the entry.")
+                sys.exit(1)
+
+            lean_rel = file_line_match.group(1)
+            cited_line = int(file_line_match.group(2))
+
+            # Search for the file in known project roots + any extra paths
+            search_roots = [
+                Path.home() / "Physics/claude/proofs",
+                Path.home() / "Physics/secular-constraints",
+                Path.home() / "Physics/mathlib4",
+            ]
+            if args.search_path:
+                search_roots = [Path(p) for p in args.search_path] + search_roots
+
+            lean_file: Path | None = None
+            for root in search_roots:
+                candidate = root / lean_rel
+                if candidate.exists():
+                    lean_file = candidate
+                    break
+                # Try just the filename without subdirectory
+                stem = Path(lean_rel).name
+                for match in root.rglob(stem):
+                    if match.suffix == ".lean":
+                        lean_file = match
+                        break
+                if lean_file:
+                    break
+
+            if lean_file is None:
+                print(f"DRIFT-UNKNOWN: could not locate {lean_rel} in known roots.")
+                print("  Pass --search-path DIR to extend the search.")
+                sys.exit(2)
+
+            lean_audit = Path.home() / ".local/bin/lean-audit"
+            if not lean_audit.exists():
+                lean_audit = Path("/usr/local/bin/lean-audit")
+            if not lean_audit.exists():
+                print("lean-audit not found; install or check PATH.")
+                sys.exit(1)
+
+            proc = _sp.run(
+                [str(lean_audit), str(lean_file), "--json"],
+                capture_output=True, text=True
+            )
+            if proc.returncode not in (0, 1):
+                print(f"lean-audit error: {proc.stderr[:400]}")
+                sys.exit(1)
+
+            try:
+                audit = json.loads(proc.stdout)
+            except json.JSONDecodeError:
+                print(f"lean-audit output not JSON:\n{proc.stdout[:400]}")
+                sys.exit(1)
+
+            # audit is a dict keyed by file path; find our file's entry
+            file_key = str(lean_file)
+            entry = audit.get(file_key) or next((v for v in audit.values()), None)
+
+            drift_issues = []
+            if entry:
+                sorry_count = entry.get("sorry_count", 0)
+                nonstd = entry.get("nonstd_axioms", [])
+                build_status = entry.get("status", "unknown")
+
+                if "lean:proven" in lean_tags:
+                    if sorry_count > 0:
+                        drift_issues.append(
+                            f"DRIFT: lean:proven entry now has {sorry_count} sorry in {lean_file.name}"
+                        )
+                    if build_status not in ("clean", "CLEAN"):
+                        drift_issues.append(
+                            f"DRIFT: lean-audit status is '{build_status}' (expected CLEAN)"
+                        )
+
+                if drift_issues:
+                    print(f"DRIFT DETECTED on {args.id}:")
+                    for d in drift_issues:
+                        print(f"  {d}")
+                    print(f"  File: {lean_file}")
+                    print(f"  Cited line: {cited_line}")
+                    print(f"  Tags: {', '.join(lean_tags)}")
+                    print("  Action: use 'kb correct' to update the entry or fix the proof.")
+                    sys.exit(3)
+                else:
+                    print(f"CLEAN: {args.id}")
+                    print(f"  File: {lean_file}")
+                    print(f"  lean-audit: status={build_status} sorry={sorry_count}")
+                    if nonstd:
+                        print(f"  nonstd-axioms (allowed): {', '.join(nonstd)}")
+                    print(f"  Tags: {', '.join(lean_tags)}")
+            else:
+                print(f"DRIFT-UNKNOWN: lean-audit returned no entry for {lean_file.name}")
+                print(f"  Raw output: {proc.stdout[:400]}")
+                sys.exit(2)
 
         elif args.command == "flush-pending":
             import os

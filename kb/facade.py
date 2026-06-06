@@ -382,21 +382,32 @@ Finding 2: {candidate['content'][:300]}"""
         if embedding is None:
             embedding = self._embed(content + " " + (evidence or ""))
 
-        try:
-            _ = self.conn.execute("""
-                INSERT INTO findings (id, type, status, project, sprint, tags, content, summary, evidence, created_at, updated_at)
-                VALUES (?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (finding_id, finding_type, project, sprint, tags_json, content, summary, evidence, now, now))
+        import time as _time
+        _max_retries = 5
+        for _attempt in range(_max_retries):
+            try:
+                _ = self.conn.execute("""
+                    INSERT INTO findings (id, type, status, project, sprint, tags, content, summary, evidence, created_at, updated_at)
+                    VALUES (?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (finding_id, finding_type, project, sprint, tags_json, content, summary, evidence, now, now))
 
-            _ = self.conn.execute(
-                "INSERT INTO findings_vec (id, embedding) VALUES (?, ?)",
-                (finding_id, embedding)
-            )
+                _ = self.conn.execute(
+                    "INSERT INTO findings_vec (id, embedding) VALUES (?, ?)",
+                    (finding_id, embedding)
+                )
 
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+                self.conn.commit()
+                break
+            except sqlite3.OperationalError as _e:
+                if "locked" in str(_e) and _attempt < _max_retries - 1:
+                    self.conn.rollback()
+                    _time.sleep(0.5 * (_attempt + 1))
+                    continue
+                self.conn.rollback()
+                raise
+            except Exception:
+                self.conn.rollback()
+                raise
         result["id"] = finding_id
 
         result["cross_refs"] = self.suggest_cross_references(finding_id, content, project=project)
