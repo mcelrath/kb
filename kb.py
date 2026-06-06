@@ -1008,9 +1008,9 @@ def main():
 
     # Refresh command: retag + resummarize + optional reembed + optional theorem backfill
     refresh_parser = _add_parser("refresh", "Retag + resummarize findings")
-    refresh_parser.add_argument("ids", nargs="*", metavar="ID",
-        help="Specific finding IDs to refresh (default: all missing summaries)")
-    refresh_parser.add_argument("-p", "--project", help="Restrict to one project")
+    refresh_parser.add_argument("targets", nargs="*", metavar="ID_OR_PROJECT",
+        help="kb-ids to refresh, OR a project name (auto-detected by prefix)")
+    refresh_parser.add_argument("-p", "--project", help="Restrict to one project (alias for passing project as positional arg)")
     refresh_parser.add_argument("--all", action="store_true",
         help="Regenerate ALL summaries/tags (default: only rows with NULL summary)")
     refresh_parser.add_argument("-n", "--limit", type=int, default=0,
@@ -1521,29 +1521,29 @@ def main():
                 print("No findings need attention.")
 
         elif args.command == "refresh":
-            # Guard: positional args must look like kb-ids (kb-YYYYMMDD-HHMMSS-xxxxxx).
-            # A bare project name here is a common mistake; direct the user to -p.
-            bad_ids = [a for a in (args.ids or []) if not a.startswith("kb-")]
-            if bad_ids:
-                print(f"Error: positional arguments must be kb-ids (e.g. kb-20260606-123456-abcdef).")
-                print(f"  Got: {bad_ids}")
-                print(f"  To filter by project use: kb refresh -p <project>")
+            # Partition positional targets into kb-ids vs project names.
+            targets = args.targets or []
+            explicit_ids = [t for t in targets if t.startswith("kb-")]
+            project_args = [t for t in targets if not t.startswith("kb-")]
+            if len(project_args) > 1:
+                print(f"Error: only one project name allowed, got: {project_args}")
                 sys.exit(1)
+            project = args.project or (project_args[0] if project_args else None)
             rows = _fetch_refresh_rows(
                 kb,
-                ids=args.ids or None,
-                project=args.project,
+                ids=explicit_ids or None,
+                project=project,
                 all_rows=args.all,
                 limit=args.limit,
             )
             print(f"refresh: {len(rows)} findings "
-                  f"(project={args.project or 'ALL'}, all={args.all}, dry={args.dry_run})"
+                  f"(project={project or 'ALL'}, all={args.all}, dry={args.dry_run})"
                   f"\n  (Ctrl+C safe: work is committed every {args.commit_every} rows;"
                   f" restart without --all to resume from unprocessed rows)")
             _run_refresh(kb, rows, dry_run=args.dry_run, commit_every=args.commit_every)
             if args.theorems:
                 _backfill_statement_pure(
-                    kb, project=args.project,
+                    kb, project=project,
                     workers=args.theorem_workers, dry_run=args.dry_run,
                 )
 
