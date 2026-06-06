@@ -38,7 +38,20 @@ SECTION_POP = re.compile(r'^end\b(?!\s+\w)', re.MULTILINE)
 
 def module_from_path(lean_file: Path, repo_root: Path) -> str:
     """Convert file path to dotted module name."""
-    rel = lean_file.relative_to(repo_root)
+    try:
+        rel = lean_file.relative_to(repo_root)
+    except ValueError:
+        # File outside repo_root (e.g. passed via --files from another repo).
+        # Use the stem path relative to the nearest ancestor that looks like a repo root.
+        for parent in lean_file.parents:
+            if (parent / ".lake").exists() or (parent / "lakefile.lean").exists():
+                try:
+                    rel = lean_file.relative_to(parent)
+                    return str(rel.with_suffix("")).replace("/", ".")
+                except ValueError:
+                    continue
+        # Fallback: use file stem only
+        return lean_file.stem
     return str(rel.with_suffix("")).replace("/", ".")
 
 
@@ -227,7 +240,21 @@ def parse_lean_file(lean_file: Path, repo_root: Path) -> list[dict]:
 
 def has_olean(lean_file: Path, repo_root: Path) -> bool:
     """Check if a .lean file has been compiled (has .olean)."""
-    rel = lean_file.relative_to(repo_root)
+    try:
+        rel = lean_file.relative_to(repo_root)
+    except ValueError:
+        # File outside repo_root (e.g. passed via --files from another repo).
+        # Try to find the olean relative to the file's own nearest .lake tree.
+        for parent in lean_file.parents:
+            lake = parent / ".lake" / "build" / "lib" / "lean"
+            if lake.exists():
+                try:
+                    rel = lean_file.relative_to(parent)
+                    olean = lake / rel.with_suffix(".olean")
+                    return olean.exists()
+                except ValueError:
+                    continue
+        return False
     olean = repo_root / ".lake" / "build" / "lib" / "lean" / rel.with_suffix(".olean")
     return olean.exists()
 
@@ -252,6 +279,9 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--batch-size", type=int, default=500,
                         help="Files per batch for progress reporting")
+    parser.add_argument("--files", nargs="+", metavar="FILE",
+                        help="Process ONLY these specific .lean files (incremental mode). "
+                             "Paths may be absolute or relative to --mathlib-root.")
     args = parser.parse_args()
 
     repo_root = Path(args.mathlib_root).expanduser()
@@ -260,12 +290,25 @@ def main():
         sys.exit(1)
 
     # Collect .lean files
-    lean_files = sorted(repo_root.glob("Mathlib/**/*.lean"))
-    if args.module_filter:
-        prefix = args.module_filter.replace(".", "/")
-        lean_files = [f for f in lean_files if prefix in str(f.relative_to(repo_root))]
-
-    print(f"Found {len(lean_files)} .lean files in Mathlib/")
+    if args.files:
+        # Incremental mode: process only the specified files
+        lean_files = []
+        for f in args.files:
+            p = Path(f)
+            if not p.is_absolute():
+                p = repo_root / p
+            p = p.resolve()
+            if p.exists() and p.suffix == ".lean":
+                lean_files.append(p)
+            else:
+                print(f"Warning: skipping {f} (not found or not .lean)", file=sys.stderr)
+        print(f"Incremental mode: {len(lean_files)} .lean files specified")
+    else:
+        lean_files = sorted(repo_root.glob("Mathlib/**/*.lean"))
+        if args.module_filter:
+            prefix = args.module_filter.replace(".", "/")
+            lean_files = [f for f in lean_files if prefix in str(f.relative_to(repo_root))]
+        print(f"Found {len(lean_files)} .lean files in Mathlib/")
 
     # Filter to compiled files
     compiled = [f for f in lean_files if has_olean(f, repo_root)]

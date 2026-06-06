@@ -1077,6 +1077,8 @@ def main():
         help="Parallel workers for statement_pure backfill (default 8)")
     ingest_lean_parser.add_argument("--no-backfill", action="store_true",
         help="Skip statement_pure generation after ingestion")
+    ingest_lean_parser.add_argument("--files", nargs="+", metavar="FILE",
+        help="Incremental mode: process ONLY these .lean files (absolute paths preferred)")
 
     ingest_scripts_parser = ingest_sub.add_parser("scripts", help="Register scripts with LLM-generated purposes")
     ingest_scripts_parser.add_argument("directory", type=Path, help="Directory to scan")
@@ -1743,6 +1745,8 @@ def main():
                     cmd += ["--limit", str(args.limit)]
                 if args.module_filter:
                     cmd += ["--module-filter", args.module_filter]
+                if getattr(args, "files", None):
+                    cmd += ["--files"] + args.files
                 result = _sp.run(cmd)
                 if result.returncode != 0:
                     sys.exit(result.returncode)
