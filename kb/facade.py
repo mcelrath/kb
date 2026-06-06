@@ -559,11 +559,38 @@ Finding 2: {candidate['content'][:300]}"""
         current = by_status.get("current", 0)
         superseded = by_status.get("superseded", 0)
 
+        no_summary = self.conn.execute(
+            "SELECT COUNT(*) FROM findings WHERE status='current' AND (summary IS NULL OR summary='')"
+        ).fetchone()[0]
+        no_embedding = self.conn.execute(
+            "SELECT COUNT(*) FROM findings WHERE status='current' AND id NOT IN (SELECT id FROM findings_vec)"
+        ).fetchone()[0]
+
+        no_summary_by_project: dict[str, int] = {}
+        for row in self.conn.execute(
+            "SELECT COALESCE(project,'(none)'), COUNT(*) FROM findings "
+            "WHERE status='current' AND (summary IS NULL OR summary='') "
+            "GROUP BY project ORDER BY COUNT(*) DESC"
+        ).fetchall():
+            no_summary_by_project[row[0]] = row[1]
+
+        no_embedding_by_project: dict[str, int] = {}
+        for row in self.conn.execute(
+            "SELECT COALESCE(project,'(none)'), COUNT(*) FROM findings "
+            "WHERE status='current' AND id NOT IN (SELECT id FROM findings_vec) "
+            "GROUP BY project ORDER BY COUNT(*) DESC"
+        ).fetchall():
+            no_embedding_by_project[row[0]] = row[1]
+
         return {
             "db_path": str(self.db_path),
             "total": total,
             "current": current,
             "superseded": superseded,
+            "no_summary": no_summary,
+            "no_embedding": no_embedding,
+            "no_summary_by_project": no_summary_by_project,
+            "no_embedding_by_project": no_embedding_by_project,
             "by_type": by_type,
             "by_project": by_project,
         }

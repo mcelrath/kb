@@ -566,7 +566,10 @@ def format_finding_summary(finding: dict) -> str:
 
 
 def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refresh"):
-    """Core loop: generate summary + retag for each finding row.
+    """Core loop: summarize + retag + reembed each finding row.
+
+    Embedding (ash:8081) and LLM (tardis:9510) run in parallel per row — they
+    are independent servers, so there is no reason to queue them sequentially.
 
     rows: list of (id, project, content, evidence)
     Returns (ok, fail) counts.
@@ -575,43 +578,85 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refre
     Committed every commit_every rows, so interrupting loses at most commit_every rows.
     """
     import time as _time
+    from concurrent.futures import ThreadPoolExecutor
+
     ok = fail = 0
     total = len(rows)
     t0 = _time.time()
     interval = max(5, total // 100) if total else 1
-    for i, (fid, fproject, content, evidence) in enumerate(rows, 1):
-        summary = kb._analyzer.generate_summary(content, evidence)
-        if summary and len(summary) >= 10:
+
+    # Single pool shared across all rows; max_workers=2 so embed and LLM run
+    # side-by-side without spawning unbounded threads.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for i, (fid, fproject, content, evidence) in enumerate(rows, 1):
+            embed_text = content + (" " + evidence if evidence else "")
+
             if dry_run:
-                print(f"[DRY] {fid} ({fproject}): {summary}")
+                # Skip embedding in dry-run; only preview LLM output.
+                summary = kb._analyzer.generate_summary(content, evidence)
+                tags: list = kb.suggest_tags(content, fproject)
+                embedding = None
             else:
-                kb.conn.execute(
-                    "UPDATE findings SET summary = ?, updated_at = datetime('now') WHERE id = ?",
-                    (summary, fid),
+                # Fire both concurrently; collect when both finish.
+                embed_fut = pool.submit(kb._embedding.embed, embed_text)
+
+                def _llm(c=content, e=evidence, p=fproject):
+                    s = kb._analyzer.generate_summary(c, e)
+                    t = kb.suggest_tags(c, p)
+                    return s, t
+
+                llm_fut = pool.submit(_llm)
+
+                try:
+                    embedding = embed_fut.result()
+                except Exception as e:
+                    embedding = None
+                    print(f"  EMBED FAIL {fid}: {e}")
+
+                try:
+                    summary, tags = llm_fut.result()
+                except Exception as e:
+                    summary, tags = None, []
+                    print(f"  LLM FAIL {fid}: {e}")
+
+            if summary and len(summary) >= 10:
+                if dry_run:
+                    print(f"[DRY] {fid} ({fproject}): {summary}")
+                else:
+                    kb.conn.execute(
+                        "UPDATE findings SET summary=?, updated_at=datetime('now') WHERE id=?",
+                        (summary, fid),
+                    )
+                ok += 1
+            else:
+                fail += 1
+                print(f"  FAIL {fid} ({fproject}): {(content or '')[:60]!r}")
+
+            if not dry_run:
+                if tags:
+                    kb.conn.execute(
+                        "UPDATE findings SET tags=?, updated_at=datetime('now') WHERE id=?",
+                        (json.dumps(tags), fid),
+                    )
+                if embedding is not None:
+                    kb.conn.execute("DELETE FROM findings_vec WHERE id=?", (fid,))
+                    kb.conn.execute(
+                        "INSERT INTO findings_vec (id, embedding) VALUES (?,?)",
+                        (fid, embedding),
+                    )
+                if i % commit_every == 0:
+                    kb.conn.commit()
+
+            if i % interval == 0 or i == total:
+                elapsed = _time.time() - t0
+                rate = i / elapsed if elapsed > 0 else 0.0
+                eta_sec = (total - i) / rate if rate > 0 else 0.0
+                print(
+                    f"  {i}/{total} ({100*i//total}%)  ok={ok} fail={fail}"
+                    f"  rate={rate:.2f}/s  elapsed={elapsed/60:.1f}m  eta={eta_sec/60:.1f}m",
+                    flush=True,
                 )
-            ok += 1
-        else:
-            fail += 1
-            print(f"  FAIL {fid} ({fproject}): {(content or '')[:60]!r}")
-        if not dry_run:
-            tags = kb.suggest_tags(content, fproject)
-            if tags:
-                kb.conn.execute(
-                    "UPDATE findings SET tags = ?, updated_at = datetime('now') WHERE id = ?",
-                    (json.dumps(tags), fid),
-                )
-            if (i % commit_every) == 0:
-                kb.conn.commit()
-        if i % interval == 0 or i == total:
-            elapsed = _time.time() - t0
-            rate = i / elapsed if elapsed > 0 else 0.0
-            remaining = total - i
-            eta_sec = remaining / rate if rate > 0 else 0.0
-            print(
-                f"  {i}/{total} ({100*i//total}%)  ok={ok} fail={fail}"
-                f"  rate={rate:.2f}/s  elapsed={elapsed/60:.1f}m  eta={eta_sec/60:.1f}m",
-                flush=True,
-            )
+
     if not dry_run:
         kb.conn.commit()
     elapsed = _time.time() - t0
@@ -932,8 +977,6 @@ def main():
         help="Also backfill statement_pure for lean theorems")
     refresh_parser.add_argument("--theorem-workers", type=int, default=8,
         help="Parallel workers for theorem backfill (default 8)")
-    refresh_parser.add_argument("--reembed-resume", action="store_true",
-        help="Skip rows that already have a vec row (safe after a crash)")
 
     # Ingest command group
     ingest_parser = _add_parser("ingest", "Ingest external content into KB")
@@ -1155,8 +1198,20 @@ def main():
             stats = kb.stats()
             print(f"Database: {stats['db_path']}")
             print(f"Total findings: {stats['total']}")
-            print(f"  Current: {stats['current']}")
+            print(f"  Current:    {stats['current']}")
             print(f"  Superseded: {stats['superseded']}")
+            no_sum = stats.get('no_summary', 0)
+            no_emb = stats.get('no_embedding', 0)
+            print(f"  No summary: {no_sum}"
+                  + (f"  (run: kb refresh -p PROJECT)" if no_sum else ""))
+            if stats.get('no_summary_by_project'):
+                for proj, cnt in stats['no_summary_by_project'].items():
+                    print(f"    {proj}: {cnt}")
+            print(f"  No embed:   {no_emb}"
+                  + (f"  (run: kb refresh --all -p PROJECT)" if no_emb else ""))
+            if stats.get('no_embedding_by_project'):
+                for proj, cnt in stats['no_embedding_by_project'].items():
+                    print(f"    {proj}: {cnt}")
             print("\nBy type:")
             for t, count in sorted(stats['by_type'].items()):
                 print(f"  {t}: {count}")
@@ -1442,56 +1497,6 @@ def main():
                     kb, project=args.project,
                     workers=args.theorem_workers, dry_run=args.dry_run,
                 )
-            if not args.dry_run and rows:
-                # Re-embed the refreshed findings in batches.
-                # llama.cpp has an internal batch-size limit; chunking avoids timeouts
-                # on large runs and shows per-chunk progress + ETA.
-                import time as _time
-                CHUNK = getattr(args, "reembed_chunk", 50)
-                fids = [r[0] for r in rows]
-                id_content: dict = {}
-                for fid in fids:
-                    r2 = kb.conn.execute(
-                        "SELECT content FROM findings WHERE id=?", (fid,)
-                    ).fetchone()
-                    if r2:
-                        id_content[fid] = r2[0]
-                total_emb = len(id_content)
-                print(f"reembed: {total_emb} finding(s) in chunks of {CHUNK}...")
-                t0 = _time.time()
-                embedded = skipped = 0
-                fid_list = list(id_content.keys())
-                texts_list = [id_content[f] for f in fid_list]
-                for chunk_start in range(0, total_emb, CHUNK):
-                    chunk_fids = fid_list[chunk_start:chunk_start + CHUNK]
-                    chunk_texts = texts_list[chunk_start:chunk_start + CHUNK]
-                    try:
-                        embeddings = kb._embedding.embed_batch(chunk_texts)
-                        for fid, emb in zip(chunk_fids, embeddings):
-                            if emb is not None:
-                                kb.conn.execute("DELETE FROM findings_vec WHERE id=?", (fid,))
-                                kb.conn.execute(
-                                    "INSERT INTO findings_vec (id, embedding) VALUES (?,?)",
-                                    (fid, emb),
-                                )
-                                embedded += 1
-                            else:
-                                skipped += 1
-                    except Exception as e:
-                        print(f"  chunk {chunk_start}-{chunk_start+len(chunk_fids)} failed ({e})")
-                        skipped += len(chunk_fids)
-                    kb.conn.commit()
-                    done = chunk_start + len(chunk_fids)
-                    elapsed = _time.time() - t0
-                    rate = done / elapsed if elapsed > 0 else 0.0
-                    eta = (total_emb - done) / rate if rate > 0 else 0.0
-                    print(
-                        f"  reembed {done}/{total_emb} ({100*done//total_emb}%)"
-                        f"  rate={rate:.1f}/s  eta={eta/60:.1f}m"
-                        f"  embedded={embedded} skipped={skipped}",
-                        flush=True,
-                    )
-                print(f"  reembed done: embedded={embedded} skipped={skipped} elapsed={(_time.time()-t0)/60:.1f}m")
 
         elif args.command == "ingest":
             import subprocess as _sp
