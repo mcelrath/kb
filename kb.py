@@ -1120,6 +1120,123 @@ def main():
         sys.exit(0 if args.help else 1)
         sys.exit(1)
 
+    # lean: tag vocabulary validation (final taxonomy from bridge #4074, tip-vetted)
+    def _validate_lean_tags(tags: list[str] | None, content: str, evidence: str | None) -> list[str]:
+        """Return list of validation error strings (empty = OK).
+
+        Vocabulary (one primary status tag per entry):
+          lean:proven              0 sorry; pure-kernel axioms only (native_decide allowed-but-surfaced);
+                                   requires: TheoremName (file:line), commit hash, axiom-set, reviewer+date
+          lean:proven-conditional  Proven glue; open hypotheses must be listed
+          lean:scope-guarded       Proven for narrower object than name suggests; scope+exclusion stated
+          lean:contracted          Named sorry-contract/Prop slot; discharge route + bd-id required
+          lean:axiom               Load-bearing axiom; "what closes it" required
+          lean:build-blocked       Math done, olean can't complete (OOM/timeout); RSS datum + bd-id required
+          lean:emitted-unverified  Landing-pad literals, provenance-gated, no verified build yet
+          lean:vacuity-suspect     lean-audit flag; mandatory-read (no structural add-time requirement)
+          lean:refuted             False or route proven-closed; refutation pointer required
+          lean:superseded          Replaced; successor kb-id or TheoremName required
+        """
+        if not tags:
+            return []
+        errors = []
+        combined = (content + " " + (evidence or "")).lower()
+        raw = content + " " + (evidence or "")
+
+        if "lean:proven" in tags:
+            has_file_line = bool(re.search(r'\S+\.lean:\d+', raw))
+            has_commit = bool(re.search(r'\b[0-9a-f]{7,40}\b', raw))
+            # axiom-set: any explicit mention of the standard kernel axioms or an axiom-set label
+            has_axiom = bool(re.search(
+                r'axiom[-_\s]?set|axioms?:|propext|classical\.choice|quot\.sound|nonstd.axiom|native_decide',
+                combined
+            ))
+            has_reviewer = bool(re.search(
+                r'\b(reviewer|reviewed|non.?vacuity|non_vacuity)\b', combined
+            ))
+            missing = []
+            if not has_file_line:
+                missing.append("file:line (e.g. Proofs/Foo.lean:42)")
+            if not has_commit:
+                missing.append("commit hash (≥7 hex chars)")
+            if not has_axiom:
+                missing.append("axiom-set (list axioms; native_decide must appear if used)")
+            if not has_reviewer:
+                missing.append("non-vacuity reviewer + date")
+            if missing:
+                errors.append(
+                    f"lean:proven requires: {', '.join(missing)}. "
+                    "Add missing fields or downgrade to lean:contracted."
+                )
+
+        if "lean:proven-conditional" in tags:
+            has_hypotheses = bool(re.search(
+                r'\b(given|assuming|hypothesis|hypotheses|conditional on|requires|open hyp)\b',
+                combined
+            ))
+            if not has_hypotheses:
+                errors.append(
+                    "lean:proven-conditional requires named open hypotheses "
+                    "(e.g. 'proven given DRI + IsHBLine')."
+                )
+
+        if "lean:scope-guarded" in tags:
+            has_exclusion = bool(re.search(
+                r'\b(not|does not|doesn\'t|only|narrow|excludes?|discharge|scope)\b', combined
+            ))
+            if not has_exclusion:
+                errors.append(
+                    "lean:scope-guarded requires explicit scope+exclusion statement "
+                    "(e.g. 'proves E_channel only, NOT E_DRI')."
+                )
+
+        if "lean:contracted" in tags:
+            has_route = bool(re.search(r'\bbd[-_]?\w+|\bsc#\d+|discharge|route\b', combined))
+            if not has_route:
+                errors.append(
+                    "lean:contracted requires a discharge route and bd-id "
+                    "(e.g. 'discharge route: sorry-contract SC1; bd sc#1234')."
+                )
+
+        if "lean:axiom" in tags:
+            has_closure = bool(re.search(r'\b(close[sd]?|discharge[sd]?|would|to close|open)\b', combined))
+            if not has_closure:
+                errors.append(
+                    "lean:axiom requires stating what would close it "
+                    "(e.g. 'closed by: proof of X')."
+                )
+
+        if "lean:build-blocked" in tags:
+            has_datum = bool(re.search(r'\b(oom|rss|timeout|mem|gb|mb)\b', combined))
+            has_bd = bool(re.search(r'\bbd[-_]?\w+|\bsc#\d+', combined))
+            missing = []
+            if not has_datum:
+                missing.append("timeout/RSS datum (e.g. 'OOM at 48 GB')")
+            if not has_bd:
+                missing.append("refactor bd-id")
+            if missing:
+                errors.append(
+                    f"lean:build-blocked requires: {', '.join(missing)}."
+                )
+
+        if "lean:refuted" in tags and not evidence:
+            errors.append(
+                "lean:refuted requires evidence (-e) pointing to the "
+                "refutation proof or counterexample."
+            )
+
+        if "lean:superseded" in tags:
+            has_successor = bool(re.search(
+                r'kb-\d{8}-\w+|successor|replaced by|see\s+\S+\.lean', combined
+            ))
+            if not has_successor:
+                errors.append(
+                    "lean:superseded requires naming the successor "
+                    "(kb-id or TheoremName)."
+                )
+
+        return errors
+
     # Async `kb add`: write a queue file and detach a flusher. No DB / no network.
     # Resolve content early (needed for both sync and async paths)
     if args.command == "add":
@@ -1132,6 +1249,13 @@ def main():
             sys.exit(1)
         if not _add_content:
             print("Error: empty content")
+            sys.exit(1)
+
+        # Validate lean: tags before any I/O (applies to both sync and async paths)
+        _lean_errors = _validate_lean_tags(args.tags, _add_content, args.evidence)
+        if _lean_errors:
+            for _err in _lean_errors:
+                print(f"Error [lean: tag]: {_err}", file=sys.stderr)
             sys.exit(1)
 
         if args.async_add:
