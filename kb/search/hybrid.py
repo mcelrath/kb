@@ -45,6 +45,7 @@ class HybridSearch:
         deprioritize_index: bool = True,
         exclude_corrections: bool = True,
         recency_weight: float = 0.1,
+        exclude_ids: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Search findings using hybrid vector + keyword search.
 
@@ -154,6 +155,10 @@ class HybridSearch:
         for finding_id, data in merged.items():
             row = data["row"]
             if row is None:
+                continue
+
+            # Exclude seen IDs (already in agent context)
+            if exclude_ids and finding_id in exclude_ids:
                 continue
 
             # Apply filters

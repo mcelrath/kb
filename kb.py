@@ -65,6 +65,42 @@ except ImportError:
 
 
 PENDING_QUEUE_DIR = Path.home() / ".claude" / "pending-kb-adds"
+KB_STATE_DIR = "/tmp/claude-kb-state"
+
+
+def _load_session_seen_ids() -> set[str]:
+    """Return kb IDs already in agent context this session.
+
+    Walks the PPID chain to find the Claude Code session file written by
+    history-isolation.sh, then reads ${session_id}-kb-seen (maintained by
+    dedupe-kb-get.sh and kb-search-track.sh).  The file contains one kb-ID
+    per line: written on kb add, kb get, and kb search result output.
+    """
+    try:
+        pid = os.getpid()
+        for _ in range(6):
+            try:
+                with open(f"/proc/{pid}/status") as f:
+                    for line in f:
+                        if line.startswith("PPid:"):
+                            pid = int(line.split()[1])
+                            break
+                    else:
+                        break
+            except OSError:
+                break
+            session_file = f"{KB_STATE_DIR}/session-{pid}"
+            if os.path.exists(session_file):
+                with open(session_file) as f:
+                    session_id = f.read().strip()
+                seen_file = f"{KB_STATE_DIR}/{session_id}-kb-seen"
+                if os.path.exists(seen_file):
+                    with open(seen_file) as f:
+                        return {ln.strip() for ln in f if ln.strip().startswith("kb-")}
+                return set()
+    except Exception:
+        pass
+    return set()
 
 
 def _queue_async_add(
@@ -895,6 +931,10 @@ def main():
     search_parser.add_argument("--include-superseded", action="store_true", help="Include superseded")
     search_parser.add_argument("-v", "--verbose", action="store_true", help="Show full details")
     search_parser.add_argument("-l", "--long", action="store_true", help="Show full content (default: one line per result)")
+    search_parser.add_argument("--exclude", nargs="*", default=[], metavar="ID",
+        help="KB IDs to exclude from results (auto-loaded from session seen file)")
+    search_parser.add_argument("--no-dedup", action="store_true",
+        help="Disable automatic exclusion of session-seen IDs")
 
     # List command
     list_parser = _add_parser("list", "List findings", agent_visible=True)
@@ -1122,13 +1162,18 @@ def main():
                     print(f"  Auto-tagged: {', '.join(result.get('tags', []))}")
 
         elif args.command == "search":
+            exclude_ids: set[str] = set(args.exclude or [])
+            if not args.no_dedup:
+                exclude_ids |= _load_session_seen_ids()
             results = kb.search(
                 query=args.query,
-                limit=args.limit,
+                limit=args.limit + len(exclude_ids),  # fetch extra to compensate for filtered rows
                 project=args.project,
                 finding_type=args.type,
                 include_superseded=args.include_superseded,
+                exclude_ids=exclude_ids or None,
             )
+            results = results[:args.limit]
             if not results:
                 print("No results found")
             elif args.long:
