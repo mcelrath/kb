@@ -7,6 +7,7 @@ backward compatibility with the original API.
 
 import json
 import os
+import re
 import sqlite3
 import uuid
 from datetime import datetime
@@ -1231,49 +1232,72 @@ Findings:
         self,
         project: str | None = None,
         limit: int = 5,
+        input_limit: int = 20,
+        query: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Analyze findings to identify knowledge gaps and open questions.
-
-        Uses LLM to analyze existing findings and identify:
-        - Areas lacking coverage
-        - Unresolved issues
-        - Natural next steps
+        """Identify open research questions from KB findings.
 
         Args:
-            project: Filter by project
-            limit: Number of questions to generate
+            limit: Number of questions to generate.
+            input_limit: Number of KB entries to feed the LLM.
+            query: If given, seeds entries via semantic search; otherwise most recent.
 
-        Returns:
-            List of dicts with 'question', 'context', 'related_findings'
+        Returns list of dicts with 'question', 'why', 'related_ids' keys.
         """
-        findings = self.list_findings(project=project, limit=50)
-        if not findings:
+        import sys
+        if query:
+            raw = self.search(query=query, limit=input_limit, project=project)
+        else:
+            raw = self.list_findings(project=project, limit=input_limit)
+
+        if not raw:
             return []
 
-        summaries = []
-        for f in findings[:30]:
-            summaries.append(f"[{f['type']}] {f['content'][:150]}")
+        # Use summary if available, fall back to full content (no truncation)
+        lines = []
+        for f in raw:
+            text = f.get("summary") or f.get("content", "")
+            lines.append(f"[{f['id']}] [{f['type'].upper()}] {text}")
 
-        knowledge_summary = "\n".join(summaries)
+        findings_block = "\n".join(lines)
 
-        prompt = f"""Analyze these findings and identify {limit} open research questions.
+        # Warn if likely to exceed 256k context (≈4 tokens/char, reserve 4k for output)
+        estimated_tokens = len(findings_block) // 4
+        if estimated_tokens > 252_000:
+            print(
+                f"WARNING: ~{estimated_tokens:,} tokens estimated for {len(raw)} findings "
+                f"(256k context limit). Consider reducing -n or using a search query to filter.",
+                file=sys.stderr,
+            )
 
-Findings:
-{knowledge_summary}
+        prompt = f"""You are analyzing a researcher's knowledge base to surface open questions and gaps.
 
-Return a JSON object with key "questions" containing an array of objects with "question", "importance", and "related_topics" fields."""
+FINDINGS ({len(raw)} entries):
+{findings_block}
 
-        response = self._llm.complete(prompt, max_tokens=800, json_mode=True)
+Return exactly {limit} concrete open questions that these findings do NOT yet answer.
+Each question must be directly motivated by the findings above and must NOT already be answered by them.
+Prefer questions that would unlock or unblock multiple other open problems.
+
+Return a complete JSON object with exactly {limit} items:
+{{"questions": [{{"question": "...", "why": "one sentence explaining what in the findings motivates this", "related_ids": ["kb-id-here"]}}]}}"""
+
+        response = self._llm.complete(prompt, max_tokens=-1, json_mode=False, timeout=120)
         if not response:
             return []
 
         try:
-            data = json.loads(response)
+            # Strip markdown code fences the model sometimes emits
+            text = response.strip()
+            if text.startswith("```"):
+                text = re.sub(r"^```[a-z]*\n?", "", text)
+                text = re.sub(r"\n?```$", "", text.rstrip())
+            data = json.loads(text)
             if isinstance(data, dict) and "questions" in data:
                 return data["questions"][:limit]
-            elif isinstance(data, list):
+            if isinstance(data, list):
                 return data[:limit]
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError):
             pass
 
         return []
