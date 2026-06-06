@@ -31,8 +31,6 @@ from .llm.client import LLMClient
 from .llm.analysis import ContentAnalyzer
 from .search.hybrid import HybridSearch
 from .entities.scripts import ScriptsRepository
-from .entities.notations import NotationsRepository
-from .entities.errors import ErrorsRepository
 from .entities.documents import DocumentsRepository
 from .entities.theorems import TheoremRepository
 from .entities.concepts import ConceptRepository
@@ -93,8 +91,6 @@ class KnowledgeBase:
     _analyzer: ContentAnalyzer
     _search: HybridSearch
     _scripts: ScriptsRepository
-    _notations: NotationsRepository
-    _errors: ErrorsRepository
     _documents: DocumentsRepository
     _theorems: TheoremRepository
     _concepts: ConceptRepository
@@ -131,11 +127,6 @@ class KnowledgeBase:
             self._embedding,
             finding_exists=lambda fid: self.get(fid) is not None
         )
-        self._notations = NotationsRepository(self.conn)
-        self._errors = ErrorsRepository(
-            self.conn,
-            normalize_signature=self._analyzer.normalize_error_signature
-        )
         self._documents = DocumentsRepository(self.conn)
         self._theorems = TheoremRepository(self.conn, self._embedding)
         self._concepts = ConceptRepository(self.conn, self._embedding)
@@ -166,6 +157,11 @@ class KnowledgeBase:
 
     def suggest_tags(self, content: str, project: str | None = None) -> list[str]:
         """Suggest tags for content."""
+        existing_tags = self._fetch_existing_tags(project)
+        return self._analyzer.suggest_tags(content, existing_tags)
+
+    def _fetch_existing_tags(self, project: str | None = None) -> set[str]:
+        """Fetch the set of existing tags from the DB (main-thread safe)."""
         existing_tags: set[str] = set()
         if project:
             rows = self.conn.execute(
@@ -182,15 +178,11 @@ class KnowledgeBase:
                     existing_tags.update(json.loads(row[0]))
                 except json.JSONDecodeError:
                     pass
-        return self._analyzer.suggest_tags(content, existing_tags)
+        return existing_tags
 
     def classify_finding_type(self, content: str) -> str:
         """Classify finding type."""
         return self._analyzer.classify_type(content)
-
-    def normalize_error_signature(self, error_text: str) -> str:
-        """Normalize error signature."""
-        return self._analyzer.normalize_error_signature(error_text)
 
     def detect_duplicates(self, content: str, project: str | None = None, threshold: float = 0.85) -> list[dict[str, Any]]:
         """Check for duplicate findings."""
@@ -705,78 +697,6 @@ Finding 2: {s['content'][:300]}"""
     def script_delete(self, script_id: str) -> bool:
         """Delete a script."""
         return self._scripts.delete(script_id)
-
-    # =========================================================================
-    # Notations delegation
-    # =========================================================================
-
-    def notation_add(self, symbol: str, meaning: str, **kwargs: Any) -> str:
-        """Add a notation."""
-        return self._notations.add(symbol, meaning, **kwargs)
-
-    def notation_update(self, new_symbol: str, **kwargs: Any) -> str:
-        """Update a notation."""
-        return self._notations.update(new_symbol, **kwargs)
-
-    def notation_get(self, notation_id: str) -> dict[str, Any] | None:
-        """Get a notation."""
-        return self._notations.get(notation_id)
-
-    def notation_search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
-        """Search notations."""
-        return self._notations.search(query, **kwargs)
-
-    def notation_list(self, **kwargs: Any) -> list[dict[str, Any]]:
-        """List notations."""
-        return self._notations.list(**kwargs)
-
-    def notation_history(self, notation_id: str) -> list[dict[str, Any]]:
-        """Get notation history."""
-        return self._notations.history(notation_id)
-
-    def notation_delete(self, notation_id: str) -> bool:
-        """Delete a notation."""
-        return self._notations.delete(notation_id)
-
-    # =========================================================================
-    # Errors delegation
-    # =========================================================================
-
-    def error_add(self, signature: str, **kwargs: Any) -> dict[str, Any]:
-        """Add an error."""
-        return self._errors.add(signature, **kwargs)
-
-    def error_link(self, error_id: str, finding_id: str, verified: bool = False) -> bool:
-        """Link error to solution."""
-        return self._errors.link(error_id, finding_id, verified)
-
-    def error_verify(self, error_id: str, finding_id: str) -> bool:
-        """Verify error solution."""
-        return self._errors.verify(error_id, finding_id)
-
-    def error_get(self, error_id: str) -> dict[str, Any] | None:
-        """Get an error."""
-        return self._errors.get(error_id)
-
-    def error_search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
-        """Search errors."""
-        return self._errors.search(query, **kwargs)
-
-    def error_list(self, **kwargs: Any) -> list[dict[str, Any]]:
-        """List errors."""
-        return self._errors.list(**kwargs)
-
-    def error_solutions(self, error_id: str) -> list[dict[str, Any]]:
-        """Get solutions for error."""
-        return self._errors.get_solutions(error_id)
-
-    def solution_errors(self, finding_id: str) -> list[dict[str, Any]]:
-        """Get errors for solution."""
-        return self._errors.get_errors_for_solution(finding_id)
-
-    def error_delete(self, error_id: str) -> bool:
-        """Delete an error."""
-        return self._errors.delete(error_id)
 
     # =========================================================================
     # Documents delegation

@@ -597,12 +597,16 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refre
                 tags: list = kb.suggest_tags(content, fproject)
                 embedding = None
             else:
+                # Pre-fetch existing tags from DB here in the main thread —
+                # sqlite3 connections cannot be used across threads.
+                existing_tags = kb._fetch_existing_tags(fproject)
+
                 # Fire both concurrently; collect when both finish.
                 embed_fut = pool.submit(kb._embedding.embed, embed_text)
 
-                def _llm(c=content, e=evidence, p=fproject):
+                def _llm(c=content, e=evidence, et=existing_tags):
                     s = kb._analyzer.generate_summary(c, e)
-                    t = kb.suggest_tags(c, p)
+                    t = kb._analyzer.suggest_tags(c, et)
                     return s, t
 
                 llm_fut = pool.submit(_llm)
