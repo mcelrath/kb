@@ -35,21 +35,15 @@ class ContentAnalyzer:
             '{\"summary\": \"...\"}. No intro phrases. Max 80 chars.'
         )
 
-        # Normalize Unicode math symbols to ASCII to avoid confusing the LLM
-        text = content[:500]
+        text = content
         # Strip emotional/error-like prefixes that confuse the JSON-only LLM
         text = re.sub(
             r'^(?:CRITICAL\s+)?(?:CORRECTION|ERROR|FATAL\s+FLAW|WARNING|NOTE|IMPORTANT):\s*',
             '', text, flags=re.IGNORECASE
         )
-        for uc, asc in UNICODE_TO_ASCII.items():
-            text = text.replace(uc, asc)
-        # Strip remaining non-ASCII
-        text = text.encode('ascii', 'ignore').decode('ascii')
 
         if evidence:
-            ev = evidence[:200].encode('ascii', 'ignore').decode('ascii')
-            text += f"\nEvidence: {ev}"
+            text += f"\nEvidence: {evidence}"
 
         prompt = f"Summarize in ONE technical line (max 80 chars):\n{text}"
 
@@ -86,11 +80,7 @@ class ContentAnalyzer:
                         and len(words) >= 3 and letter_ratio > 0.3):
                     return summary[:120]
 
-        # Fallback: first sentence or truncated content
-        first_sentence = content.split('.')[0]
-        if len(first_sentence) <= 100:
-            return first_sentence
-        return content[:97] + "..."
+        return None
 
     def suggest_tags(
         self,
