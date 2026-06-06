@@ -9,9 +9,31 @@ including web server functionality. The core library is in the kb/ package.
 import argparse
 import html
 import json
+import os
 import re
 import sys
 from pathlib import Path
+
+
+def _is_agent_context() -> bool:
+    """Detect if called from an agent (non-interactive) context.
+
+    Checks in order:
+      KB_AGENT=1/0  — explicit override
+      CLAUDECODE=1  — set by Claude Code in all subprocesses
+      stdout isatty — fallback: pipe/subprocess = agent
+    """
+    override = os.environ.get("KB_AGENT", "")
+    if override == "1":
+        return True
+    if override == "0":
+        return False
+    if os.environ.get("CLAUDECODE") == "1":
+        return True
+    return not sys.stdout.isatty()
+
+
+AGENT_MODE = _is_agent_context()
 
 # Import from kb package
 from kb import (
@@ -218,17 +240,63 @@ def parse_script_findings(file_path: Path) -> list[dict]:
     return findings
 
 
+_TYPE_COLORS = {
+    "success":    "\033[32m",   # green
+    "failure":    "\033[31m",   # red
+    "experiment": "\033[33m",   # yellow
+    "discovery":  "\033[36m",   # cyan
+    "correction": "\033[35m",   # magenta
+}
+_TYPE_ABBREV = {
+    "success":    "SUC",
+    "failure":    "FAI",
+    "experiment": "EXP",
+    "discovery":  "DIS",
+    "correction": "COR",
+}
+
+
+def _fmt_one_line(finding: dict) -> str:
+    """One-line summary for search/list/related. Colored in user mode, plain in agent mode."""
+    text = finding.get("summary") or finding["content"].split("\n")[0][:100]
+    sim = finding.get("similarity")
+
+    if AGENT_MODE:
+        sim_str = f" ({sim:.2f})" if sim is not None else ""
+        return f"{finding['id']}{sim_str}  {text}"
+
+    dim   = "\033[2m"
+    reset = "\033[0m"
+    color = _TYPE_COLORS.get(finding.get("type", ""), "")
+    abbr  = _TYPE_ABBREV.get(finding.get("type", ""), "???")
+
+    if sim is not None:
+        if sim >= 0.7:   sim_color = "\033[32m"
+        elif sim >= 0.5: sim_color = "\033[33m"
+        else:            sim_color = "\033[31m"
+        sim_str = f" {sim_color}({sim:.2f}){reset}"
+    else:
+        sim_str = ""
+
+    proj = f" {dim}({finding['project']}){reset}" if finding.get("project") else ""
+    return f"{color}[{abbr}]{reset} {dim}{finding['id']}{reset}{sim_str}{proj}  {text}"
+
+
 def format_finding(finding: dict, verbose: bool = False) -> str:
     """Format a finding for terminal display (list/search output)."""
-    dim = "\033[2m"
-    reset = "\033[0m"
-    type_colors = {
-        "success": "\033[32m",   # green
-        "failure": "\033[31m",   # red
-        "experiment": "\033[33m",  # yellow
-        "discovery": "\033[36m",  # cyan
-        "correction": "\033[35m",  # magenta
-    }
+    if AGENT_MODE:
+        dim = reset = ""
+        type_colors: dict = {}
+    else:
+        dim = "\033[2m"
+        reset = "\033[0m"
+        type_colors = {
+            "success": "\033[32m",
+            "failure": "\033[31m",
+            "experiment": "\033[33m",
+            "discovery": "\033[36m",
+            "correction": "\033[35m",
+        }
 
     color = type_colors.get(finding["type"], "")
     lines = [f"[{color}{finding['type'].upper()}{reset}] {dim}{finding['id']}{reset}"]
@@ -497,46 +565,265 @@ def format_finding_summary(finding: dict) -> str:
     return f"{symbol} {finding['id']}: {content}"
 
 
+def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refresh"):
+    """Core loop: generate summary + retag for each finding row.
+
+    rows: list of (id, project, content, evidence)
+    Returns (ok, fail) counts.
+
+    Stop/start safe: rows with NULL summary are re-fetched on restart (default mode).
+    Committed every commit_every rows, so interrupting loses at most commit_every rows.
+    """
+    import time as _time
+    ok = fail = 0
+    total = len(rows)
+    t0 = _time.time()
+    interval = max(5, total // 100) if total else 1
+    for i, (fid, fproject, content, evidence) in enumerate(rows, 1):
+        summary = kb._analyzer.generate_summary(content, evidence)
+        if summary and len(summary) >= 10:
+            if dry_run:
+                print(f"[DRY] {fid} ({fproject}): {summary}")
+            else:
+                kb.conn.execute(
+                    "UPDATE findings SET summary = ?, updated_at = datetime('now') WHERE id = ?",
+                    (summary, fid),
+                )
+            ok += 1
+        else:
+            fail += 1
+            print(f"  FAIL {fid} ({fproject}): {(content or '')[:60]!r}")
+        if not dry_run:
+            tags = kb.suggest_tags(content, fproject)
+            if tags:
+                kb.conn.execute(
+                    "UPDATE findings SET tags = ?, updated_at = datetime('now') WHERE id = ?",
+                    (json.dumps(tags), fid),
+                )
+            if (i % commit_every) == 0:
+                kb.conn.commit()
+        if i % interval == 0 or i == total:
+            elapsed = _time.time() - t0
+            rate = i / elapsed if elapsed > 0 else 0.0
+            remaining = total - i
+            eta_sec = remaining / rate if rate > 0 else 0.0
+            print(
+                f"  {i}/{total} ({100*i//total}%)  ok={ok} fail={fail}"
+                f"  rate={rate:.2f}/s  elapsed={elapsed/60:.1f}m  eta={eta_sec/60:.1f}m",
+                flush=True,
+            )
+    if not dry_run:
+        kb.conn.commit()
+    elapsed = _time.time() - t0
+    print(f"{label}: ok={ok} fail={fail} total={total} elapsed={elapsed/60:.1f}m")
+    return ok, fail
+
+
+def _fetch_refresh_rows(kb, ids=None, project=None, all_rows=False, limit=0):
+    """Build the findings row list for refresh/retag/resummarize."""
+    if ids:
+        placeholders = ",".join("?" * len(ids))
+        return kb.conn.execute(
+            f"SELECT id, project, content, evidence FROM findings WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+    sql = "SELECT id, project, content, evidence FROM findings WHERE status = 'current'"
+    params: list = []
+    if not all_rows:
+        sql += " AND (summary IS NULL OR summary = '')"
+    if project:
+        sql += " AND project = ?"
+        params.append(project)
+    sql += " ORDER BY created_at DESC"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    return kb.conn.execute(sql, params).fetchall()
+
+
+def _backfill_statement_pure(kb, project=None, limit=None, workers=8, dry_run=False):
+    """Backfill statement_pure for lean theorems using the KB's LLM client."""
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    conn = kb._theorems.conn
+    where = "WHERE statement_pure IS NULL OR statement_pure = ''"
+    params: list = []
+    if project:
+        where += " AND project = ?"
+        params.append(project)
+    if limit:
+        where += f" LIMIT {limit}"
+
+    rows = conn.execute(
+        f"SELECT id, lean_name, statement FROM lean_theorems {where}", params
+    ).fetchall()
+    print(f"  theorem backfill: {len(rows)} without statement_pure")
+    if not rows:
+        return {"updated": 0, "failed": 0}
+
+    if dry_run:
+        for tid, lean_name, stmt in rows[:3]:
+            print(f"  [DRY] {lean_name}: {stmt[:80]}")
+        return {"updated": 0, "failed": 0}
+
+    PROMPT = (
+        "Restate this Lean 4 theorem in pure mathematical language. "
+        "No Lean syntax, no type annotations. Standard math notation. "
+        "One sentence, under 30 words.\n\nLean:\n{statement}\n\nMath:"
+    )
+
+    def restate_one(row):
+        tid, lean_name, statement = row
+        result = kb._analyzer.llm_client.complete(
+            PROMPT.format(statement=statement[:600]),
+            max_tokens=80, temperature=0.1, timeout=30,
+        )
+        if result:
+            result = result.strip().strip('"').strip("'")
+        return tid, lean_name, result or None
+
+    updated = failed = 0
+    t0 = _time.time()
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(restate_one, row): row for row in rows}
+        for i, fut in enumerate(as_completed(futures), 1):
+            tid, lean_name, pure = fut.result()
+            if pure:
+                conn.execute("UPDATE lean_theorems SET statement_pure=? WHERE id=?", (pure, tid))
+                updated += 1
+            else:
+                failed += 1
+            if i % 100 == 0:
+                conn.commit()
+                elapsed = _time.time() - t0
+                rate = i / max(elapsed, 0.001)
+                print(f"  {i}/{len(rows)} done  {rate:.1f}/s", flush=True)
+
+    conn.commit()
+
+    # Re-embed updated theorems
+    if updated > 0:
+        print(f"  re-embedding {updated} theorems...")
+        updated_rows = conn.execute(
+            "SELECT id, statement_pure FROM lean_theorems "
+            "WHERE statement_pure IS NOT NULL AND statement_pure != ''"
+        ).fetchall()
+        for j, (tid, pure) in enumerate(updated_rows):
+            emb = kb._theorems.embedding_service.embed(pure)
+            conn.execute("DELETE FROM lean_theorems_vec WHERE id=?", (tid,))
+            conn.execute("INSERT INTO lean_theorems_vec (id, embedding) VALUES (?,?)", (tid, emb))
+            if j % 100 == 0:
+                conn.commit()
+        conn.commit()
+
+    elapsed = _time.time() - t0
+    print(f"  theorem backfill done: updated={updated} failed={failed} elapsed={elapsed:.0f}s")
+    return {"updated": updated, "failed": failed}
+
+
+_AGENT_CMDS = [
+    ("add",           '-t TYPE -p PROJECT "content"   record a finding (sync, prints kb-id)'),
+    ("search",        '"query" [-n N] [-p PROJECT] [-t TYPE] [-l]   semantic search'),
+    ("list",          '[-n N] [-p PROJECT] [-s SPRINT] [-t TYPE] [-l]   list findings'),
+    ("get",           "<kb-id>   full entry"),
+    ("correct",       '<kb-id> "new content" [-r reason]   supersede a finding'),
+    ("related",   "<kb-id> [-n N]   find semantically similar findings"),
+]
+
+_MAINT_CMDS = [
+    ("refresh",       "retag + resummarize + reembed  [-p PROJECT] [--all] [--theorems]"),
+    ("review",        "findings needing attention  [-p PROJECT]"),
+    ("questions",     "LLM: identify research gaps  [-p PROJECT] [-n N] [-i N] [query]"),
+    ("ask",           'LLM: answer a question from KB  "question" [-p PROJECT]'),
+    ("stats",         "counts by type and project"),
+    ("flush-pending", "drain the offline-add queue"),
+    ("ingest",        "lean [--source proofs|mathlib] | scripts <dir>"),
+    ("delete",        "<kb-id> [--force]"),
+    ("export",        "<file.json> [-p PROJECT]"),
+    ("import",        "<file.json>"),
+    ("serve",         "[--port 8000]"),
+]
+
+_LEGACY_CMDS = None  # no legacy commands remain
+
+
+def _print_main_help():
+    W = 14  # column width for command names
+    if AGENT_MODE:
+        print("kb add|search|list|get|correct|related\n")
+        for cmd, desc in _AGENT_CMDS:
+            print(f"  {cmd:<{W}}{desc}")
+        print("\nRun any command with --help for full flag list.")
+        print("Set KB_AGENT=0 for user mode.")
+    else:
+        bold   = "\033[1m"
+        cyan   = "\033[36m"
+        yellow = "\033[33m"
+        dim    = "\033[2m"
+        reset  = "\033[0m"
+
+        print(f"{bold}Knowledge Base{reset}  {dim}(set CLAUDECODE=1 or KB_AGENT=1 for agent mode){reset}\n")
+
+        print(f"{bold}Agent commands:{reset}")
+        for cmd, desc in _AGENT_CMDS:
+            parts = desc.split("   ")
+            summary = parts[-1] if len(parts) > 1 else desc
+            print(f"  {cyan}{cmd:<{W}}{reset}{summary}")
+        print()
+
+        print(f"{bold}Maintenance:{reset}")
+        for cmd, desc in _MAINT_CMDS:
+            # desc format: "plain description  [-flags]" or just "[-flags]"
+            # Split on first double-space to separate description from flags
+            if "  " in desc:
+                plain, flags = desc.split("  ", 1)
+                flags = "  " + flags
+            else:
+                plain, flags = desc, ""
+            print(f"  {yellow}{cmd:<{W}}{reset}{plain}{dim}{flags}{reset}")
+        print()
+
+        if _LEGACY_CMDS:
+            print(f"{bold}Legacy{reset} {dim}(still work; run with --help for flags):{reset}")
+            print(f"  {dim}{_LEGACY_CMDS}{reset}")
+            print()
+
+        print(f"{bold}Options:{reset}")
+        print(f"  {dim}{'--db PATH':<{W}}database path (default: ~/.cache/kb/knowledge.db){reset}")
+        print(f"  {dim}{'-h, --help':<{W}}show this help{reset}")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Knowledge Base - Record and retrieve findings",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Add a finding
-  kb add -t success -p my-project "Fixed the memory leak by using weak refs"
-
-  # Search findings
-  kb search "memory leak"
-
-  # List recent findings
-  kb list -n 10
-
-  # Get a specific finding
-  kb get kb-20241201-143022-abc123
-
-  # Correct a finding (supersede it)
-  kb correct kb-20241201-143022-abc123 "Actually the issue was thread safety"
-
-  # Web interface
-  kb serve --port 8080
-
-  # Check for similar findings before adding
-  kb check "memory management approach"
-
-  # Add finding from file
-  kb add -f notes.md -p my-project
-
-  # Export/import
-  kb export findings.json
-  kb import findings.json
-"""
+        description="Knowledge Base",
+        add_help=False,
     )
+    parser.add_argument("-h", "--help", action="store_true", default=False)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="Database path")
-    subparsers = parser.add_subparsers(dest="command", help="Command")
+    subparsers = parser.add_subparsers(dest="command")
+
+    def _add_parser(name: str, help_text: str,
+                    agent_visible: bool = False,
+                    user_visible: bool = True,
+                    **kwargs):
+        """Register a subcommand, hiding it from --help based on context.
+
+        agent_visible=True  : shown in agent mode help (implies user_visible too)
+        user_visible=False  : hidden in user mode (legacy/niche; still callable by name)
+        """
+        hide = (not agent_visible and AGENT_MODE) or (not user_visible and not AGENT_MODE)
+        p = subparsers.add_parser(name, help=argparse.SUPPRESS if hide else help_text, **kwargs)
+        if hide:
+            subparsers._name_parser_map.pop(name, None)
+            subparsers._choices_actions = [
+                a for a in subparsers._choices_actions if a.dest != name
+            ]
+            subparsers._name_parser_map[name] = p  # re-add so it's still callable
+        return p
 
     # Add command
-    add_parser = subparsers.add_parser("add", help="Add a new finding")
+    add_parser = _add_parser("add", "Add a new finding", agent_visible=True)
     add_parser.add_argument("content", nargs="?", help="Finding content (or use -f for file)")
     add_parser.add_argument("-t", "--type", choices=FINDING_TYPES, default="discovery", help="Finding type")
     add_parser.add_argument("-p", "--project", help="Project name")
@@ -546,289 +833,148 @@ Examples:
     add_parser.add_argument("-f", "--file", type=Path, help="Read content from file")
     add_parser.add_argument("--no-duplicate-check", action="store_true", help="Skip duplicate checking")
     add_parser.add_argument("--no-auto-tag", action="store_true", help="Skip auto-tagging")
-    add_parser.add_argument("--sync", action="store_true",
-        help="Run synchronously, contacting embedding+LLM servers and printing the kb-id. "
-             "Default is fire-and-forget: write a queue file under ~/.claude/pending-kb-adds "
-             "and detach `kb flush-pending` to drain it.")
+    add_parser.add_argument("--async", dest="async_add", action="store_true",
+        help="Fire-and-forget: write to queue file and return immediately without waiting "
+             "for embedding. Use when embedding server may be slow or unavailable.")
 
     # Search command
-    search_parser = subparsers.add_parser("search", help="Search findings")
+    search_parser = _add_parser("search", "Search findings", agent_visible=True)
     search_parser.add_argument("query", help="Search query")
     search_parser.add_argument("-n", "--limit", type=int, default=10, help="Max results")
     search_parser.add_argument("-p", "--project", help="Filter by project")
     search_parser.add_argument("-t", "--type", choices=FINDING_TYPES, help="Filter by type")
     search_parser.add_argument("--include-superseded", action="store_true", help="Include superseded")
     search_parser.add_argument("-v", "--verbose", action="store_true", help="Show full details")
+    search_parser.add_argument("-l", "--long", action="store_true", help="Show full content (default: one line per result)")
 
     # List command
-    list_parser = subparsers.add_parser("list", help="List findings")
+    list_parser = _add_parser("list", "List findings", agent_visible=True)
     list_parser.add_argument("-n", "--limit", type=int, default=20, help="Max results")
     list_parser.add_argument("-p", "--project", help="Filter by project")
     list_parser.add_argument("-s", "--sprint", help="Filter by sprint")
     list_parser.add_argument("-t", "--type", choices=FINDING_TYPES, help="Filter by type")
     list_parser.add_argument("--include-superseded", action="store_true", help="Include superseded")
     list_parser.add_argument("-v", "--verbose", action="store_true", help="Show full details")
+    list_parser.add_argument("-l", "--long", action="store_true", help="Show full content (default: one line per result)")
 
     # Get command
-    get_parser = subparsers.add_parser("get", help="Get a specific finding")
+    get_parser = _add_parser("get", "Get a specific finding", agent_visible=True)
     get_parser.add_argument("id", help="Finding ID")
     get_parser.add_argument("--raw", action="store_true", help="Output raw markdown")
 
     # Correct command
-    correct_parser = subparsers.add_parser("correct", help="Correct a finding (supersede)")
+    correct_parser = _add_parser("correct", "Correct a finding (supersede)", agent_visible=True)
     correct_parser.add_argument("id", help="ID of finding to correct")
     correct_parser.add_argument("content", help="New correct content")
     correct_parser.add_argument("-e", "--evidence", help="Evidence for correction")
     correct_parser.add_argument("-r", "--reason", help="Reason for correction")
 
     # Delete command
-    delete_parser = subparsers.add_parser("delete", help="Delete a finding")
+    delete_parser = _add_parser("delete", "Delete a finding")
     delete_parser.add_argument("id", help="Finding ID to delete")
     delete_parser.add_argument("--force", action="store_true", help="Delete without confirmation")
 
-    # Check command
-    check_parser = subparsers.add_parser("check", help="Check for similar findings")
-    check_parser.add_argument("content", help="Content to check")
-    check_parser.add_argument("--threshold", type=float, default=0.85, help="Similarity threshold")
-
     # Stats command
-    subparsers.add_parser("stats", help="Show database statistics")
+    _add_parser("stats", "Show database statistics")
 
     # Export command
-    export_parser = subparsers.add_parser("export", help="Export findings to JSON")
+    export_parser = _add_parser("export", "Export findings to JSON")
     export_parser.add_argument("output", type=Path, help="Output file path")
     export_parser.add_argument("-p", "--project", help="Filter by project")
 
     # Import command
-    import_parser = subparsers.add_parser("import", help="Import findings from JSON")
+    import_parser = _add_parser("import", "Import findings from JSON")
     import_parser.add_argument("input", type=Path, help="Input file path")
 
     # Serve command
-    serve_parser = subparsers.add_parser("serve", help="Start web interface")
+    serve_parser = _add_parser("serve", "Start web interface")
     serve_parser.add_argument("--host", default="127.0.0.1", help="Host to bind")
     serve_parser.add_argument("--port", type=int, default=8000, help="Port to bind")
 
-    # Batch command
-    batch_parser = subparsers.add_parser("batch", help="Batch import from file")
-    batch_parser.add_argument("file", type=Path, help="File to import (.md or .py)")
-    batch_parser.add_argument("-p", "--project", help="Project name")
-    batch_parser.add_argument("--dry-run", action="store_true", help="Show what would be imported")
 
-    # Notation commands
-    notation_parser = subparsers.add_parser("notation", help="Manage notations")
-    notation_sub = notation_parser.add_subparsers(dest="notation_cmd")
-
-    notation_add_parser = notation_sub.add_parser("add", help="Add notation")
-    notation_add_parser.add_argument("symbol", help="Symbol (e.g., 'α', 'SO(3)')")
-    notation_add_parser.add_argument("meaning", help="Meaning")
-    notation_add_parser.add_argument("-d", "--domain", choices=NOTATION_DOMAINS, help="Domain")
-    notation_add_parser.add_argument("-p", "--project", help="Project")
-
-    notation_list_parser = notation_sub.add_parser("list", help="List notations")
-    notation_list_parser.add_argument("-d", "--domain", choices=NOTATION_DOMAINS, help="Filter by domain")
-    notation_list_parser.add_argument("-p", "--project", help="Filter by project")
-
-    notation_search_parser = notation_sub.add_parser("search", help="Search notations")
-    notation_search_parser.add_argument("query", help="Search query")
-    notation_search_parser.add_argument("-d", "--domain", choices=NOTATION_DOMAINS, help="Filter by domain")
-    notation_search_parser.add_argument("-p", "--project", help="Filter by project")
-
-    notation_update_parser = notation_sub.add_parser("update", help="Update notation")
-    notation_update_parser.add_argument("old_symbol", help="Old symbol")
-    notation_update_parser.add_argument("new_symbol", help="New symbol")
-    notation_update_parser.add_argument("-r", "--reason", help="Reason for change")
-    notation_update_parser.add_argument("-p", "--project", help="Project")
-
-    notation_history_parser = notation_sub.add_parser("history", help="Show notation history")
-    notation_history_parser.add_argument("id", help="Notation ID")
-
-    # Script commands
-    script_parser = subparsers.add_parser("script", help="Manage scripts")
-    script_sub = script_parser.add_subparsers(dest="script_cmd")
-
-    script_add_parser = script_sub.add_parser("add", help="Register script")
-    script_add_parser.add_argument("file", type=Path, help="Script file path")
-    script_add_parser.add_argument("purpose", help="Script purpose")
-    script_add_parser.add_argument("-p", "--project", help="Project")
-    script_add_parser.add_argument("-l", "--language", help="Language (auto-detected if not specified)")
-
-    script_list_parser = script_sub.add_parser("list", help="List scripts")
-    script_list_parser.add_argument("-p", "--project", help="Filter by project")
-    script_list_parser.add_argument("-l", "--language", help="Filter by language")
-
-    script_search_parser = script_sub.add_parser("search", help="Search scripts")
-    script_search_parser.add_argument("query", help="Search query")
-    script_search_parser.add_argument("-p", "--project", help="Filter by project")
-
-    script_link_parser = script_sub.add_parser("link", help="Link script to finding")
-    script_link_parser.add_argument("script_id", help="Script ID")
-    script_link_parser.add_argument("finding_id", help="Finding ID")
-    script_link_parser.add_argument("-r", "--relationship", default="generated_by",
-                                     choices=["generated_by", "validates", "contradicts"],
-                                     help="Relationship type")
-
-    # Error commands
-    error_parser = subparsers.add_parser("error", help="Manage errors")
-    error_sub = error_parser.add_subparsers(dest="error_cmd")
-
-    error_add_parser = error_sub.add_parser("add", help="Record error")
-    error_add_parser.add_argument("signature", help="Error signature")
-    error_add_parser.add_argument("-t", "--type", dest="error_type", help="Error type")
-    error_add_parser.add_argument("-p", "--project", help="Project")
-
-    error_link_parser = error_sub.add_parser("link", help="Link error to solution")
-    error_link_parser.add_argument("error_id", help="Error ID")
-    error_link_parser.add_argument("finding_id", help="Finding ID (solution)")
-    error_link_parser.add_argument("--verify", action="store_true", help="Mark as verified")
-
-    error_search_parser = error_sub.add_parser("search", help="Search errors")
-    error_search_parser.add_argument("query", help="Search query")
-    error_search_parser.add_argument("-p", "--project", help="Filter by project")
-
-    error_list_parser = error_sub.add_parser("list", help="List errors")
-    error_list_parser.add_argument("-p", "--project", help="Filter by project")
-    error_list_parser.add_argument("-t", "--type", dest="error_type", help="Filter by type")
-
-    # Document commands
-    doc_parser = subparsers.add_parser("doc", help="Manage documents")
-    doc_sub = doc_parser.add_subparsers(dest="doc_cmd")
-
-    doc_add_parser = doc_sub.add_parser("add", help="Add document")
-    doc_add_parser.add_argument("title", help="Document title")
-    doc_add_parser.add_argument("doc_type", help="Document type (spec, paper, standard, etc.)")
-    doc_add_parser.add_argument("-u", "--url", help="Document URL")
-    doc_add_parser.add_argument("-s", "--summary", help="Document summary")
-    doc_add_parser.add_argument("-p", "--project", help="Project")
-
-    doc_cite_parser = doc_sub.add_parser("cite", help="Cite document in finding")
-    doc_cite_parser.add_argument("finding_id", help="Finding ID")
-    doc_cite_parser.add_argument("doc_id", help="Document ID")
-    doc_cite_parser.add_argument("-t", "--type", default="references",
-                                  choices=["references", "implements", "contradicts", "extends"],
-                                  help="Citation type")
-    doc_cite_parser.add_argument("-n", "--notes", help="Citation notes")
-
-    doc_list_parser = doc_sub.add_parser("list", help="List documents")
-    doc_list_parser.add_argument("-p", "--project", help="Filter by project")
-    doc_list_parser.add_argument("-t", "--type", dest="doc_type", help="Filter by type")
-
-    doc_search_parser = doc_sub.add_parser("search", help="Search documents")
-    doc_search_parser.add_argument("query", help="Search query")
-    doc_search_parser.add_argument("-p", "--project", help="Filter by project")
-
-    # Bulk commands
-    bulk_tag_parser = subparsers.add_parser("bulk-tag", help="Add tags to multiple findings")
-    bulk_tag_parser.add_argument("--ids", nargs="+", required=True, help="Finding IDs")
-    bulk_tag_parser.add_argument("--tags", nargs="+", required=True, help="Tags to add")
-
-    bulk_consolidate_parser = subparsers.add_parser("bulk-consolidate", help="Consolidate findings")
-    bulk_consolidate_parser.add_argument("--ids", nargs="+", required=True, help="Finding IDs")
-    bulk_consolidate_parser.add_argument("--summary", required=True, help="Summary of consolidated finding")
-    bulk_consolidate_parser.add_argument("--reason", required=True, help="Reason for consolidation")
-    bulk_consolidate_parser.add_argument("-t", "--type", choices=FINDING_TYPES, default="discovery", help="Finding type")
-    bulk_consolidate_parser.add_argument("--tags", nargs="+", help="Tags (merged from source if not specified)")
-
-    # Ask command (LLM query)
-    ask_parser = subparsers.add_parser("ask", help="Ask a question about the knowledge base")
+    # Ask command: LLM Q&A over KB findings
+    ask_parser = _add_parser("ask", "Ask a natural language question about the KB")
     ask_parser.add_argument("question", help="Question to ask")
     ask_parser.add_argument("-p", "--project", help="Filter by project")
     ask_parser.add_argument("-n", "--limit", type=int, default=10, help="Max findings to consider")
 
     # Related command
-    related_parser = subparsers.add_parser("related", help="Find related findings")
+    related_parser = _add_parser("related", "Find semantically related findings", agent_visible=True)
     related_parser.add_argument("id", help="Finding ID")
     related_parser.add_argument("-n", "--limit", type=int, default=5, help="Max results")
+    related_parser.add_argument("-l", "--long", action="store_true", help="Show full content")
 
-    # Validate command
-    validate_parser = subparsers.add_parser("validate", help="Validate findings for issues")
-    validate_parser.add_argument("-p", "--project", help="Filter by project")
-    validate_parser.add_argument("-n", "--limit", type=int, default=50, help="Max to check")
-    validate_parser.add_argument("--llm", action="store_true", help="Use LLM for deeper analysis")
+    # Open questions: LLM identifies research gaps from existing findings
+    questions_parser = _add_parser("questions", "Identify research gaps using LLM")
+    questions_parser.add_argument("query", nargs="?", help="Search query to seed findings (default: most recent)")
+    questions_parser.add_argument("-p", "--project", help="Filter by project")
+    questions_parser.add_argument("-n", "--limit", type=int, default=5, help="Number of questions to generate (default: 5)")
+    questions_parser.add_argument("-i", "--input", type=int, default=20, help="Number of KB entries to feed the LLM (default: 20)")
 
-    # Review queue command
-    review_parser = subparsers.add_parser("review", help="Show findings needing review")
+    # Review queue: surfaces untagged, stale, orphaned findings
+    review_parser = _add_parser("review", "Show findings needing attention")
     review_parser.add_argument("-p", "--project", help="Filter by project")
     review_parser.add_argument("-n", "--limit", type=int, default=10, help="Max per category")
 
-    # Open questions command
-    questions_parser = subparsers.add_parser("questions", help="Identify open questions")
-    questions_parser.add_argument("-p", "--project", help="Filter by project")
-    questions_parser.add_argument("-n", "--limit", type=int, default=5, help="Max questions")
 
-    # Reembed command
-    reembed_parser = subparsers.add_parser("reembed", help="Re-generate all embeddings")
-    reembed_parser.add_argument("--force", action="store_true", help="Skip confirmation")
-    reembed_parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="Skip rows that already have a vec row (use after a kill/crash; ONLY safe if existing vecs are from the current embedding model)",
-    )
-    reembed_parser.add_argument(
-        "--commit-every",
-        type=int,
-        default=50,
-        help="COMMIT after every N successful rows so partial progress survives a kill (default 50)",
-    )
-
-    # Consolidate-projects: re-apply normalize_project_name (which honors
-    # ~/.cache/kb/project_aliases.json) to every finding's project column.
-    # Idempotent. Useful after editing the aliases file.
-    consol_parser = subparsers.add_parser(
-        "consolidate-projects",
-        help="Re-canonicalize project column on all findings via project_aliases.json",
-    )
-    consol_parser.add_argument("--dry-run", action="store_true",
-        help="Show what would change without writing")
-
-    # Retag: regenerate tags via LLM. Symmetric to resummarize.
-    retag_parser = subparsers.add_parser(
-        "retag",
-        help="Regenerate tags column for findings missing one (idempotent)",
-    )
-    retag_parser.add_argument("-p", "--project", help="Restrict to one project")
-    retag_parser.add_argument("--all", action="store_true",
-        help="Regenerate ALL tags (default: only rows with no tags)")
-    retag_parser.add_argument("-n", "--limit", type=int, default=0,
+    # Refresh command: retag + resummarize + optional reembed + optional theorem backfill
+    refresh_parser = _add_parser("refresh", "Retag + resummarize findings")
+    refresh_parser.add_argument("ids", nargs="*", metavar="ID",
+        help="Specific finding IDs to refresh (default: all missing summaries)")
+    refresh_parser.add_argument("-p", "--project", help="Restrict to one project")
+    refresh_parser.add_argument("--all", action="store_true",
+        help="Regenerate ALL summaries/tags (default: only rows with NULL summary)")
+    refresh_parser.add_argument("-n", "--limit", type=int, default=0,
         help="Max rows to process (0 = no limit)")
-    retag_parser.add_argument("--dry-run", action="store_true",
-        help="Print would-be tags without writing")
-    retag_parser.add_argument("--commit-every", type=int, default=20,
-        help="COMMIT every N successful updates (default 20)")
+    refresh_parser.add_argument("--dry-run", action="store_true")
+    refresh_parser.add_argument("--commit-every", type=int, default=20)
+    refresh_parser.add_argument("--theorems", action="store_true",
+        help="Also backfill statement_pure for lean theorems")
+    refresh_parser.add_argument("--theorem-workers", type=int, default=8,
+        help="Parallel workers for theorem backfill (default 8)")
+    refresh_parser.add_argument("--reembed-resume", action="store_true",
+        help="Skip rows that already have a vec row (safe after a crash)")
 
-    # Resummarize command: backfill missing summary column on existing findings.
-    # Useful for entries added when the LLM was unreachable (kb-down queue) or
-    # before the summary feature existed.
-    resum_parser = subparsers.add_parser(
-        "resummarize",
-        help="Regenerate summary column for findings missing one (idempotent)",
-    )
-    resum_parser.add_argument("-p", "--project", help="Restrict to one project")
-    resum_parser.add_argument("--all", action="store_true",
-        help="Regenerate ALL summaries (default: only rows with NULL or empty summary)")
-    resum_parser.add_argument("-n", "--limit", type=int, default=0,
-        help="Max rows to process (0 = no limit)")
-    resum_parser.add_argument("--dry-run", action="store_true",
-        help="Print would-be summaries without writing to DB")
-    resum_parser.add_argument("--commit-every", type=int, default=20,
-        help="COMMIT every N successful updates (default 20)")
+    # Ingest command group
+    ingest_parser = _add_parser("ingest", "Ingest external content into KB")
+    ingest_sub = ingest_parser.add_subparsers(dest="ingest_cmd")
+
+    ingest_lean_parser = ingest_sub.add_parser("lean", help="Ingest Lean theorems + backfill statement_pure")
+    ingest_lean_parser.add_argument("--source", choices=["proofs", "mathlib"], default="proofs",
+        help="Repo to ingest (default: proofs)")
+    ingest_lean_parser.add_argument("--direct", action="store_true",
+        help="Use direct regex parser (no LeanDojo required)")
+    ingest_lean_parser.add_argument("--project", default=None)
+    ingest_lean_parser.add_argument("--dry-run", action="store_true")
+    ingest_lean_parser.add_argument("--limit", type=int, default=None)
+    ingest_lean_parser.add_argument("--module-filter", default=None)
+    ingest_lean_parser.add_argument("--workers", type=int, default=8,
+        help="Parallel workers for statement_pure backfill (default 8)")
+    ingest_lean_parser.add_argument("--no-backfill", action="store_true",
+        help="Skip statement_pure generation after ingestion")
+
+    ingest_scripts_parser = ingest_sub.add_parser("scripts", help="Register scripts with LLM-generated purposes")
+    ingest_scripts_parser.add_argument("directory", type=Path, help="Directory to scan")
+    ingest_scripts_parser.add_argument("-p", "--project", default="hypercomplex")
+    ingest_scripts_parser.add_argument("--dry-run", action="store_true")
+    ingest_scripts_parser.add_argument("-n", "--limit", type=int, default=50)
 
     # Reconcile command
-    reconcile_parser = subparsers.add_parser("reconcile", help="Reconcile KB with source document")
+    reconcile_parser = _add_parser("reconcile", "Reconcile KB with source document", user_visible=False)
     reconcile_parser.add_argument("document", type=Path, help="Source document to reconcile against")
     reconcile_parser.add_argument("-p", "--project", help="Project name")
     reconcile_parser.add_argument("--export-missing", type=Path, help="Export missing claims to file")
     reconcile_parser.add_argument("--import-missing", type=Path, help="Import missing claims from file")
 
     # Notation audit command
-    audit_parser = subparsers.add_parser("notation-audit", help="Audit notations against source document")
+    audit_parser = _add_parser("notation-audit", "Audit notations against source document", user_visible=False)
     audit_parser.add_argument("document", type=Path, help="Source document")
     audit_parser.add_argument("-p", "--project", help="Project name")
 
-    # Flush-pending: drain ~/.claude/pending-kb-adds/*.txt when embedding server is up.
-    # Files use a structured header (# type/project/sprint/tags/evidence) + blank line + content.
-    flush_parser = subparsers.add_parser(
+    # Flush-pending (user/debugging only — automatic via hooks and --async spawner)
+    flush_parser = _add_parser(
         "flush-pending",
-        help="Drain ~/.claude/pending-kb-adds/*.txt (kb-down fallback queue)",
+        "Drain ~/.claude/pending-kb-adds/*.txt (kb-down fallback queue)",
     )
     flush_parser.add_argument(
         "--queue-dir",
@@ -844,31 +990,35 @@ Examples:
 
     args = parser.parse_args()
 
-    if not args.command:
-        parser.print_help()
+    if args.help or not args.command:
+        _print_main_help()
+        sys.exit(0 if args.help else 1)
         sys.exit(1)
 
     # Async `kb add`: write a queue file and detach a flusher. No DB / no network.
-    if args.command == "add" and not args.sync:
+    # Resolve content early (needed for both sync and async paths)
+    if args.command == "add":
         if args.file:
-            content = args.file.read_text().strip()
+            _add_content = args.file.read_text().strip()
         elif args.content:
-            content = args.content
+            _add_content = args.content
         else:
             print("Error: Either content or --file required")
             sys.exit(1)
-        if not content:
+        if not _add_content:
             print("Error: empty content")
             sys.exit(1)
-        _queue_async_add(
-            content=content,
-            finding_type=args.type,
-            project=args.project,
-            sprint=args.sprint,
-            tags=args.tags,
-            evidence=args.evidence,
-        )
-        sys.exit(0)
+
+        if args.async_add:
+            _queue_async_add(
+                content=_add_content,
+                finding_type=args.type,
+                project=args.project,
+                sprint=args.sprint,
+                tags=args.tags,
+                evidence=args.evidence,
+            )
+            sys.exit(0)
 
     # Initialize KB
     kb = KnowledgeBase(
@@ -877,24 +1027,43 @@ Examples:
 
     try:
         if args.command == "add":
-            if args.file:
-                content = args.file.read_text().strip()
-            elif args.content:
-                content = args.content
-            else:
-                print("Error: Either content or --file required")
-                sys.exit(1)
-
-            result = kb.add(
-                content=content,
-                finding_type=args.type,
-                project=args.project,
-                sprint=args.sprint,
-                tags=args.tags,
-                evidence=args.evidence,
-                check_duplicate=not args.no_duplicate_check,
-                auto_tag=not args.no_auto_tag,
-            )
+            import os as _os
+            # Use a short retry budget for interactive add so it returns quickly.
+            # If the server is busy/loaded, fall back to the queue silently —
+            # flush-pending will drain it at the next SessionStart/UserPromptSubmit.
+            _saved_retries = _os.environ.get("KB_EMBED_MAX_RETRIES")
+            _os.environ["KB_EMBED_MAX_RETRIES"] = "1"
+            try:
+                result = kb.add(
+                    content=_add_content,
+                    finding_type=args.type,
+                    project=args.project,
+                    sprint=args.sprint,
+                    tags=args.tags,
+                    evidence=args.evidence,
+                    check_duplicate=not args.no_duplicate_check,
+                    auto_tag=not args.no_auto_tag,
+                )
+            except Exception as e:
+                err = str(e)
+                if any(kw in err for kw in ("Remote embedding", "Connection refused",
+                                             "RemoteDisconnected", "URLError", "HTTPError",
+                                             "503", "502", "504", "TimeoutError")):
+                    _queue_async_add(
+                        content=_add_content,
+                        finding_type=args.type,
+                        project=args.project,
+                        sprint=args.sprint,
+                        tags=args.tags,
+                        evidence=args.evidence,
+                    )
+                    sys.exit(0)
+                raise
+            finally:
+                if _saved_retries is None:
+                    _os.environ.pop("KB_EMBED_MAX_RETRIES", None)
+                else:
+                    _os.environ["KB_EMBED_MAX_RETRIES"] = _saved_retries
 
             if result.get("duplicate"):
                 print(f"Warning: Similar finding exists: {result['duplicate']['id']} (similarity: {result['duplicate']['similarity']:.2f})")
@@ -915,10 +1084,13 @@ Examples:
             )
             if not results:
                 print("No results found")
-            else:
+            elif args.long:
                 for finding in results:
                     print(format_finding(finding, verbose=args.verbose))
                     print()
+            else:
+                for finding in results:
+                    print(_fmt_one_line(finding))
 
         elif args.command == "list":
             results = kb.list_findings(
@@ -930,10 +1102,13 @@ Examples:
             )
             if not results:
                 print("No findings")
-            else:
+            elif args.long:
                 for finding in results:
                     print(format_finding(finding, verbose=args.verbose))
                     print()
+            else:
+                for finding in results:
+                    print(_fmt_one_line(finding))
 
         elif args.command == "get":
             finding = kb.get(args.id)
@@ -975,14 +1150,6 @@ Examples:
 
             kb.delete(args.id)
             print(f"Deleted: {args.id}")
-
-        elif args.command == "check":
-            is_dup, existing, _ = kb.check_duplicate(args.content, threshold=args.threshold)
-            if is_dup and existing:
-                print(f"Similar finding exists: {existing['id']} (similarity: {existing['similarity']:.2f})")
-                print(f"  {existing['content']}")
-            else:
-                print("No similar findings found")
 
         elif args.command == "stats":
             stats = kb.stats()
@@ -1195,191 +1362,6 @@ Examples:
             print("WebSocket live updates enabled at /ws")
             uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
-        elif args.command == "batch":
-            file_path = args.file
-            if not file_path.exists():
-                print(f"File not found: {file_path}")
-                sys.exit(1)
-
-            if file_path.suffix == ".md":
-                findings = parse_markdown_findings(file_path)
-            elif file_path.suffix == ".py":
-                findings = parse_script_findings(file_path)
-            else:
-                print(f"Unsupported file type: {file_path.suffix}")
-                sys.exit(1)
-
-            print(f"Found {len(findings)} potential findings in {file_path}")
-
-            if args.dry_run:
-                for f in findings:
-                    print(f"  [{f['type']}] {f['content'][:80]}...")
-            else:
-                added = 0
-                for f in findings:
-                    result = kb.add(
-                        content=f['content'],
-                        finding_type=f['type'],
-                        project=args.project,
-                        evidence=f.get('evidence'),
-                    )
-                    if not result.get('duplicate'):
-                        added += 1
-                        print(f"  Added: {result['id']}")
-                    else:
-                        print(f"  Skipped (duplicate): {f['content'][:50]}...")
-                print(f"\nAdded {added} new findings")
-
-        elif args.command == "notation":
-            if args.notation_cmd == "add":
-                result = kb.notation_add(
-                    symbol=args.symbol,
-                    meaning=args.meaning,
-                    domain=args.domain,
-                    project=args.project,
-                )
-                print(f"Added notation: {result['id']}")
-
-            elif args.notation_cmd == "list":
-                notations = kb.notation_list(domain=args.domain, project=args.project)
-                for n in notations:
-                    domain = f"[{n['domain']}]" if n.get('domain') else ""
-                    project = f"({n['project']})" if n.get('project') else ""
-                    print(f"  {n['symbol']} = {n['meaning']} {domain} {project}")
-
-            elif args.notation_cmd == "search":
-                notations = kb.notation_search(query=args.query, domain=args.domain, project=args.project)
-                for n in notations:
-                    print(f"  {n['symbol']} = {n['meaning']}")
-
-            elif args.notation_cmd == "update":
-                result = kb.notation_update(
-                    old_symbol=args.old_symbol,
-                    new_symbol=args.new_symbol,
-                    reason=args.reason,
-                    project=args.project,
-                )
-                print(f"Updated: {args.old_symbol} -> {args.new_symbol}")
-
-            elif args.notation_cmd == "history":
-                history = kb.notation_history(args.id)
-                for entry in history:
-                    print(f"  {entry['old_symbol']} -> {entry['new_symbol']}")
-                    if entry.get('reason'):
-                        print(f"    Reason: {entry['reason']}")
-                    print(f"    Changed: {entry['changed_at']}")
-
-        elif args.command == "script":
-            if args.script_cmd == "add":
-                result = kb.script_add(
-                    file_path=str(args.file.absolute()),
-                    purpose=args.purpose,
-                    project=args.project,
-                    language=args.language,
-                )
-                print(f"Registered script: {result['id']}")
-
-            elif args.script_cmd == "list":
-                scripts = kb.script_list(project=args.project, language=args.language)
-                for s in scripts:
-                    lang = f"[{s['language']}]" if s.get('language') else ""
-                    print(f"  {s['id']}: {s['filename']} {lang}")
-                    print(f"    Purpose: {s['purpose']}")
-
-            elif args.script_cmd == "search":
-                scripts = kb.script_search(query=args.query, project=args.project)
-                for s in scripts:
-                    print(f"  {s['id']}: {s['filename']}")
-                    print(f"    Purpose: {s['purpose']}")
-
-            elif args.script_cmd == "link":
-                result = kb.script_link_finding(
-                    script_id=args.script_id,
-                    finding_id=args.finding_id,
-                    relationship=args.relationship,
-                )
-                print(f"Linked script {args.script_id} to finding {args.finding_id}")
-
-        elif args.command == "error":
-            if args.error_cmd == "add":
-                result = kb.error_add(
-                    signature=args.signature,
-                    error_type=args.error_type,
-                    project=args.project,
-                )
-                if result.get('is_new'):
-                    print(f"Recorded new error: {result['id']}")
-                else:
-                    print(f"Error already exists: {result['id']} (count: {result.get('occurrences', 1)})")
-
-            elif args.error_cmd == "link":
-                result = kb.error_link(
-                    error_id=args.error_id,
-                    finding_id=args.finding_id,
-                    verified=args.verify,
-                )
-                print(f"Linked error {args.error_id} to solution {args.finding_id}")
-
-            elif args.error_cmd == "search":
-                errors = kb.error_search(query=args.query, project=args.project)
-                for e in errors:
-                    print(f"  {e['id']}: {e['signature'][:80]}...")
-                    if e.get('solutions'):
-                        print(f"    Solutions: {len(e['solutions'])}")
-
-            elif args.error_cmd == "list":
-                errors = kb.error_list(project=args.project, error_type=args.error_type)
-                for e in errors:
-                    type_str = f"[{e['error_type']}]" if e.get('error_type') else ""
-                    print(f"  {e['id']} {type_str}: {e['signature'][:60]}...")
-                    print(f"    Occurrences: {e.get('occurrences', 1)}")
-
-        elif args.command == "doc":
-            if args.doc_cmd == "add":
-                result = kb.doc_add(
-                    title=args.title,
-                    doc_type=args.doc_type,
-                    url=args.url,
-                    summary=args.summary,
-                    project=args.project,
-                )
-                print(f"Added document: {result['id']}")
-
-            elif args.doc_cmd == "cite":
-                result = kb.doc_cite(
-                    finding_id=args.finding_id,
-                    doc_id=args.doc_id,
-                    citation_type=args.type,
-                    notes=args.notes,
-                )
-                print(f"Cited document {args.doc_id} in finding {args.finding_id}")
-
-            elif args.doc_cmd == "list":
-                docs = kb.doc_list(project=args.project, doc_type=args.doc_type)
-                for d in docs:
-                    print(f"  {d['id']}: {d['title']} [{d['doc_type']}]")
-                    if d.get('url'):
-                        print(f"    URL: {d['url']}")
-
-            elif args.doc_cmd == "search":
-                docs = kb.doc_search(query=args.query, project=args.project)
-                for d in docs:
-                    print(f"  {d['id']}: {d['title']} [{d['doc_type']}]")
-
-        elif args.command == "bulk-tag":
-            result = kb.bulk_add_tags(finding_ids=args.ids, tags=args.tags)
-            print(f"Updated {result['updated']} findings")
-
-        elif args.command == "bulk-consolidate":
-            result = kb.consolidate_cluster(
-                finding_ids=args.ids,
-                summary=args.summary,
-                reason=args.reason,
-                finding_type=args.type,
-                tags=args.tags,
-            )
-            print(f"Created consolidated finding: {result['id']}")
-            print(f"Superseded {result['superseded_count']} findings")
 
         elif args.command == "ask":
             result = kb.ask(question=args.question, project=args.project, limit=args.limit)
@@ -1389,166 +1371,175 @@ Examples:
                 for s in result['sources']:
                     print(f"  - {s}")
 
+        elif args.command == "questions":
+            questions = kb.generate_open_questions(
+                project=args.project,
+                limit=args.limit,
+                input_limit=args.input,
+                query=args.query,
+            )
+            if not questions:
+                print("No questions generated (try adding more findings or a search query).")
+            else:
+                seed = f'"{args.query}"' if args.query else "recent findings"
+                print(f"Open questions from {seed}:\n")
+                for i, q in enumerate(questions, 1):
+                    print(f"{i}. {q.get('question', '')}")
+                    if q.get('why'):
+                        print(f"   Why: {q['why']}")
+                    if q.get('related_ids'):
+                        print(f"   See: {', '.join(q['related_ids'][:3])}")
+                    print()
+
         elif args.command == "related":
             results = kb.related(finding_id=args.id, limit=args.limit)
-            for f in results:
-                print(format_finding(f))
-                print()
-
-        elif args.command == "validate":
-            result = kb.validate(project=args.project, limit=args.limit, use_llm=args.llm)
-            if result.get('issues'):
-                print(f"Found {len(result['issues'])} issues:")
-                for issue in result['issues']:
-                    print(f"\n  {issue['id']}:")
-                    print(f"    {issue['content'][:80]}...")
-                    for w in issue.get('warnings', []):
-                        print(f"    ⚠ {w}")
+            if not results:
+                print("No related findings.")
+            elif args.long:
+                for f in results:
+                    print(format_finding(f))
+                    print()
             else:
-                print("No issues found")
+                for f in results:
+                    print(_fmt_one_line(f))
 
         elif args.command == "review":
             result = kb.review_queue(project=args.project, limit=args.limit)
+            any_issues = False
             for category, items in result.items():
                 if items:
+                    any_issues = True
                     print(f"\n{category.upper()} ({len(items)}):")
                     for item in items:
-                        print(f"  {item['id']}: {item['content'][:60]}...")
+                        proj = f" ({item['project']})" if item.get('project') else ""
+                        print(f"  {item['id']}{proj}: {item.get('content', '')[:60]}...")
+            if not any_issues:
+                print("No findings need attention.")
 
-        elif args.command == "questions":
-            result = kb.open_questions(project=args.project, limit=args.limit)
-            for i, q in enumerate(result.get('questions', []), 1):
-                print(f"\n{i}. {q['question']}")
-                print(f"   Priority: {q.get('priority', 'unknown')}")
-                if q.get('related_topics'):
-                    print(f"   Topics: {', '.join(q['related_topics'])}")
-
-        elif args.command == "reembed":
-            if not args.force:
-                confirm = input("This will re-generate all embeddings. Continue? [y/N] ")
-                if confirm.lower() != "y":
-                    print("Cancelled")
-                    sys.exit(0)
-
-            result = kb.reembed_all(
-                resume=getattr(args, "resume", False),
-                commit_every=getattr(args, "commit_every", 50),
+        elif args.command == "refresh":
+            # Guard: positional args must look like kb-ids (kb-YYYYMMDD-HHMMSS-xxxxxx).
+            # A bare project name here is a common mistake; direct the user to -p.
+            bad_ids = [a for a in (args.ids or []) if not a.startswith("kb-")]
+            if bad_ids:
+                print(f"Error: positional arguments must be kb-ids (e.g. kb-20260606-123456-abcdef).")
+                print(f"  Got: {bad_ids}")
+                print(f"  To filter by project use: kb refresh -p <project>")
+                sys.exit(1)
+            rows = _fetch_refresh_rows(
+                kb,
+                ids=args.ids or None,
+                project=args.project,
+                all_rows=args.all,
+                limit=args.limit,
             )
-            # Per-table dict; print all four tables' summaries.
-            for table, s in result.items():
-                print(
-                    f"{table}: {s.get('updated', 0)} re-embedded "
-                    f"({s.get('failed', 0)} failed, {s.get('total', 0)}/{s.get('total_all', s.get('total', 0))} processed, "
-                    f"{s.get('skipped_already_done', 0)} skipped) "
-                    f"in {s.get('elapsed_sec', 0)/60.0:.1f}m"
+            print(f"refresh: {len(rows)} findings "
+                  f"(project={args.project or 'ALL'}, all={args.all}, dry={args.dry_run})"
+                  f"\n  (Ctrl+C safe: work is committed every {args.commit_every} rows;"
+                  f" restart without --all to resume from unprocessed rows)")
+            _run_refresh(kb, rows, dry_run=args.dry_run, commit_every=args.commit_every)
+            if args.theorems:
+                _backfill_statement_pure(
+                    kb, project=args.project,
+                    workers=args.theorem_workers, dry_run=args.dry_run,
                 )
+            if not args.dry_run and rows:
+                # Re-embed the refreshed findings in batches.
+                # llama.cpp has an internal batch-size limit; chunking avoids timeouts
+                # on large runs and shows per-chunk progress + ETA.
+                import time as _time
+                CHUNK = getattr(args, "reembed_chunk", 50)
+                fids = [r[0] for r in rows]
+                id_content: dict = {}
+                for fid in fids:
+                    r2 = kb.conn.execute(
+                        "SELECT content FROM findings WHERE id=?", (fid,)
+                    ).fetchone()
+                    if r2:
+                        id_content[fid] = r2[0]
+                total_emb = len(id_content)
+                print(f"reembed: {total_emb} finding(s) in chunks of {CHUNK}...")
+                t0 = _time.time()
+                embedded = skipped = 0
+                fid_list = list(id_content.keys())
+                texts_list = [id_content[f] for f in fid_list]
+                for chunk_start in range(0, total_emb, CHUNK):
+                    chunk_fids = fid_list[chunk_start:chunk_start + CHUNK]
+                    chunk_texts = texts_list[chunk_start:chunk_start + CHUNK]
+                    try:
+                        embeddings = kb._embedding.embed_batch(chunk_texts)
+                        for fid, emb in zip(chunk_fids, embeddings):
+                            if emb is not None:
+                                kb.conn.execute("DELETE FROM findings_vec WHERE id=?", (fid,))
+                                kb.conn.execute(
+                                    "INSERT INTO findings_vec (id, embedding) VALUES (?,?)",
+                                    (fid, emb),
+                                )
+                                embedded += 1
+                            else:
+                                skipped += 1
+                    except Exception as e:
+                        print(f"  chunk {chunk_start}-{chunk_start+len(chunk_fids)} failed ({e})")
+                        skipped += len(chunk_fids)
+                    kb.conn.commit()
+                    done = chunk_start + len(chunk_fids)
+                    elapsed = _time.time() - t0
+                    rate = done / elapsed if elapsed > 0 else 0.0
+                    eta = (total_emb - done) / rate if rate > 0 else 0.0
+                    print(
+                        f"  reembed {done}/{total_emb} ({100*done//total_emb}%)"
+                        f"  rate={rate:.1f}/s  eta={eta/60:.1f}m"
+                        f"  embedded={embedded} skipped={skipped}",
+                        flush=True,
+                    )
+                print(f"  reembed done: embedded={embedded} skipped={skipped} elapsed={(_time.time()-t0)/60:.1f}m")
 
-        elif args.command == "consolidate-projects":
-            from kb.validation import normalize_project_name
-            rows = kb.conn.execute(
-                "SELECT id, project FROM findings"
-            ).fetchall()
-            changes: dict[str, dict[str, int]] = {}
-            for fid, project in rows:
-                canon = normalize_project_name(project)
-                if canon != project:
-                    key = f"{project!r} -> {canon!r}"
-                    changes.setdefault(key, {"count": 0})["count"] += 1
-                    if not args.dry_run:
-                        kb.conn.execute(
-                            "UPDATE findings SET project = ?, updated_at = datetime('now') WHERE id = ?",
-                            (canon, fid),
-                        )
-            if not args.dry_run:
-                kb.conn.commit()
-            total = sum(c["count"] for c in changes.values())
-            label = "would update" if args.dry_run else "updated"
-            print(f"consolidate-projects: {label} {total} rows across {len(changes)} project renames")
-            for k in sorted(changes.keys()):
-                print(f"  {changes[k]['count']:>5}  {k}")
+        elif args.command == "ingest":
+            import subprocess as _sp
+            scripts_dir = Path(__file__).parent / "scripts"
 
-        elif args.command == "retag":
-            sql = "SELECT id, project, content FROM findings WHERE status = 'current'"
-            params: list = []
-            if not args.all:
-                sql += " AND (tags IS NULL OR tags = '' OR tags = '[]')"
-            if args.project:
-                sql += " AND project = ?"
-                params.append(args.project)
-            sql += " ORDER BY created_at DESC"
-            if args.limit:
-                sql += f" LIMIT {int(args.limit)}"
-            rows = kb.conn.execute(sql, params).fetchall()
-            print(f"retag: {len(rows)} rows to process "
-                  f"(project={args.project or 'ALL'}, all={args.all}, dry={args.dry_run})")
-            ok = fail = 0
-            import time as _time
-            t0 = _time.time()
-            for i, (fid, project, content) in enumerate(rows, 1):
-                tags = kb.suggest_tags(content, project)
-                if tags:
-                    tags_json = json.dumps(tags)
-                    if args.dry_run:
-                        print(f"[DRY] {fid} ({project}): {tags}")
-                    else:
-                        kb.conn.execute(
-                            "UPDATE findings SET tags = ?, updated_at = datetime('now') WHERE id = ?",
-                            (tags_json, fid),
-                        )
-                        if (i % args.commit_every) == 0:
-                            kb.conn.commit()
-                    ok += 1
+            if args.ingest_cmd == "lean":
+                script = "ingest_lean_direct.py" if args.direct else "ingest_lean.py"
+                script_path = scripts_dir / script
+                if not script_path.exists():
+                    print(f"Error: {script_path} not found")
+                    sys.exit(1)
+                cmd = [sys.executable, str(script_path)]
+                if args.direct:
+                    # ingest_lean_direct.py only supports mathlib-style repos
+                    root = (Path.home() / "Physics/mathlib4") if args.source == "mathlib" \
+                           else (Path.home() / "Physics/claude/proofs")
+                    cmd += ["--mathlib-root", str(root)]
                 else:
-                    fail += 1
-                    print(f"  FAIL {fid} ({project}): {(content or '')[:60]!r}")
-                if (i % 20) == 0 or i == len(rows):
-                    print(f"  {i}/{len(rows)}  ok={ok} fail={fail}  "
-                          f"elapsed={_time.time()-t0:.0f}s", flush=True)
-            if not args.dry_run:
-                kb.conn.commit()
-            print(f"retag done: ok={ok} fail={fail} total={len(rows)} "
-                  f"elapsed={_time.time()-t0:.1f}s")
+                    cmd += ["--source", args.source]
+                if args.project:
+                    cmd += ["--project", args.project]
+                if args.dry_run:
+                    cmd += ["--dry-run"]
+                if args.limit:
+                    cmd += ["--limit", str(args.limit)]
+                if args.module_filter:
+                    cmd += ["--module-filter", args.module_filter]
+                result = _sp.run(cmd)
+                if result.returncode != 0:
+                    sys.exit(result.returncode)
+                if not args.no_backfill and not args.dry_run:
+                    print("\nBackfilling statement_pure...")
+                    _backfill_statement_pure(kb, project=args.project,
+                                              workers=args.workers, dry_run=False)
 
-        elif args.command == "resummarize":
-            sql = "SELECT id, project, content, evidence FROM findings WHERE status = 'current'"
-            params: list = []
-            if not args.all:
-                sql += " AND (summary IS NULL OR summary = '')"
-            if args.project:
-                sql += " AND project = ?"
-                params.append(args.project)
-            sql += " ORDER BY created_at DESC"
-            if args.limit:
-                sql += f" LIMIT {int(args.limit)}"
-            rows = kb.conn.execute(sql, params).fetchall()
-            print(f"resummarize: {len(rows)} rows to process "
-                  f"(project={args.project or 'ALL'}, all={args.all}, dry={args.dry_run})")
-            ok = fail = 0
-            import time as _time
-            t0 = _time.time()
-            for i, (fid, project, content, evidence) in enumerate(rows, 1):
-                summary = kb._analyzer.generate_summary(content, evidence)
-                if summary and len(summary) >= 10:
-                    if args.dry_run:
-                        print(f"[DRY] {fid} ({project}): {summary}")
-                    else:
-                        kb.conn.execute(
-                            "UPDATE findings SET summary = ?, updated_at = datetime('now') WHERE id = ?",
-                            (summary, fid),
-                        )
-                        if (i % args.commit_every) == 0:
-                            kb.conn.commit()
-                    ok += 1
-                else:
-                    fail += 1
-                    print(f"  FAIL {fid} ({project}): {(content or '')[:60]!r}")
-                if (i % 20) == 0 or i == len(rows):
-                    print(f"  {i}/{len(rows)}  ok={ok} fail={fail}  "
-                          f"elapsed={_time.time()-t0:.0f}s", flush=True)
-            if not args.dry_run:
-                kb.conn.commit()
-            print(f"resummarize done: ok={ok} fail={fail} total={len(rows)} "
-                  f"elapsed={_time.time()-t0:.1f}s")
+            elif args.ingest_cmd == "scripts":
+                script_path = Path(__file__).parent / "auto_register_scripts.py"
+                if not script_path.exists():
+                    print(f"Error: {script_path} not found")
+                    sys.exit(1)
+                cmd = [sys.executable, str(script_path), str(args.directory),
+                       "-p", args.project, "-n", str(args.limit)]
+                if args.dry_run:
+                    cmd += ["--dry-run"]
+                _sp.run(cmd)
+
+            else:
+                ingest_parser.print_help()
 
         elif args.command == "reconcile":
             try:

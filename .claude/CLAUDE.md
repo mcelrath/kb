@@ -1,4 +1,4 @@
-project: kb
+project: knowledge-base
 
 # Knowledge Base Project - Development Guide
 
