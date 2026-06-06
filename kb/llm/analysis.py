@@ -9,7 +9,7 @@ import re
 from typing import Any
 
 from .client import LLMClient
-from ..constants import UNICODE_TO_ASCII, ALLOWED_UNICODE, GREEK_MEANINGS
+from ..constants import GREEK_MEANINGS
 
 
 class ContentAnalyzer:
@@ -53,6 +53,7 @@ class ContentAnalyzer:
             temperature=0.2,
             system_prompt=system_prompt,
             timeout=30,
+            json_mode=True,
         )
 
         if result:
@@ -66,7 +67,6 @@ class ContentAnalyzer:
                 summary = result.strip().strip('"').strip("'")
                 summary = re.sub(r'\\u[0-9a-fA-F]{4}', '', summary)
                 summary = re.sub(r'[\x00-\x1f\x7f]', '', summary)
-                summary = ''.join(c for c in summary if ord(c) < 128 or c in ALLOWED_UNICODE)
                 summary = re.sub(r'  +', ' ', summary).strip()
                 # Check for garbage: need real words. The letter-ratio gate
                 # used to be > 0.5, but technically-dense summaries like

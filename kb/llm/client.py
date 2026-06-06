@@ -100,8 +100,10 @@ class LLMClient:
                         reasoning = (msg.get("reasoning_content") or "").strip()
                         if reasoning:
                             content = self._extract_from_thinking(reasoning)
-                    if json_mode and content and not content.startswith("{"):
-                        content = "{" + content
+                    if json_mode and content:
+                        # Strip markdown code fences (model may ignore response_format)
+                        content = re.sub(r'^```(?:json)?\s*\n?', '', content)
+                        content = re.sub(r'\n?```\s*$', '', content).strip()
                     return content or None
             else:
                 # Raw completion path (no chat template, no thinking control).
@@ -120,8 +122,9 @@ class LLMClient:
                     data = json.loads(resp.read().decode("utf-8"))
                     content = data.get("content", "").strip()
                     content = self._strip_thinking(content)
-                    if json_mode and content and not content.startswith("{"):
-                        content = "{" + content
+                    if json_mode and content:
+                        content = re.sub(r'^```(?:json)?\s*\n?', '', content)
+                        content = re.sub(r'\n?```\s*$', '', content).strip()
                     return content
         except (URLError, TimeoutError, KeyError, json.JSONDecodeError):
             return None
