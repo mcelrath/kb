@@ -196,26 +196,31 @@ You are a mathematical expositor translating Lean 4 theorem statements into \
 precise human-readable summaries. Output valid JSON only — no prose outside the JSON object.\
 """
 
-SUMMARIZE_PROMPT = """\
+SUMMARIZE_PROMPT_PARTS = (
+    """\
 Below is a Lean 4 source file, followed by a list of theorem/lemma names to summarise.
 
 For each name, write exactly one sentence that:
 - States what the theorem asserts, including all quantifiers and key hypotheses
-- Uses standard LaTeX notation ($\\zeta(s)$, $\\mathrm{GL}_n$, $\\mathbb{{Z}}$, etc.)
+- Uses standard LaTeX notation ($\\zeta(s)$, $\\mathrm{GL}_n$, $\\mathbb{Z}$, etc.)
 - Is precise enough that a mathematician could reconstruct the Lean statement
 - Is self-contained (do not say "the above" or refer to the file)
 
 Output a single JSON object mapping each name to its summary string.
 Do not include names not in the list. Do not add extra keys.
 
-FILE ({filename}):
+FILE (""",
+    # filename inserted here
+    """):
 ```lean
-{file_content}
-```
+""",
+    # file_content inserted here
+    """```
 
 THEOREMS TO SUMMARISE (JSON keys must match exactly):
-{names_json}
-"""
+""",
+    # names_json inserted here
+)
 
 
 def summarize_file_theorems(
@@ -237,11 +242,11 @@ def summarize_file_theorems(
     names = [t["name"] for t in theorems]
     names_json = json.dumps(names, indent=2)
 
-    prompt = SUMMARIZE_PROMPT.format(
-        filename=lean_file.name,
-        file_content=file_content,
-        names_json=names_json,
-    )
+    # Build prompt by concatenation — NOT .format() — so curly braces in
+    # Lean/LaTeX content (e.g. \mathrm{GL}_n, Type {u}) are never misread
+    # as Python format placeholders.
+    p = SUMMARIZE_PROMPT_PARTS
+    prompt = p[0] + lean_file.name + p[1] + file_content + p[2] + names_json
 
     raw = llm_client.complete(
         prompt,
