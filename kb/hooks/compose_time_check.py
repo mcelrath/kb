@@ -82,7 +82,24 @@ def extract_fractions(text: str) -> list[str]:
     return re.findall(r'\b\d{1,4}/\d{1,4}\b', text)
 
 
-def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str]) -> list[str]:
+_HOME = os.path.expanduser('~')
+_PATH_TO_PROJECT: list[tuple[str, str]] = [
+    (os.path.join(_HOME, 'Physics'), 'algebraic-genesis'),
+    (os.path.join(_HOME, 'Projects', 'ai', 'kb'), 'knowledge-base'),
+]
+
+
+def _project_from_cwd() -> str | None:
+    """Detect the current KB project from CLAUDE_PROJECT_DIR env var."""
+    cwd = os.environ.get('CLAUDE_PROJECT_DIR', '') or os.getcwd()
+    for prefix, project in _PATH_TO_PROJECT:
+        if cwd.startswith(prefix):
+            return project
+    return None
+
+
+def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str],
+             project: str | None = None) -> list[str]:
     """Query python_symbols, notations, and findings for matches. Returns advisory lines."""
     advisories = []
     seen_names: set[str] = set()
@@ -90,13 +107,20 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str]) -> l
     if not tokens and not fracs:
         return advisories
 
-    # --- python_symbols exact name match ---
+    # --- python_symbols exact name match — project-scoped to prevent cross-project FPs ---
     placeholders = ','.join('?' * len(tokens))
-    rows = conn.execute(
-        f'SELECT name, kind, status, module, file, line, redirect_to '
-        f'FROM python_symbols WHERE name IN ({placeholders}) LIMIT 20',
-        tokens,
-    ).fetchall()
+    if project:
+        rows = conn.execute(
+            f'SELECT name, kind, status, module, file, line, redirect_to '
+            f'FROM python_symbols WHERE name IN ({placeholders}) AND project=? LIMIT 20',
+            tokens + [project],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f'SELECT name, kind, status, module, file, line, redirect_to '
+            f'FROM python_symbols WHERE name IN ({placeholders}) LIMIT 20',
+            tokens,
+        ).fetchall()
     canonical_candidates: list[tuple[str, str]] = []
     for name, kind, status, module, fpath, line, redirect_to in rows:
         if name in seen_names:
@@ -123,13 +147,19 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str]) -> l
         new_key_set = set(new_keys)
         advisories.extend(line for k, line in canonical_candidates if k in new_key_set)
 
-    # --- notations exact symbol match (skip generic-fallback rows) ---
-    rows2 = conn.execute(
+    # --- notations exact symbol match (skip generic-fallback rows) — project-scoped ---
+    _not_base = (
         f"SELECT current_symbol, meaning FROM notations "
-        f"WHERE current_symbol IN ({placeholders}) AND (meaning_source IS NULL OR meaning_source != 'generic-fallback') "
-        f"LIMIT 10",
-        tokens,
-    ).fetchall()
+        f"WHERE current_symbol IN ({placeholders}) "
+        f"AND (meaning_source IS NULL OR meaning_source != 'generic-fallback')"
+    )
+    if project:
+        rows2 = conn.execute(
+            _not_base + " AND (project IS NULL OR project=?) LIMIT 10",
+            tokens + [project],
+        ).fetchall()
+    else:
+        rows2 = conn.execute(_not_base + " LIMIT 10", tokens).fetchall()
     notation_candidates: list[tuple[str, str]] = []
     for sym, meaning in rows2:
         if sym in seen_names:
@@ -144,12 +174,18 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str]) -> l
         new_key_set = set(new_keys)
         advisories.extend(line for k, line in notation_candidates if k in new_key_set)
 
-    # --- findings: search for exact fractions / small constants ---
+    # --- findings: search for exact fractions / small constants — project-scoped ---
     for frac in fracs[:5]:
-        rows3 = conn.execute(
-            "SELECT id, summary FROM findings WHERE content LIKE ? LIMIT 2",
-            (f'%{frac}%',),
-        ).fetchall()
+        if project:
+            rows3 = conn.execute(
+                "SELECT id, summary FROM findings WHERE content LIKE ? AND project=? LIMIT 2",
+                (f'%{frac}%', project),
+            ).fetchall()
+        else:
+            rows3 = conn.execute(
+                "SELECT id, summary FROM findings WHERE content LIKE ? LIMIT 2",
+                (f'%{frac}%',),
+            ).fetchall()
         for fid, summary in rows3:
             short_id = fid[:20] if fid else '?'
             preview = (summary or '?')[:80]
@@ -198,7 +234,8 @@ def main() -> None:
         conn = sqlite3.connect(db, timeout=3)
         tokens = extract_candidate_tokens(prompt_text)
         fracs = extract_fractions(prompt_text)
-        advisories = query_db(conn, tokens, fracs)
+        project = _project_from_cwd()
+        advisories = query_db(conn, tokens, fracs, project=project)
         conn.close()
         if advisories:
             print(json.dumps({

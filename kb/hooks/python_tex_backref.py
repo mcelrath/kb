@@ -17,6 +17,11 @@ fpath = (d.get('tool_input') or {}).get('file_path', '')
 if not fpath.endswith('.py'):
     sys.exit(0)
 
+# Only fire for Physics repo files — tex annotations reference Physics code, not kb/
+_physics_dir = os.path.join(os.path.expanduser('~'), 'Physics')
+if not fpath.startswith(_physics_dir):
+    sys.exit(0)
+
 basename = os.path.basename(fpath)
 db = os.path.expanduser('~/.cache/kb/knowledge.db')
 if not os.path.exists(db):

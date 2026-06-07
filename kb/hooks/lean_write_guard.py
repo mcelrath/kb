@@ -102,9 +102,13 @@ def main() -> None:
         lines = check_collisions(conn, names)
         conn.close()
         if lines:
-            # PreToolUse advisory — print to stderr so it's visible as hook feedback
-            for line in lines:
-                print(line, file=sys.stderr)
+            # PreToolUse advisory on exit 0 — must use stdout JSON; stderr is discarded
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "additionalContext": "\n".join(lines),
+                }
+            }))
     except Exception:
         pass
 

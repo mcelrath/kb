@@ -106,6 +106,25 @@ def extract_fractions(text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Project detection
+# ---------------------------------------------------------------------------
+
+_HOME = os.path.expanduser('~')
+_PATH_TO_PROJECT: list[tuple[str, str]] = [
+    (os.path.join(_HOME, 'Physics'), 'algebraic-genesis'),
+    (os.path.join(_HOME, 'Projects', 'ai', 'kb'), 'knowledge-base'),
+]
+
+
+def _project_from_path(fpath: str) -> str | None:
+    """Return the KB project name for a given file path, or None if unknown."""
+    for prefix, project in _PATH_TO_PROJECT:
+        if fpath.startswith(prefix):
+            return project
+    return None
+
+
+# ---------------------------------------------------------------------------
 # DB queries
 # ---------------------------------------------------------------------------
 
@@ -113,6 +132,7 @@ def query_symbols(
     conn: sqlite3.Connection,
     tokens: list[str],
     fracs: list[str],
+    project: str | None = None,
 ) -> list[str]:
     if not tokens and not fracs:
         return []
@@ -122,12 +142,19 @@ def query_symbols(
 
     ph = ','.join('?' * len(tokens))
 
-    # python_symbols exact name match
-    rows = conn.execute(
-        f'SELECT name, kind, status, module, file, line, redirect_to '
-        f'FROM python_symbols WHERE name IN ({ph}) LIMIT 40',
-        tokens,
-    ).fetchall()
+    # python_symbols exact name match — project-scoped to prevent cross-project FPs
+    if project:
+        rows = conn.execute(
+            f'SELECT name, kind, status, module, file, line, redirect_to '
+            f'FROM python_symbols WHERE name IN ({ph}) AND project=? LIMIT 40',
+            tokens + [project],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f'SELECT name, kind, status, module, file, line, redirect_to '
+            f'FROM python_symbols WHERE name IN ({ph}) LIMIT 40',
+            tokens,
+        ).fetchall()
     # Collect CANONICAL candidates for cross-hook dedup; RETIRED always surfaces
     canonical_candidates: list[tuple[str, str]] = []  # (dedup_key, advisory_line)
     for name, kind, status, module, fpath, line, redirect_to in rows:
@@ -150,14 +177,19 @@ def query_symbols(
         new_key_set = set(new_keys)
         advisories.extend(line for k, line in canonical_candidates if k in new_key_set)
 
-    # notations — skip generic-fallback rows
-    rows2 = conn.execute(
+    # notations — skip generic-fallback rows; project-scoped
+    _not_base = (
         f"SELECT current_symbol, meaning FROM notations "
         f"WHERE current_symbol IN ({ph}) "
-        f"AND (meaning_source IS NULL OR meaning_source != 'generic-fallback') "
-        f"LIMIT 10",
-        tokens,
-    ).fetchall()
+        f"AND (meaning_source IS NULL OR meaning_source != 'generic-fallback')"
+    )
+    if project:
+        rows2 = conn.execute(
+            _not_base + " AND (project IS NULL OR project=?) LIMIT 10",
+            tokens + [project],
+        ).fetchall()
+    else:
+        rows2 = conn.execute(_not_base + " LIMIT 10", tokens).fetchall()
     notation_candidates: list[tuple[str, str]] = []
     for sym, meaning in rows2:
         key = f'notation:{sym}'
@@ -171,12 +203,18 @@ def query_symbols(
         new_key_set = set(new_keys)
         advisories.extend(line for k, line in notation_candidates if k in new_key_set)
 
-    # findings with matching fractions
+    # findings with matching fractions — project-scoped
     for frac in fracs[:3]:
-        rows3 = conn.execute(
-            "SELECT id, summary FROM findings WHERE content LIKE ? LIMIT 2",
-            (f'%{frac}%',),
-        ).fetchall()
+        if project:
+            rows3 = conn.execute(
+                "SELECT id, summary FROM findings WHERE content LIKE ? AND project=? LIMIT 2",
+                (f'%{frac}%', project),
+            ).fetchall()
+        else:
+            rows3 = conn.execute(
+                "SELECT id, summary FROM findings WHERE content LIKE ? LIMIT 2",
+                (f'%{frac}%',),
+            ).fetchall()
         for fid, summary in rows3:
             key = f'frac:{frac}:{fid}'
             if key in seen:
@@ -230,13 +268,14 @@ def main() -> None:
 
     try:
         conn = sqlite3.connect(db, timeout=3)
+        project = _project_from_path(fpath)
         if ext == '.py':
             tokens = extract_from_python(content)
             fracs = []  # fractions in Python source aren't math notation
         else:
             tokens = extract_from_text(content)
             fracs = extract_fractions(content)
-        advisories = query_symbols(conn, tokens, fracs)
+        advisories = query_symbols(conn, tokens, fracs, project=project)
         conn.close()
         if advisories:
             print(json.dumps({

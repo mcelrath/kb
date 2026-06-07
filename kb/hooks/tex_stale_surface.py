@@ -98,6 +98,7 @@ try:
     ).fetchall()
 
     blocking = False
+    advisory_lines = []
     for line, section, refs_json in rows:
         refs = json.loads(refs_json or '[]')
         for ref in refs:
@@ -108,14 +109,28 @@ try:
             if section:
                 loc += f' §{section[:40]}'
             tag = f'[TEX-{cat}: {ref} at {loc} — {detail}]'
-            print(tag, file=sys.stderr)
 
             if cat == 'DELETED' and is_edit and ref in new_string:
+                # Blocking: stderr + exit 2 (the only channel that blocks)
+                print(tag, file=sys.stderr)
                 print(f'[BLOCKING: Edit would perpetuate dead citation to {ref} — delete annotation or file a bd cleanup item]',
                       file=sys.stderr)
                 blocking = True
+            else:
+                advisory_lines.append(tag)
 
     conn.close()
+
+    if advisory_lines and not blocking:
+        # Advisory on exit 0 — must use stdout JSON; stderr is discarded
+        event = 'PostToolUse' if is_read else 'PreToolUse'
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": event,
+                "additionalContext": "\n".join(advisory_lines),
+            }
+        }))
+
     sys.exit(2 if blocking else 0)
 except Exception:
     sys.exit(0)

@@ -26,6 +26,7 @@ if not os.path.exists(db):
 
 try:
     conn = sqlite3.connect(db, timeout=5)
+    lines = []
     for label in labels:
         rows = conn.execute(
             'SELECT python_refs, lean_refs FROM tex_annotations WHERE section_label=? LIMIT 1',
@@ -40,7 +41,15 @@ try:
             if lean:
                 parts.append(f'lean:{lean}')
             if parts:
-                print(f'[TEX-CONTEXT: {label} annotates {" + ".join(parts)}]', file=sys.stderr)
+                lines.append(f'[TEX-CONTEXT: {label} annotates {" + ".join(parts)}]')
     conn.close()
+    if lines:
+        # PreToolUse advisory on exit 0 — must use stdout JSON; stderr is discarded
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": "\n".join(lines),
+            }
+        }))
 except Exception:
     pass
