@@ -72,6 +72,10 @@ def ingest(conn: sqlite3.Connection, dry_run: bool) -> tuple[int, int, int]:
     _BD_RE = re.compile(r'\b([a-z]+-[a-z0-9]+)\b')
     _SUSPECT_RE = re.compile(r'\bSUSPECT\b', re.IGNORECASE)
     _SUPERSEDED_RE = re.compile(r'\b(superseded|obsolete|retired|do not use)\b', re.IGNORECASE)
+    _MATHLIB_GAP_RE = re.compile(
+        r'\b(absent from Mathlib|not in Mathlib|Mathlib gap|upstream[- ]scale|upstream contribution)\b',
+        re.IGNORECASE,
+    )
 
     try:
         rows = conn.execute("""
@@ -109,6 +113,12 @@ def ingest(conn: sqlite3.Connection, dry_run: bool) -> tuple[int, int, int]:
             readiness = 'DESIGN-NEEDED'
             diverged += 1
 
+        # Mathlib-gap: contract names a specific lemma absent from Mathlib —
+        # these are upstream-scale tasks, NOT agent-dispatchable (kb-w6c).
+        mathlib_gap = _MATHLIB_GAP_RE.search(proof_grade or '') or _MATHLIB_GAP_RE.search(file_status or '')
+        if mathlib_gap:
+            readiness = 'DESIGN-NEEDED'
+
         rid = row_id(file or '', decl, cls)
 
         # Skip if already exists with a defer_reason (user deferred explicitly)
@@ -119,19 +129,22 @@ def ingest(conn: sqlite3.Connection, dry_run: bool) -> tuple[int, int, int]:
             skipped += 1
             continue
 
+        auto_defer = 'design-pending:mathlib-gap' if mathlib_gap else None
+
         if not dry_run:
             conn.execute("""
                 INSERT INTO lean_work_queue
                     (id, file, decl_name, class, readiness, bd_id,
-                     divergence_flag, project)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     divergence_flag, defer_reason, project)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     readiness = excluded.readiness,
                     divergence_flag = excluded.divergence_flag,
+                    defer_reason = COALESCE(lean_work_queue.defer_reason, excluded.defer_reason),
                     updated_at = datetime('now')
-                WHERE defer_reason IS NULL
+                WHERE lean_work_queue.defer_reason IS NULL OR lean_work_queue.defer_reason = ''
             """, (rid, file or '', decl, cls, readiness, bd_id,
-                  div_flag, PROJECT))
+                  div_flag, auto_defer, PROJECT))
         inserted += 1
 
     if not dry_run:
