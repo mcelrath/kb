@@ -661,9 +661,9 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int = 1, label: str = "r
     t0 = _time.time()
 
     bar = _tqdm(total=total, desc=label, unit="row",
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] ok={postfix[ok]} fail={postfix[fail]}",
-                postfix={"ok": 0, "fail": 0},
                 dynamic_ncols=True) if _tqdm and not dry_run else None
+    if bar:
+        bar.set_postfix(ok=0, fail=0)
 
     def _write_row(fid, summary, tags, embedding):
         """One fast write transaction per row; lock held for microseconds."""
@@ -696,7 +696,7 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int = 1, label: str = "r
                     print(f"[DRY] {fid} ({fproject}): {summary}")
                     ok += 1
                     if bar:
-                        bar.postfix["ok"] = ok
+                        bar.set_postfix(ok=ok, fail=fail)
                         bar.update(1)
                     continue
 
@@ -736,8 +736,7 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int = 1, label: str = "r
                     )
 
                 if bar:
-                    bar.postfix["ok"] = ok
-                    bar.postfix["fail"] = fail
+                    bar.set_postfix(ok=ok, fail=fail)
                     bar.update(1)
 
     except KeyboardInterrupt:
