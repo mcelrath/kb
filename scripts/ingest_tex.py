@@ -195,29 +195,60 @@ def scan_tex_file(path: Path) -> list[dict]:
 def check_python_staleness(kb: KnowledgeBase, annotations: list[dict]) -> list[str]:
     """For each python_ref, check if a python_symbols row exists.
 
+    Ref formats handled:
+      cl44/module.py::func_name   — file + name (exact)
+      cl44/module.py              — file match (suffix)
+      cl44/subpackage/            — directory match (any file under it)
+      func_name                   — bare name (no slash) → name match
+      kb-YYYYMMDD-...             — KB finding ID on a Python line; skip silently
+
     Returns list of warning strings for stale cross-references.
     """
     warnings = []
     for ann in annotations:
         for ref in ann.get("python_refs", []):
-            # ref format: "cl44/module.py::function" or "cl44/module.py"
-            if "::" in ref:
-                file_part, name = ref.split("::", 1)
-            else:
-                file_part, name = ref, None
+            ref = ref.strip()
 
-            # Normalize: strip leading path component to just the relative path
-            # python_symbols.file stores full absolute paths; we do a suffix match
+            # KB finding IDs sometimes appear on % Python: lines as doc notes.
+            if ref.startswith("kb-"):
+                continue
+
             row = None
-            if name:
+            if "::" in ref:
+                # file::name — require both file suffix and name match
+                file_part, name = ref.split("::", 1)
                 row = kb.conn.execute(
                     "SELECT id FROM python_symbols WHERE name = ? AND file LIKE ?",
                     (name.strip(), f"%{file_part.strip()}"),
                 ).fetchone()
+            elif "/" in ref:
+                # File or directory path — no name component
+                if ref.endswith("/"):
+                    # Directory: match any file inside it
+                    row = kb.conn.execute(
+                        "SELECT id FROM python_symbols WHERE file LIKE ?",
+                        (f"%{ref}%",),
+                    ).fetchone()
+                else:
+                    # Specific file: suffix match in python_symbols
+                    row = kb.conn.execute(
+                        "SELECT id FROM python_symbols WHERE file LIKE ?",
+                        (f"%{ref}",),
+                    ).fetchone()
+                    # Fallback: file exists on disk (script with no extractable symbols)
+                    if not row:
+                        from pathlib import Path
+                        candidates = [
+                            Path.home() / "Physics" / "secular-constraints" / ref,
+                            Path.home() / "Physics" / "claude" / ref,
+                        ]
+                        if any(p.exists() for p in candidates):
+                            row = True  # file exists, just has no symbols
             else:
+                # Bare identifier — treat as symbol name
                 row = kb.conn.execute(
-                    "SELECT id FROM python_symbols WHERE file LIKE ?",
-                    (f"%{file_part.strip()}",),
+                    "SELECT id FROM python_symbols WHERE name = ?",
+                    (ref,),
                 ).fetchone()
 
             if not row:
