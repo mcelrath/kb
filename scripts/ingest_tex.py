@@ -225,13 +225,27 @@ def main() -> None:
     else:
         files = list(root.glob("*.tex")) + list((root / "sections").glob("*.tex"))
 
+    try:
+        from tqdm import tqdm as _tqdm
+    except ImportError:
+        _tqdm = None
+
     print(f"Scanning {len(files)} TeX file(s) (dry_run={args.dry_run})", file=sys.stderr)
 
     # Scan all files
     all_annotations: list[dict] = []
-    for fpath in files:
-        anns = scan_tex_file(fpath)
-        all_annotations.extend(anns)
+    file_iter = _tqdm(files, desc="scan", unit="file", dynamic_ncols=True) if _tqdm else files
+    try:
+        for fpath in file_iter:
+            anns = scan_tex_file(fpath)
+            all_annotations.extend(anns)
+    except KeyboardInterrupt:
+        if _tqdm and hasattr(file_iter, 'close'):
+            file_iter.close()
+        print(f"\nInterrupted during scan — {len(all_annotations)} annotations collected")
+        return
+    if _tqdm and hasattr(file_iter, 'close'):
+        file_iter.close()
 
     print(f"Found {len(all_annotations)} annotation block(s)", file=sys.stderr)
 
@@ -255,23 +269,33 @@ def main() -> None:
     # Ingest
     new_count = 0
     updated_count = 0
-    for ann in all_annotations:
-        result = kb.add_tex_annotation(
-            file=ann["file"],
-            line=ann["line"],
-            section_label=ann.get("section_label"),
-            section_title=ann.get("section_title"),
-            python_refs=ann.get("python_refs"),
-            lean_refs=ann.get("lean_refs"),
-            epic_refs=ann.get("epic_refs"),
-            kb_refs=ann.get("kb_refs"),
-            context=ann.get("context"),
-            project=args.project,
-        )
-        if result["is_new"]:
-            new_count += 1
-        else:
-            updated_count += 1
+    ann_iter = _tqdm(all_annotations, desc="ingest", unit="ann", dynamic_ncols=True) if _tqdm else all_annotations
+    try:
+        for ann in ann_iter:
+            result = kb.add_tex_annotation(
+                file=ann["file"],
+                line=ann["line"],
+                section_label=ann.get("section_label"),
+                section_title=ann.get("section_title"),
+                python_refs=ann.get("python_refs"),
+                lean_refs=ann.get("lean_refs"),
+                epic_refs=ann.get("epic_refs"),
+                kb_refs=ann.get("kb_refs"),
+                context=ann.get("context"),
+                project=args.project,
+            )
+            if result["is_new"]:
+                new_count += 1
+            else:
+                updated_count += 1
+    except KeyboardInterrupt:
+        if _tqdm and hasattr(ann_iter, 'close'):
+            ann_iter.close()
+        kb.conn.commit()
+        print(f"\nInterrupted — Inserted: {new_count}  Updated: {updated_count}")
+        return
+    if _tqdm and hasattr(ann_iter, 'close'):
+        ann_iter.close()
 
     print(f"Inserted: {new_count}  Updated: {updated_count}")
 

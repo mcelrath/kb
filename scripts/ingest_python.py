@@ -401,16 +401,30 @@ def main() -> None:
                         continue
                     files.append(py)
 
+    try:
+        from tqdm import tqdm as _tqdm
+    except ImportError:
+        _tqdm = None
+
     print(f"Processing {len(files)} Python files (dry_run={args.dry_run})", file=sys.stderr)
 
     # Collect all symbols across all files
     all_symbols: list[dict[str, Any]] = []
-    for fpath in files:
-        syms = parse_python_file(fpath, root)
-        for s in syms:
-            s["project"] = args.project
-        all_symbols.extend(syms)
+    file_iter = _tqdm(files, desc="parse", unit="file", dynamic_ncols=True) if _tqdm else files
+    try:
+        for fpath in file_iter:
+            syms = parse_python_file(fpath, root)
+            for s in syms:
+                s["project"] = args.project
+            all_symbols.extend(syms)
+    except KeyboardInterrupt:
+        if _tqdm and hasattr(file_iter, 'close'):
+            file_iter.close()
+        print(f"\nInterrupted during parse — {len(all_symbols)} symbols collected so far")
+        return
 
+    if _tqdm and hasattr(file_iter, 'close'):
+        file_iter.close()
     print(f"Found {len(all_symbols)} symbols", file=sys.stderr)
 
     if args.dry_run:
@@ -425,26 +439,36 @@ def main() -> None:
     # Insert symbols
     new_count = 0
     updated_count = 0
-    for s in all_symbols:
-        result = kb.add_python_symbol(
-            name=s["name"],
-            kind=s["kind"],
-            module=s["module"],
-            signature=s["signature"],
-            file=s["file"],
-            line=s["line"],
-            status=s["status"],
-            is_lru_cached=s["is_lru_cached"],
-            frame_hint=s["frame_hint"],
-            docstring_summary=s["docstring_summary"],
-            lean_citations=s["lean_citations"],
-            kb_refs=s["kb_refs"],
-            project=s["project"],
-        )
-        if result["is_new"]:
-            new_count += 1
-        else:
-            updated_count += 1
+    sym_iter = _tqdm(all_symbols, desc="insert", unit="sym", dynamic_ncols=True) if _tqdm else all_symbols
+    try:
+        for s in sym_iter:
+            result = kb.add_python_symbol(
+                name=s["name"],
+                kind=s["kind"],
+                module=s["module"],
+                signature=s["signature"],
+                file=s["file"],
+                line=s["line"],
+                status=s["status"],
+                is_lru_cached=s["is_lru_cached"],
+                frame_hint=s["frame_hint"],
+                docstring_summary=s["docstring_summary"],
+                lean_citations=s["lean_citations"],
+                kb_refs=s["kb_refs"],
+                project=s["project"],
+            )
+            if result["is_new"]:
+                new_count += 1
+            else:
+                updated_count += 1
+    except KeyboardInterrupt:
+        if _tqdm and hasattr(sym_iter, 'close'):
+            sym_iter.close()
+        kb.conn.commit()
+        print(f"\nInterrupted — Inserted: {new_count}  Updated: {updated_count}")
+        return
+    if _tqdm and hasattr(sym_iter, 'close'):
+        sym_iter.close()
 
     # Populate also_in_modules: group by name, update rows where name appears in >1 module
     name_to_entries: dict[str, list[dict[str, Any]]] = {}

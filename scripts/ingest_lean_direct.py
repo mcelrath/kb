@@ -333,6 +333,11 @@ def main():
     from datetime import datetime, timezone
     from kb import KnowledgeBase
 
+    try:
+        from tqdm import tqdm as _tqdm
+    except ImportError:
+        _tqdm = None
+
     kb   = KnowledgeBase()
     conn = kb._theorems.conn
 
@@ -386,19 +391,34 @@ def main():
         print(f"Generating summaries for {len(by_file)} files with {LLM_WORKERS} LLM workers...")
         with ThreadPoolExecutor(max_workers=LLM_WORKERS) as pool:
             futs = {pool.submit(_summarize_group, item): item for item in by_file.items()}
-            done = 0
-            for fut in as_completed(futs):
-                for tid, summary in (fut.result() or []):
-                    if summary:
-                        conn.execute(
-                            "UPDATE lean_theorems SET statement_pure=? WHERE id=?",
-                            (summary, tid)
-                        )
-                        updated += 1
-                done += 1
-                if done % 20 == 0 or done == len(by_file):
-                    conn.commit()
-                    print(f"  files: {done}/{len(by_file)}  updated: {updated}")
+            bar = _tqdm(total=len(by_file), desc="summarize-only", unit="file",
+                        dynamic_ncols=True) if _tqdm else None
+            try:
+                done = 0
+                for fut in as_completed(futs):
+                    for tid, summary in (fut.result() or []):
+                        if summary:
+                            conn.execute(
+                                "UPDATE lean_theorems SET statement_pure=? WHERE id=?",
+                                (summary, tid)
+                            )
+                            updated += 1
+                    done += 1
+                    if bar:
+                        bar.set_postfix(updated=updated)
+                        bar.update(1)
+                    elif done % 20 == 0 or done == len(by_file):
+                        print(f"  files: {done}/{len(by_file)}  updated: {updated}")
+                    if done % 20 == 0:
+                        conn.commit()
+            except KeyboardInterrupt:
+                if bar:
+                    bar.close()
+                conn.commit()
+                print(f"\nInterrupted — summaries written: {updated}")
+                return
+        if bar:
+            bar.close()
         conn.commit()
         print(f"\nDone.  Summaries written: {updated}")
         return
@@ -475,27 +495,40 @@ def main():
         print(f"\nParsing {len(file_args)} files [{project}] with {args.workers} workers...")
         with ProcessPoolExecutor(max_workers=args.workers) as pool:
             futures = {pool.submit(process_file, a): a for a in file_args}
+            bar = _tqdm(total=len(file_args), desc=f"parse [{project}]", unit="file",
+                        dynamic_ncols=True) if _tqdm else None
+            try:
+                for fut in as_completed(futures):
+                    pending.extend(fut.result())
+                    done += 1
 
-            for fut in as_completed(futures):
-                pending.extend(fut.result())
-                done += 1
+                    while len(pending) >= EMBED_BATCH:
+                        batch, pending = pending[:EMBED_BATCH], pending[EMBED_BATCH:]
+                        if args.limit and total >= args.limit:
+                            break
+                        a, s = flush_batch(batch, project)
+                        added += a; skipped += s; total += a + s
 
-                while len(pending) >= EMBED_BATCH:
-                    batch, pending = pending[:EMBED_BATCH], pending[EMBED_BATCH:]
+                    if bar:
+                        bar.set_postfix(added=added, skipped=skipped)
+                        bar.update(1)
+                    elif done % 200 == 0 or done == len(file_args):
+                        print(f"  files: {done}/{len(file_args)}  added: {added}  skipped: {skipped}")
+
                     if args.limit and total >= args.limit:
                         break
-                    a, s = flush_batch(batch, project)
-                    added += a; skipped += s; total += a + s
 
-                if done % 200 == 0 or done == len(file_args):
-                    print(f"  files: {done}/{len(file_args)}  added: {added}  skipped: {skipped}")
-
-                if args.limit and total >= args.limit:
-                    break
-
-            if pending and not (args.limit and total >= args.limit):
-                a, s = flush_batch(pending, project)
-                added += a; skipped += s
+                if pending and not (args.limit and total >= args.limit):
+                    a, s = flush_batch(pending, project)
+                    added += a; skipped += s
+            except KeyboardInterrupt:
+                if bar:
+                    bar.close()
+                conn.commit()
+                print(f"\nInterrupted — Inserted: {added}  Skipped: {skipped}")
+                return
+            if bar:
+                bar.close()
 
     print(f"\nInserted: {added}  Skipped (dup): {skipped}")
 
@@ -517,19 +550,34 @@ def main():
         with ThreadPoolExecutor(max_workers=LLM_WORKERS) as pool:
             futs = {pool.submit(_summarize_group, item): item
                     for item in new_by_file.items()}
-            done = 0
-            for fut in as_completed(futs):
-                for tid, summary in (fut.result() or []):
-                    if summary:
-                        conn.execute(
-                            "UPDATE lean_theorems SET statement_pure=? WHERE id=?",
-                            (summary, tid)
-                        )
-                        summarized += 1
-                done += 1
-                if done % 10 == 0 or done == len(new_by_file):
-                    conn.commit()
-                    print(f"  files: {done}/{len(new_by_file)}  summaries: {summarized}")
+            bar = _tqdm(total=len(new_by_file), desc="summarize", unit="file",
+                        dynamic_ncols=True) if _tqdm else None
+            try:
+                done = 0
+                for fut in as_completed(futs):
+                    for tid, summary in (fut.result() or []):
+                        if summary:
+                            conn.execute(
+                                "UPDATE lean_theorems SET statement_pure=? WHERE id=?",
+                                (summary, tid)
+                            )
+                            summarized += 1
+                    done += 1
+                    if bar:
+                        bar.set_postfix(summaries=summarized)
+                        bar.update(1)
+                    elif done % 10 == 0 or done == len(new_by_file):
+                        print(f"  files: {done}/{len(new_by_file)}  summaries: {summarized}")
+                    if done % 10 == 0:
+                        conn.commit()
+            except KeyboardInterrupt:
+                if bar:
+                    bar.close()
+                conn.commit()
+                print(f"\nInterrupted — Summaries written: {summarized}")
+                return
+        if bar:
+            bar.close()
         conn.commit()
         print(f"Summaries written: {summarized}")
 
