@@ -24,6 +24,23 @@ sys.path.insert(0, str(_HERE.parent))
 from kb import KnowledgeBase, DEFAULT_DB_PATH
 
 
+# Retired symbol names → canonical replacement.
+# These are inserted into python_symbols with status='retired' so check_symbols.py
+# can block attempts to write them in cl44/ source.
+# Sources: cl44/canonical_operators.py comments, CLAUDE.md, tip's T3 test fixture.
+RETIRED_SYMBOLS: dict[str, str] = {
+    # gamma9_48: the old 48-element gamma9 alias; K_48 is the canonical Krein operator
+    "gamma9_48": "K_48",
+    # gamma_9: alias retired per canonical_operators.py line 1115 comment
+    "gamma_9": "K_48",
+    # Old generating-functional names replaced by Z_species/S_eff
+    "partition_function_old": "Z_species",
+    "effective_action": "S_eff",
+    # Old mass matrix names
+    "mass_matrix_old": "mass_matrix",
+    "MtM_old": "mass_matrix",
+}
+
 # Modules considered canonical (exported + blessed)
 CANONICAL_FILES = {
     "canonical_operators.py",
@@ -330,6 +347,30 @@ def parse_python_file(
     return symbols
 
 
+def populate_retired_symbols(kb: KnowledgeBase, project: str, dry_run: bool = False) -> int:
+    """Insert RETIRED_SYMBOLS entries into python_symbols so check_symbols.py can block them."""
+    now = datetime.now().isoformat()
+    inserted = 0
+    for name, redirect_to in RETIRED_SYMBOLS.items():
+        existing = kb.conn.execute(
+            "SELECT id, status FROM python_symbols WHERE name=? AND project=?",
+            (name, project),
+        ).fetchone()
+        if existing and existing[1] == 'retired':
+            continue  # already present
+        sym_id = f"pysym-retired-{name}"
+        if not dry_run:
+            kb.conn.execute("""
+                INSERT OR REPLACE INTO python_symbols
+                  (id, name, kind, module, signature, status, redirect_to, file, line, project, created_at, updated_at)
+                VALUES (?, ?, 'function', 'cl44.__retired__', ?, 'retired', ?, '', 0, ?, ?, ?)
+            """, (sym_id, name, f"def {name}(...):", redirect_to, project, now, now))
+        inserted += 1
+    if not dry_run:
+        kb.conn.commit()
+    return inserted
+
+
 def populate_notations_from_constants(kb: KnowledgeBase, dry_run: bool = False) -> int:
     """Insert GREEK_MEANINGS entries into the notations table."""
     from kb.constants import GREEK_MEANINGS
@@ -536,6 +577,10 @@ def main() -> None:
     if not args.no_notations:
         n = populate_notations_from_constants(kb, dry_run=False)
         print(f"Notations inserted/skipped: {n}")
+
+    # Populate retired symbols
+    r = populate_retired_symbols(kb, project=args.project, dry_run=args.dry_run)
+    print(f"Retired symbols inserted: {r}")
 
 
 if __name__ == "__main__":
