@@ -175,7 +175,23 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str],
         advisories.extend(line for k, line in notation_candidates if k in new_key_set)
 
     # --- findings: search for exact fractions / small constants — project-scoped ---
+    # Rarity gate: skip fractions that appear in >= 5 KB entries (arithmetic furniture
+    # like '1/2', '1/3', '3/4' fire constantly and carry no signal).
+    _FRAC_RARITY_THRESHOLD = 5
+    seen_fids: set[str] = set()  # dedup across frac iterations
     for frac in fracs[:5]:
+        if project:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM findings WHERE content LIKE ? AND project=?",
+                (f'%{frac}%', project),
+            ).fetchone()[0]
+        else:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM findings WHERE content LIKE ?",
+                (f'%{frac}%',),
+            ).fetchone()[0]
+        if count >= _FRAC_RARITY_THRESHOLD:
+            continue  # too common — arithmetic furniture, not a notable quantity
         if project:
             rows3 = conn.execute(
                 "SELECT id, summary FROM findings WHERE content LIKE ? AND project=? LIMIT 2",
@@ -187,8 +203,13 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str],
                 (f'%{frac}%',),
             ).fetchall()
         for fid, summary in rows3:
-            short_id = fid[:20] if fid else '?'
-            preview = (summary or '?')[:80]
+            if not fid or fid in seen_fids:
+                continue
+            if not summary or not summary.strip():
+                continue  # unactionable — empty summary
+            seen_fids.add(fid)
+            short_id = fid[:20]
+            preview = summary.strip()[:80]
             advisories.append(
                 f'[ALREADY-CODIFIED: value {frac} in KB entry {short_id}: {preview}]'
             )
