@@ -468,12 +468,14 @@ def main() -> None:
             print(f"  ... and {len(all_symbols) - 20} more")
         return
 
-    # Insert symbols
+    # Insert symbols — commit every COMMIT_EVERY rows so the write lock is
+    # released frequently enough for concurrent kb add / MCP operations.
+    COMMIT_EVERY = 50
     new_count = 0
     updated_count = 0
     sym_iter = _tqdm(all_symbols, desc="insert", unit="sym", dynamic_ncols=True) if _tqdm else all_symbols
     try:
-        for s in sym_iter:
+        for i, s in enumerate(sym_iter, 1):
             result = kb.add_python_symbol(
                 name=s["name"],
                 kind=s["kind"],
@@ -493,6 +495,8 @@ def main() -> None:
                 new_count += 1
             else:
                 updated_count += 1
+            if i % COMMIT_EVERY == 0:
+                kb.conn.commit()
     except KeyboardInterrupt:
         if _tqdm and hasattr(sym_iter, 'close'):
             sym_iter.close()

@@ -313,11 +313,12 @@ def main() -> None:
         return
 
     # Ingest
+    COMMIT_EVERY = 25
     new_count = 0
     updated_count = 0
     ann_iter = _tqdm(all_annotations, desc="ingest", unit="ann", dynamic_ncols=True) if _tqdm else all_annotations
     try:
-        for ann in ann_iter:
+        for i, ann in enumerate(ann_iter, 1):
             result = kb.add_tex_annotation(
                 file=ann["file"],
                 line=ann["line"],
@@ -334,6 +335,8 @@ def main() -> None:
                 new_count += 1
             else:
                 updated_count += 1
+            if i % COMMIT_EVERY == 0:
+                kb.conn.commit()
     except KeyboardInterrupt:
         if _tqdm and hasattr(ann_iter, 'close'):
             ann_iter.close()

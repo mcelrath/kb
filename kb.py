@@ -1084,7 +1084,7 @@ def main():
     refresh_parser.add_argument("-n", "--limit", type=int, default=0,
         help="Max rows to process (0 = no limit)")
     refresh_parser.add_argument("--dry-run", action="store_true")
-    refresh_parser.add_argument("--commit-every", type=int, default=20)
+    refresh_parser.add_argument("--commit-every", type=int, default=5)
     refresh_parser.add_argument("--theorems", action="store_true",
         help="Also backfill statement_pure for lean theorems")
     refresh_parser.add_argument("--theorem-workers", type=int, default=8,

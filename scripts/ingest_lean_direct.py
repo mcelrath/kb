@@ -416,7 +416,7 @@ def main():
                         bar.update(1)
                     elif done % 20 == 0 or done == len(by_file):
                         print(f"  files: {done}/{len(by_file)}  updated: {updated}")
-                    if done % 20 == 0:
+                    if done % 5 == 0:
                         conn.commit()
             except KeyboardInterrupt:
                 if bar:
@@ -575,7 +575,7 @@ def main():
                         bar.update(1)
                     elif done % 10 == 0 or done == len(new_by_file):
                         print(f"  files: {done}/{len(new_by_file)}  summaries: {summarized}")
-                    if done % 10 == 0:
+                    if done % 5 == 0:
                         conn.commit()
             except KeyboardInterrupt:
                 if bar:
