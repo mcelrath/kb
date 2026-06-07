@@ -18,6 +18,8 @@ import re
 import sqlite3
 import warnings
 
+from ._seen import filter_unseen
+
 _SCAN_EXTENSIONS = {
     '.lean', '.py', '.tex', '.md', '.txt', '.output', '.json',
     '',  # extensionless (bridge output, etc.)
@@ -124,6 +126,8 @@ def query_symbols(
         f'FROM python_symbols WHERE name IN ({ph}) LIMIT 40',
         tokens,
     ).fetchall()
+    # Collect CANONICAL candidates for cross-hook dedup; RETIRED always surfaces
+    canonical_candidates: list[tuple[str, str]] = []  # (dedup_key, advisory_line)
     for name, kind, status, module, fpath, line, redirect_to in rows:
         key = f'sym:{name}'
         if key in seen:
@@ -132,10 +136,17 @@ def query_symbols(
         mod_str = f'{module}.{name}' if module else name
         loc = f'{os.path.basename(fpath or "")}:{line}' if fpath else '?'
         if status == 'canonical':
-            advisories.append(f'[CANONICAL: {mod_str} ({loc})]')
+            canonical_candidates.append((key, f'[CANONICAL: {mod_str} ({loc})]'))
         elif status == 'retired':
+            # RETIRED is never deduplicated — always a correctness hazard
             redir = f' → {redirect_to}' if redirect_to else ''
             advisories.append(f'[RETIRED: {name}{redir}]')
+
+    # Cross-hook dedup for CANONICAL hits
+    if canonical_candidates:
+        new_keys = filter_unseen([k for k, _ in canonical_candidates])
+        new_key_set = set(new_keys)
+        advisories.extend(line for k, line in canonical_candidates if k in new_key_set)
 
     # notations — skip generic-fallback rows
     rows2 = conn.execute(
@@ -145,12 +156,18 @@ def query_symbols(
         f"LIMIT 10",
         tokens,
     ).fetchall()
+    notation_candidates: list[tuple[str, str]] = []
     for sym, meaning in rows2:
-        key = f'not:{sym}'
+        key = f'notation:{sym}'
         if key in seen:
             continue
         seen.add(key)
-        advisories.append(f'[NOTATION: {sym} = {(meaning or "?")[:60]}]')
+        notation_candidates.append((key, f'[NOTATION: {sym} = {(meaning or "?")[:60]}]'))
+
+    if notation_candidates:
+        new_keys = filter_unseen([k for k, _ in notation_candidates])
+        new_key_set = set(new_keys)
+        advisories.extend(line for k, line in notation_candidates if k in new_key_set)
 
     # findings with matching fractions
     for frac in fracs[:3]:

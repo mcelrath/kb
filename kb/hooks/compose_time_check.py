@@ -12,6 +12,8 @@ import os
 import re
 import sqlite3
 
+from ._seen import filter_unseen
+
 
 def extract_candidate_tokens(text: str) -> list[str]:
     """Extract candidate symbol/quantity tokens from prompt text."""
@@ -93,6 +95,7 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str]) -> l
         f'FROM python_symbols WHERE name IN ({placeholders}) LIMIT 20',
         tokens,
     ).fetchall()
+    canonical_candidates: list[tuple[str, str]] = []
     for name, kind, status, module, fpath, line, redirect_to in rows:
         if name in seen_names:
             continue
@@ -100,18 +103,23 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str]) -> l
         mod_str = f'{module}.{name}' if module else name
         loc = f'{os.path.basename(fpath or "")}:{line}' if fpath else '?'
         if status == 'canonical':
-            advisories.append(
-                f'[ALREADY-CODIFIED: {mod_str} ({loc}) — canonical, status=canonical]'
+            canonical_candidates.append(
+                (f'sym:{name}', f'[ALREADY-CODIFIED: {mod_str} ({loc}) — canonical]')
             )
         elif status == 'public':
+            # public is not deduplicated — not in the sym: namespace
             advisories.append(
                 f'[ALREADY-CODIFIED: {mod_str} ({loc}) — public function/constant]'
             )
         elif status == 'retired':
+            # RETIRED never deduplicated
             redir = f' → use {redirect_to}' if redirect_to else ''
-            advisories.append(
-                f'[ALREADY-CODIFIED: {name} RETIRED{redir}]'
-            )
+            advisories.append(f'[ALREADY-CODIFIED: {name} RETIRED{redir}]')
+
+    if canonical_candidates:
+        new_keys = filter_unseen([k for k, _ in canonical_candidates])
+        new_key_set = set(new_keys)
+        advisories.extend(line for k, line in canonical_candidates if k in new_key_set)
 
     # --- notations exact symbol match (skip generic-fallback rows) ---
     rows2 = conn.execute(
@@ -120,11 +128,19 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str]) -> l
         f"LIMIT 10",
         tokens,
     ).fetchall()
+    notation_candidates: list[tuple[str, str]] = []
     for sym, meaning in rows2:
         if sym in seen_names:
             continue
         seen_names.add(sym)
-        advisories.append(f'[ALREADY-CODIFIED: notation {sym} = {(meaning or "?")[:60]}]')
+        notation_candidates.append(
+            (f'notation:{sym}', f'[ALREADY-CODIFIED: notation {sym} = {(meaning or "?")[:60]}]')
+        )
+
+    if notation_candidates:
+        new_keys = filter_unseen([k for k, _ in notation_candidates])
+        new_key_set = set(new_keys)
+        advisories.extend(line for k, line in notation_candidates if k in new_key_set)
 
     # --- findings: search for exact fractions / small constants ---
     for frac in fracs[:5]:
@@ -182,8 +198,13 @@ def main() -> None:
         fracs = extract_fractions(prompt_text)
         advisories = query_db(conn, tokens, fracs)
         conn.close()
-        for line in advisories:
-            print(line, file=sys.stderr)
+        if advisories:
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "additionalContext": "\n".join(advisories),
+                }
+            }))
     except Exception:
         pass  # never block on failure
 

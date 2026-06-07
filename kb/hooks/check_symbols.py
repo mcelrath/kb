@@ -12,6 +12,8 @@ import sqlite3
 import os
 import re
 
+from ._seen import filter_unseen
+
 d = json.load(sys.stdin)
 ti = d.get('tool_input', {})
 file_path = ti.get('file_path', '')
@@ -40,7 +42,7 @@ if not os.path.exists(db):
 try:
     conn = sqlite3.connect(db, timeout=5)
     block = False
-    canonical_lines = []
+    canonical_candidates: list[tuple[str, str]] = []  # (dedup_key, advisory_line)
     for name in set(names):
         rows = conn.execute(
             'SELECT status, module, file, line, redirect_to FROM python_symbols WHERE name=? LIMIT 3',
@@ -48,14 +50,22 @@ try:
         ).fetchall()
         for status, module, fpath, line, redirect_to in rows:
             if status == 'retired':
-                # PreToolUse blocking: stderr is shown as hook feedback on exit 2
+                # PreToolUse blocking: stderr is shown as hook feedback on exit 2; never deduplicated
                 print(f'[RETIRED: {name} → use {redirect_to or "?"} instead]', file=sys.stderr)
                 block = True
             elif status == 'canonical':
-                canonical_lines.append(
-                    f'[CANONICAL: {module}.{name} ({fpath}:{line}) — is this what you are implementing?]'
-                )
+                canonical_candidates.append((
+                    f'sym:{name}',
+                    f'[CANONICAL: {module}.{name} ({fpath}:{line}) — is this what you are implementing?]',
+                ))
     conn.close()
+
+    # Cross-hook dedup: suppress CANONICAL advisories already surfaced this session
+    if canonical_candidates and not block:
+        new_keys = set(filter_unseen([k for k, _ in canonical_candidates]))
+        canonical_lines = [ln for k, ln in canonical_candidates if k in new_keys]
+    else:
+        canonical_lines = [ln for _, ln in canonical_candidates]
 
     if canonical_lines and not block:
         # Advisory on exit 0: must use stdout JSON — stderr is discarded by harness
