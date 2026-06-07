@@ -43,7 +43,10 @@ CREATE TABLE IF NOT EXISTS lean_contracts (
     updated_at TEXT NOT NULL,
     file_status TEXT,         -- T1: -- LEAN-STATUS: <marker> in module docstring
     contract_awaiting TEXT,   -- T2: -- CONTRACT: <description> above decl
-    discharge_target TEXT     -- emission: -- DISCHARGES: <FullyQualified.Name> above decl
+    discharge_target TEXT,    -- emission: -- DISCHARGES: <FullyQualified.Name> above decl
+    proof_grade TEXT,         -- auto-derived: sorry-bearing|axiom-bound|native-decide|clean-deep
+    data_blocked_on TEXT,     -- nullable bd-id from [blocked-on: bd-id] in LEAN-STATUS; suppresses discharge proposals
+    operator_version TEXT     -- from -- OPERATOR-VERSION: header; staleness checkable vs certified_data
 );
 CREATE INDEX IF NOT EXISTS idx_lc_file ON lean_contracts(file);
 CREATE INDEX IF NOT EXISTS idx_lc_project ON lean_contracts(project);
@@ -60,13 +63,18 @@ _MIGRATE_COLS = [
     ('file_status', 'TEXT'),
     ('contract_awaiting', 'TEXT'),
     ('discharge_target', 'TEXT'),
+    ('proof_grade', 'TEXT'),
+    ('data_blocked_on', 'TEXT'),
+    ('operator_version', 'TEXT'),
 ]
 
 # Registered file_status vocabulary (enum).
-# open-contract    = real theorem statements, sorries pending discharge; safe to route to a discharge agent.
-# contract-skeleton = statements are PLACEHOLDERS (SublatticeLChain lesson); needs statement repair first,
-#                     route to the owning bd-id — NEVER to a discharge agent.
-FILE_STATUS_ENUM: frozenset[str] = frozenset({'open-contract', 'contract-skeleton'})
+# open-contract      = real theorem statements, sorries pending discharge; safe to route to a discharge agent.
+# contract-skeleton  = statements are PLACEHOLDERS (SublatticeLChain lesson); needs statement repair first,
+#                      route to the owning bd-id — NEVER to a discharge agent.
+# statement-suspect  = lean-audit flagged vacuity (rfl-tautology, ∃_True, false-∀); route to REVIEW,
+#                      not discharge or repair.
+FILE_STATUS_ENUM: frozenset[str] = frozenset({'open-contract', 'contract-skeleton', 'statement-suspect'})
 
 
 # --- Source parsing ----------------------------------------------------------
@@ -75,18 +83,24 @@ _LEAN_STATUS_RE = re.compile(r'--\s*LEAN-STATUS:\s*(.+)')
 _CONTRACT_RE = re.compile(r'--\s*CONTRACT:\s*(.+)')
 _DISCHARGES_RE = re.compile(r'--\s*DISCHARGES:\s*(.+)')
 _SORRY_CONTRACT_INLINE_RE = re.compile(r'--\s*SORRY-CONTRACT:\s*(.+)')
+_OPERATOR_VERSION_RE = re.compile(r'--\s*OPERATOR-VERSION:\s*(.+)')
 
 # Capture just the status token before the optional "(bd-id)" suffix.
 _FILE_STATUS_TOKEN_RE = re.compile(r'^(\S+)')
+# Extract [blocked-on: bd-id] from extended LEAN-STATUS lines.
+_BLOCKED_ON_RE = re.compile(r'\[blocked-on:\s*([^\]]+)\]')
 
 
 def _parse_file_status(source: str, fpath: str = '') -> str | None:
-    """Scan first 60 lines for -- LEAN-STATUS: marker. Validates against FILE_STATUS_ENUM."""
+    """Scan first 60 lines for -- LEAN-STATUS: marker. Validates against FILE_STATUS_ENUM.
+
+    Returns the full raw text after LEAN-STATUS: (including any [blocked-on:...] suffix).
+    Use _parse_data_blocked_on() to extract the blocked-on bd-id separately.
+    """
     for line in source.splitlines()[:60]:
         m = _LEAN_STATUS_RE.search(line)
         if m:
             raw = m.group(1).strip()
-            # Extract the status token (first word before optional "(bd-id)")
             tok_m = _FILE_STATUS_TOKEN_RE.match(raw)
             token = tok_m.group(1) if tok_m else raw
             if token not in FILE_STATUS_ENUM:
@@ -97,6 +111,41 @@ def _parse_file_status(source: str, fpath: str = '') -> str | None:
                 )
             return raw
     return None
+
+
+def _parse_data_blocked_on(file_status_raw: str | None) -> str | None:
+    """Extract bd-id from [blocked-on: bd-id] in a LEAN-STATUS value.
+
+    Supports extended format: '-- LEAN-STATUS: open-contract (owner-bd) [blocked-on: data-bd]'
+    """
+    if not file_status_raw:
+        return None
+    m = _BLOCKED_ON_RE.search(file_status_raw)
+    return m.group(1).strip() if m else None
+
+
+def _parse_operator_version(source: str) -> str | None:
+    """Scan first 60 lines for -- OPERATOR-VERSION: marker."""
+    for line in source.splitlines()[:60]:
+        m = _OPERATOR_VERSION_RE.search(line)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
+# proof_grade derivation from lean-audit kind field.
+# Priority (descending effort needed to discharge):
+#   sorry-bearing > axiom-bound > native-decide > clean-deep
+_KIND_TO_PROOF_GRADE: dict[str, str] = {
+    'sorry': 'sorry-bearing',
+    'true_stub': 'sorry-bearing',   # := True / trivial body — same as sorry for routing purposes
+    'axiom': 'axiom-bound',
+    'native_decide': 'native-decide',
+}
+
+
+def _proof_grade_from_kind(kind: str) -> str:
+    return _KIND_TO_PROOF_GRADE.get(kind, 'sorry-bearing')
 
 
 def _parse_decl_annotation(source: str, sorry_line: int,
@@ -228,8 +277,9 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
     # moved to archive/, or deleted — all stale.
     live_ids: set[str] = set()
     for fpath, fdata in audit.items():
-        sorry_lines = fdata.get('sorry_lines', []) + fdata.get('true_stub_lines', [])
-        for entry in sorry_lines:
+        all_live = (fdata.get('sorry_lines', []) + fdata.get('true_stub_lines', [])
+                    + fdata.get('axiom_lines', []))
+        for entry in all_live:
             lineno = entry.get('line', 0)
             live_ids.add(f'lc-{Path(fpath).stem}-{lineno}')
 
@@ -249,7 +299,11 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
 
     for fpath, fdata in audit.items():
         sorry_lines = fdata.get('sorry_lines', []) + fdata.get('true_stub_lines', [])
-        if not sorry_lines:
+        axiom_lines = fdata.get('axiom_lines', [])
+        # Build set of vacuity-suspect line numbers for auto-upgrade to statement-suspect
+        vacuity_lines: set[int] = {e.get('line', 0) for e in fdata.get('vacuity_suspects', [])}
+        all_entries = sorry_lines + [dict(e, _axiom=True) for e in axiom_lines]
+        if not all_entries:
             continue
 
         try:
@@ -258,11 +312,22 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
             continue
 
         file_status = _parse_file_status(source, fpath=fpath)
+        # Auto-promote file_status to statement-suspect if lean-audit flagged vacuity suspects
+        # and no explicit LEAN-STATUS overrides it (vacuity_suspects on a file with no marker).
+        if vacuity_lines and not file_status:
+            file_status = 'statement-suspect'
+        data_blocked_on = _parse_data_blocked_on(file_status)
+        operator_version = _parse_operator_version(source)
 
-        for entry in sorry_lines:
+        for entry in all_entries:
             lineno = entry.get('line', 0)
             sorry_text = entry.get('text', '')
-            kind = entry.get('kind', 'sorry')
+            is_axiom = entry.pop('_axiom', False)
+            kind = 'axiom' if is_axiom else entry.get('kind', 'sorry')
+            proof_grade = _proof_grade_from_kind(kind)
+            # Per-entry vacuity check: axiom on a vacuity-suspect line → statement-suspect grade
+            if lineno in vacuity_lines and proof_grade == 'axiom-bound':
+                proof_grade = 'sorry-bearing'  # requires statement repair before discharge
 
             decl_name, statement = _extract_decl_at_line(source, lineno)
             namespace = _current_namespace(source, lineno)
@@ -280,14 +345,18 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
 
             # Check if already present and all fields unchanged
             existing = kb.conn.execute(
-                'SELECT sorry_text, file_status, contract_awaiting, discharge_target '
+                'SELECT sorry_text, file_status, contract_awaiting, discharge_target, '
+                'proof_grade, data_blocked_on, operator_version '
                 'FROM lean_contracts WHERE id=?',
                 (contract_id,),
             ).fetchone()
             if existing and existing[0] == sorry_text \
                     and existing[1] == file_status \
                     and existing[2] == contract_awaiting \
-                    and existing[3] == discharge_target:
+                    and existing[3] == discharge_target \
+                    and existing[4] == proof_grade \
+                    and existing[5] == data_blocked_on \
+                    and existing[6] == operator_version:
                 skipped += 1
                 continue
 
@@ -299,6 +368,10 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
                     ann += f' [DISCHARGES: {discharge_target}]'
                 elif contract_awaiting:
                     ann += f' [CONTRACT: {contract_awaiting[:60]}]'
+                if proof_grade:
+                    ann += f' [{proof_grade}]'
+                if data_blocked_on:
+                    ann += f' [blocked-on: {data_blocked_on}]'
                 print(f'  {fpath}:{lineno} [{kind}] {decl_name or "?"}{ann} — {(statement or "")[:60]}')
                 inserted += 1
                 continue
@@ -307,12 +380,14 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
                 INSERT OR REPLACE INTO lean_contracts
                   (id, file, line, decl_name, namespace, statement, sorry_text,
                    kind, project, indexed_at_commit, created_at, updated_at,
-                   file_status, contract_awaiting, discharge_target)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   file_status, contract_awaiting, discharge_target,
+                   proof_grade, data_blocked_on, operator_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 contract_id, fpath, lineno, decl_name, namespace,
                 statement, sorry_text, kind, project, commit, now, now,
                 file_status, contract_awaiting, discharge_target,
+                proof_grade, data_blocked_on, operator_version,
             ))
             inserted += 1
 

@@ -263,13 +263,14 @@ def query_contracts(conn: sqlite3.Connection, tokens: list[str],
     # Track how many distinct tokens match each contract; require >= 2 to surface.
     # A single common token ("mass", "spectrum") matches too many unrelated contracts.
     contract_hits: dict[str, int] = {}       # cid -> distinct token hit count
-    contract_meta: dict[str, tuple] = {}     # cid -> (fpath, line, decl_name, file_status, discharge_target, contract_awaiting)
+    contract_meta: dict[str, tuple] = {}     # cid -> (fpath, line, decl_name, file_status, discharge_target, contract_awaiting, proof_grade, data_blocked_on)
     for tok in all_tokens:
         if len(tok) < 5:
             continue
         if project:
             rows = conn.execute(
-                "SELECT id, file, line, decl_name, file_status, discharge_target, contract_awaiting "
+                "SELECT id, file, line, decl_name, file_status, discharge_target, contract_awaiting, "
+                "proof_grade, data_blocked_on "
                 "FROM lean_contracts "
                 "WHERE (decl_name LIKE ? OR statement LIKE ?) AND project=? "
                 "AND file NOT LIKE '%/archive/%' LIMIT 3",
@@ -277,30 +278,38 @@ def query_contracts(conn: sqlite3.Connection, tokens: list[str],
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, file, line, decl_name, file_status, discharge_target, contract_awaiting "
+                "SELECT id, file, line, decl_name, file_status, discharge_target, contract_awaiting, "
+                "proof_grade, data_blocked_on "
                 "FROM lean_contracts "
                 "WHERE (decl_name LIKE ? OR statement LIKE ?) "
                 "AND file NOT LIKE '%/archive/%' LIMIT 3",
                 (f'%{tok}%', f'%{tok}%'),
             ).fetchall()
-        for cid, fpath, line, decl_name, file_status, discharge_target, contract_awaiting in rows:
+        for cid, fpath, line, decl_name, file_status, discharge_target, contract_awaiting, proof_grade, data_blocked_on in rows:
             contract_hits[cid] = contract_hits.get(cid, 0) + 1
             if cid not in contract_meta:
-                contract_meta[cid] = (fpath, line, decl_name, file_status, discharge_target, contract_awaiting)
+                contract_meta[cid] = (fpath, line, decl_name, file_status, discharge_target, contract_awaiting, proof_grade, data_blocked_on)
 
     # Only surface contracts with >= 2 distinct token hits (noise filter)
     contract_candidates: list[tuple[str, str]] = []
     for cid, hits in contract_hits.items():
         if hits < 2:
             continue
-        fpath, line, decl_name, file_status, discharge_target, contract_awaiting = contract_meta[cid]
+        fpath, line, decl_name, file_status, discharge_target, contract_awaiting, proof_grade, data_blocked_on = contract_meta[cid]
         basename = os.path.basename(fpath or '')
         name_str = decl_name or '?'
-        # Build suffix: DISCHARGES takes priority over CONTRACT, then file_status.
+        # Build suffix. Priority order:
+        #   1. data_blocked_on: suppress discharge; show blocked-on bd-id
+        #   2. DISCHARGES target
+        #   3. CONTRACT awaiting
+        #   4. file_status token
         # file_status semantics:
-        #   open-contract    → statements are trustworthy; discharge work is appropriate
-        #   contract-skeleton → statements are PLACEHOLDERS; route to owning bd-id, NOT a discharge agent
-        if discharge_target:
+        #   open-contract      → statements trustworthy; discharge is appropriate (if not data-blocked)
+        #   contract-skeleton  → PLACEHOLDERS; repair statements first, route to owning bd-id
+        #   statement-suspect  → lean-audit vacuity flag; route to REVIEW, not discharge or repair
+        if data_blocked_on:
+            suffix = f' | DATA-BLOCKED (no discharge until {data_blocked_on} lands; do NOT route to prover)'
+        elif discharge_target:
             suffix = f' | DISCHARGES: {discharge_target}'
         elif contract_awaiting:
             suffix = f' | CONTRACT: {contract_awaiting[:70]}'
@@ -308,6 +317,8 @@ def query_contracts(conn: sqlite3.Connection, tokens: list[str],
             fs_token = file_status.split()[0] if file_status else ''
             if fs_token == 'contract-skeleton':
                 suffix = f' | SKELETON (statements are placeholders — repair statements first, do NOT attempt discharge): {file_status[:60]}'
+            elif fs_token == 'statement-suspect':
+                suffix = f' | SUSPECT (lean-audit flagged vacuity — route to REVIEW, not discharge): {file_status[:60]}'
             else:
                 suffix = f' | CONTRACT-FILE: {file_status[:60]}'
         else:
