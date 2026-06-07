@@ -260,37 +260,45 @@ def query_contracts(conn: sqlite3.Connection, tokens: list[str],
     except Exception:
         return []
 
-    advisories = []
-    seen: set[str] = set()
-    contract_candidates: list[tuple[str, str]] = []
-    # Look for tokens in decl_name (exact component match) or statement (LIKE)
+    # Track how many distinct tokens match each contract; require >= 2 to surface.
+    # A single common token ("mass", "spectrum") matches too many unrelated contracts.
+    contract_hits: dict[str, int] = {}       # cid -> distinct token hit count
+    contract_meta: dict[str, tuple] = {}     # cid -> (fpath, line, decl_name)
     for tok in all_tokens:
         if len(tok) < 5:
             continue
         if project:
             rows = conn.execute(
-                "SELECT id, file, line, decl_name, statement FROM lean_contracts "
+                "SELECT id, file, line, decl_name FROM lean_contracts "
                 "WHERE (decl_name LIKE ? OR statement LIKE ?) AND project=? "
                 "AND file NOT LIKE '%/archive/%' LIMIT 3",
                 (f'%{tok}%', f'%{tok}%', project),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, file, line, decl_name, statement FROM lean_contracts "
+                "SELECT id, file, line, decl_name FROM lean_contracts "
                 "WHERE (decl_name LIKE ? OR statement LIKE ?) "
                 "AND file NOT LIKE '%/archive/%' LIMIT 3",
                 (f'%{tok}%', f'%{tok}%'),
             ).fetchall()
-        for cid, fpath, line, decl_name, statement in rows:
-            if cid in seen:
-                continue
-            seen.add(cid)
-            basename = os.path.basename(fpath or '')
-            name_str = decl_name or '?'
-            contract_candidates.append(
-                (f'lc:{cid}', f'[SORRY-CONTRACT WAITING: {basename}:{line} — {name_str}]')
-            )
+        for cid, fpath, line, decl_name in rows:
+            contract_hits[cid] = contract_hits.get(cid, 0) + 1
+            if cid not in contract_meta:
+                contract_meta[cid] = (fpath, line, decl_name)
 
+    # Only surface contracts with >= 2 distinct token hits (noise filter)
+    contract_candidates: list[tuple[str, str]] = []
+    for cid, hits in contract_hits.items():
+        if hits < 2:
+            continue
+        fpath, line, decl_name = contract_meta[cid]
+        basename = os.path.basename(fpath or '')
+        name_str = decl_name or '?'
+        contract_candidates.append(
+            (f'lc:{cid}', f'[SORRY-CONTRACT WAITING: {basename}:{line} — {name_str}]')
+        )
+
+    advisories: list[str] = []
     if contract_candidates:
         new_keys = set(filter_unseen([k for k, _ in contract_candidates]))
         advisories.extend(line for k, line in contract_candidates if k in new_keys)

@@ -155,27 +155,17 @@ def query_symbols(
             f'FROM python_symbols WHERE name IN ({ph}) LIMIT 40',
             tokens,
         ).fetchall()
-    # Collect CANONICAL candidates for cross-hook dedup; RETIRED always surfaces
-    canonical_candidates: list[tuple[str, str]] = []  # (dedup_key, advisory_line)
+    # On Read: only surface RETIRED (correctness hazard). CANONICAL is suppressed —
+    # reading a file is research; the duplication risk is at Edit/Write time,
+    # which compose_time_check covers at dispatch.
     for name, kind, status, module, fpath, line, redirect_to in rows:
         key = f'sym:{name}'
         if key in seen:
             continue
         seen.add(key)
-        mod_str = f'{module}.{name}' if module else name
-        loc = f'{os.path.basename(fpath or "")}:{line}' if fpath else '?'
-        if status == 'canonical':
-            canonical_candidates.append((key, f'[CANONICAL: {mod_str} ({loc})]'))
-        elif status == 'retired':
-            # RETIRED is never deduplicated — always a correctness hazard
+        if status == 'retired':
             redir = f' → {redirect_to}' if redirect_to else ''
             advisories.append(f'[RETIRED: {name}{redir}]')
-
-    # Cross-hook dedup for CANONICAL hits
-    if canonical_candidates:
-        new_keys = filter_unseen([k for k, _ in canonical_candidates])
-        new_key_set = set(new_keys)
-        advisories.extend(line for k, line in canonical_candidates if k in new_key_set)
 
     # notations — skip generic-fallback rows; project-scoped
     _not_base = (
