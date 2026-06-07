@@ -473,6 +473,27 @@ def query_structural_facts(conn: sqlite3.Connection, text: str) -> list[str]:
     return advisories[:6]
 
 
+_PROOF_VOCAB_RE = re.compile(
+    r'\b(prove|theorem|lemma|sorry|discharge|lean.prover|\.lean\b|proof_by|apply\s+Lean|'
+    r'lean\s+proof|sorry.contract|tactic|mathlib)\b',
+    re.IGNORECASE,
+)
+
+
+def query_route_to_tip(tool_name: str, ti: dict, prompt_text: str) -> list[str]:
+    """Advisory: if non-lean-prover agent dispatch contains proof vocabulary, route to tip."""
+    if tool_name != 'Agent':
+        return []
+    subagent_type = ti.get('subagent_type', '') or ''
+    if 'lean' in subagent_type.lower():
+        return []  # already going to a lean agent
+    if not _PROOF_VOCAB_RE.search(prompt_text):
+        return []
+    return ['[ROUTE-TO-TIP: dispatch contains proof-writing vocabulary; tip owns proof work. '
+            'File a routing-deposit in lean_work_queue instead of implementing inline. '
+            'If tip is offline, file a bd task with class=proof-work.]']
+
+
 def main() -> None:
     data = json.load(sys.stdin)
     tool_name = data.get('tool_name', '')
@@ -516,6 +537,7 @@ def main() -> None:
         advisories += query_contracts(conn, tokens, project=project, raw_text=prompt_text)
         advisories += query_structural_facts(conn, prompt_text)
         conn.close()
+        advisories += query_route_to_tip(tool_name, ti, prompt_text)
         if advisories:
             print(json.dumps({
                 "hookSpecificOutput": {

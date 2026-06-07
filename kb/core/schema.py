@@ -317,6 +317,38 @@ SCHEMA_SQL = """
     CREATE INDEX IF NOT EXISTS idx_structural_facts_rhs ON structural_facts(rhs_operator);
     CREATE INDEX IF NOT EXISTS idx_structural_facts_type ON structural_facts(relation_type);
     CREATE INDEX IF NOT EXISTS idx_structural_facts_lhs_rhs ON structural_facts(lhs_operator, rhs_operator);
+
+    -- Proof work queue: tracks unblocked Lean tasks so tip cannot stop silently.
+    -- Rows inserted by: bd_close_reingest (cleared-contract), ingest_lean_work_queue.py
+    -- (bulk bootstrap), compose_time_check (routing-deposit), and manually.
+    -- divergence_flag=1: row's spec contradicts current certified_data/registry state —
+    -- auto-forced to DESIGN-NEEDED, must be reported to archie before touching.
+    CREATE TABLE IF NOT EXISTS lean_work_queue (
+        id TEXT PRIMARY KEY,
+        file TEXT NOT NULL,
+        decl_name TEXT,
+        class TEXT NOT NULL CHECK(class IN (
+            'cleared-contract','docstring-pass','discharge-pad',
+            'statement-suspect','routing-deposit','agent-returns-verify','review-class'
+        )),
+        readiness TEXT NOT NULL DEFAULT 'EXECUTE-READY'
+            CHECK(readiness IN ('EXECUTE-READY','DESIGN-NEEDED')),
+        bd_id TEXT,
+        defer_reason TEXT,
+        defer_detail TEXT,
+        provenance_grade TEXT,
+        agent_id TEXT,
+        bead_date TEXT,
+        divergence_flag INTEGER NOT NULL DEFAULT 0,
+        project TEXT NOT NULL DEFAULT 'algebraic-genesis',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_lwq_file ON lean_work_queue(file);
+    CREATE INDEX IF NOT EXISTS idx_lwq_class ON lean_work_queue(class);
+    CREATE INDEX IF NOT EXISTS idx_lwq_defer ON lean_work_queue(defer_reason);
+    CREATE INDEX IF NOT EXISTS idx_lwq_readiness ON lean_work_queue(readiness);
+    CREATE INDEX IF NOT EXISTS idx_lwq_divergence ON lean_work_queue(divergence_flag);
 """
 
 
@@ -414,6 +446,39 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
             CREATE INDEX IF NOT EXISTS idx_structural_facts_type ON structural_facts(relation_type);
             CREATE INDEX IF NOT EXISTS idx_structural_facts_lhs_rhs
                 ON structural_facts(lhs_operator, rhs_operator);
+        """)
+
+    # Schema migration: lean_work_queue table (added 2026-06-07)
+    try:
+        _ = conn.execute("SELECT id FROM lean_work_queue LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS lean_work_queue (
+                id TEXT PRIMARY KEY,
+                file TEXT NOT NULL,
+                decl_name TEXT,
+                class TEXT NOT NULL CHECK(class IN (
+                    'cleared-contract','docstring-pass','discharge-pad',
+                    'statement-suspect','routing-deposit','agent-returns-verify','review-class'
+                )),
+                readiness TEXT NOT NULL DEFAULT 'EXECUTE-READY'
+                    CHECK(readiness IN ('EXECUTE-READY','DESIGN-NEEDED')),
+                bd_id TEXT,
+                defer_reason TEXT,
+                defer_detail TEXT,
+                provenance_grade TEXT,
+                agent_id TEXT,
+                bead_date TEXT,
+                divergence_flag INTEGER NOT NULL DEFAULT 0,
+                project TEXT NOT NULL DEFAULT 'algebraic-genesis',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_lwq_file ON lean_work_queue(file);
+            CREATE INDEX IF NOT EXISTS idx_lwq_class ON lean_work_queue(class);
+            CREATE INDEX IF NOT EXISTS idx_lwq_defer ON lean_work_queue(defer_reason);
+            CREATE INDEX IF NOT EXISTS idx_lwq_readiness ON lean_work_queue(readiness);
+            CREATE INDEX IF NOT EXISTS idx_lwq_divergence ON lean_work_queue(divergence_flag);
         """)
 
     conn.commit()

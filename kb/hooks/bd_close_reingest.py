@@ -46,6 +46,47 @@ def find_blocked_files(conn: sqlite3.Connection, bd_ids: list[str]) -> list[str]
     return [r[0] for r in rows if r[0]]
 
 
+def insert_queue_rows(conn: sqlite3.Connection, bd_ids: list[str]) -> int:
+    """Insert cleared-contract queue rows for lean_contracts that were data_blocked_on closed ids."""
+    import hashlib
+    import re
+    _BD_RE = re.compile(r'\b([a-z]+-[a-z0-9]+)\b')
+    placeholders = ','.join('?' * len(bd_ids))
+    try:
+        rows = conn.execute(
+            f'SELECT file, decl_name, file_status FROM lean_contracts '
+            f'WHERE data_blocked_on IN ({placeholders}) AND project = "algebraic-genesis"',
+            bd_ids,
+        ).fetchall()
+    except Exception:
+        return 0
+    inserted = 0
+    for file, decl, file_status in rows:
+        bd_id = None
+        if file_status:
+            m = _BD_RE.search(file_status)
+            if m:
+                bd_id = m.group(1)
+        rid = hashlib.sha1(f'{file or ""}|{decl or ""}|cleared-contract'.encode()).hexdigest()[:16]
+        existing = conn.execute('SELECT defer_reason FROM lean_work_queue WHERE id = ?', (rid,)).fetchone()
+        if existing and existing[0]:
+            continue
+        try:
+            conn.execute("""
+                INSERT INTO lean_work_queue
+                    (id, file, decl_name, class, readiness, bd_id, project)
+                VALUES (?, ?, ?, 'cleared-contract', 'EXECUTE-READY', ?, 'algebraic-genesis')
+                ON CONFLICT(id) DO UPDATE SET
+                    readiness = 'EXECUTE-READY',
+                    updated_at = datetime('now')
+                WHERE defer_reason IS NULL
+            """, (rid, file or '', decl, bd_id))
+            inserted += 1
+        except Exception:
+            pass
+    return inserted
+
+
 def main() -> None:
     data = json.load(sys.stdin)
     if data.get('tool_name') != 'Bash':
@@ -107,6 +148,17 @@ def main() -> None:
             print(f'[BD-CLOSE-REINGEST] ingest done: {last_line}')
         except Exception as e:
             print(f'[BD-CLOSE-REINGEST] ingest failed: {e}')
+
+    # Also insert cleared-contract queue rows for newly unblocked contracts
+    try:
+        conn2 = sqlite3.connect(db, timeout=3)
+        n_queued = insert_queue_rows(conn2, closed_ids)
+        conn2.commit()
+        conn2.close()
+        if n_queued:
+            print(f'[BD-CLOSE-REINGEST] queued {n_queued} cleared-contract row(s) in lean_work_queue')
+    except Exception:
+        pass
 
     sys.exit(0)
 
