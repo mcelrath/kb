@@ -32,6 +32,7 @@ class LLMClient:
         use_chat: bool = True,
         system_prompt: str | None = None,
         json_mode: bool = False,
+        thinking: bool = False,
     ) -> str | None:
         """Generic LLM completion helper.
 
@@ -44,6 +45,7 @@ class LLMClient:
             use_chat: Use chat completion API (recommended for better format adherence)
             system_prompt: System prompt for chat mode
             json_mode: If True, request JSON output format (llama.cpp response_format)
+            thinking: If True, enable Qwen3 thinking mode (enable_thinking=True in chat_template_kwargs)
 
         Returns the completion text, or None on failure.
         """
@@ -74,7 +76,7 @@ class LLMClient:
                     "messages": messages,
                     "max_tokens": max_tokens,
                     "temperature": temperature,
-                    "chat_template_kwargs": {"enable_thinking": False},
+                    "chat_template_kwargs": {"enable_thinking": thinking},
                 }
                 if json_mode:
                     body["response_format"] = {"type": "json_object"}

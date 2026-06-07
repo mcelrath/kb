@@ -656,6 +656,7 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refre
     total = len(rows)
     t0 = _time.time()
     interval = max(5, total // 100) if total else 1
+    _embed_server_down = False  # short-circuit after first Connection refused
 
     # Single pool shared across all rows; max_workers=2 so embed and LLM run
     # side-by-side without spawning unbounded threads.
@@ -673,8 +674,11 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refre
                 # sqlite3 connections cannot be used across threads.
                 existing_tags = kb._fetch_existing_tags(fproject)
 
-                # Fire both concurrently; collect when both finish.
-                embed_fut = pool.submit(kb._embedding.embed, embed_text)
+                # Fire LLM always; fire embed only if server appears reachable.
+                if not _embed_server_down:
+                    embed_fut = pool.submit(kb._embedding.embed, embed_text)
+                else:
+                    embed_fut = None
 
                 def _llm(c=content, e=evidence, et=existing_tags):
                     s = kb._analyzer.generate_summary(c, e)
@@ -683,11 +687,19 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refre
 
                 llm_fut = pool.submit(_llm)
 
-                try:
-                    embedding = embed_fut.result()
-                except Exception as e:
+                if embed_fut is not None:
+                    try:
+                        embedding = embed_fut.result()
+                    except Exception as e:
+                        embedding = None
+                        err_str = str(e)
+                        if "Connection refused" in err_str or "Connection reset" in err_str:
+                            _embed_server_down = True
+                            print(f"  EMBED SERVER DOWN — skipping embed for remaining rows ({e})")
+                        else:
+                            print(f"  EMBED FAIL {fid}: {e}")
+                else:
                     embedding = None
-                    print(f"  EMBED FAIL {fid}: {e}")
 
                 try:
                     summary, tags = llm_fut.result()
@@ -1095,6 +1107,14 @@ def main():
     ingest_python_parser.add_argument("--dry-run", action="store_true")
     ingest_python_parser.add_argument("--no-notations", action="store_true",
         help="Skip populating notations table")
+
+    ingest_tex_parser = ingest_sub.add_parser("tex", help="Index Python/Lean/Epic annotation comment blocks from TeX files")
+    ingest_tex_parser.add_argument("--root", default=str(Path.home() / "Physics/claude"),
+        help="Root of tex corpus (default: ~/Physics/claude)")
+    ingest_tex_parser.add_argument("--files", nargs="+", metavar="FILE",
+        help="Specific files to process (overrides --root glob)")
+    ingest_tex_parser.add_argument("--project", default="algebraic-genesis")
+    ingest_tex_parser.add_argument("--dry-run", action="store_true")
 
     # Reconcile command
     reconcile_parser = _add_parser("reconcile", "Reconcile KB with source document", user_visible=False)
@@ -1789,6 +1809,22 @@ def main():
                     cmd += ["--dry-run"]
                 if getattr(args, "no_notations", False):
                     cmd += ["--no-notations"]
+                cmd += ["--db", str(args.db)]
+                result = _sp.run(cmd)
+                if result.returncode != 0:
+                    sys.exit(result.returncode)
+
+            elif args.ingest_cmd == "tex":
+                script_path = scripts_dir / "ingest_tex.py"
+                if not script_path.exists():
+                    print(f"Error: {script_path} not found")
+                    sys.exit(1)
+                cmd = [sys.executable, str(script_path), "--root", args.root,
+                       "--project", args.project]
+                if getattr(args, "files", None):
+                    cmd += ["--files"] + args.files
+                if args.dry_run:
+                    cmd += ["--dry-run"]
                 cmd += ["--db", str(args.db)]
                 result = _sp.run(cmd)
                 if result.returncode != 0:

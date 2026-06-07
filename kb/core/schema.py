@@ -272,6 +272,26 @@ SCHEMA_SQL = """
     CREATE INDEX IF NOT EXISTS idx_python_symbols_status ON python_symbols(status);
     CREATE INDEX IF NOT EXISTS idx_python_symbols_module ON python_symbols(module);
     CREATE INDEX IF NOT EXISTS idx_python_symbols_project ON python_symbols(project);
+
+    -- TeX annotation index
+    CREATE TABLE IF NOT EXISTS tex_annotations (
+        id TEXT PRIMARY KEY,
+        section_label TEXT,
+        section_title TEXT,
+        python_refs TEXT,           -- JSON array of "cl44/module.py::function"
+        lean_refs TEXT,             -- JSON array of "File.lean" or "File.lean::Name"
+        epic_refs TEXT,             -- JSON array of "project-XXXX" beads IDs
+        kb_refs TEXT,               -- JSON array of "kb-YYYYMMDD-..." IDs
+        context TEXT,               -- 2-3 lines of TeX text following annotation block
+        file TEXT NOT NULL,
+        line INTEGER NOT NULL,
+        created_at TEXT,
+        updated_at TEXT,
+        embedding BLOB
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tex_annotations_section ON tex_annotations(section_label);
+    CREATE INDEX IF NOT EXISTS idx_tex_annotations_file ON tex_annotations(file);
 """
 
 
@@ -318,6 +338,14 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
     # Create vector table for python symbols
     _ = conn.execute(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS python_symbols_vec USING vec0(
+            id TEXT PRIMARY KEY,
+            embedding float[{embedding_dim}]
+        )
+    """)
+
+    # Create vector table for tex annotations
+    _ = conn.execute(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS tex_annotations_vec USING vec0(
             id TEXT PRIMARY KEY,
             embedding float[{embedding_dim}]
         )
