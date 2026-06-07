@@ -1149,6 +1149,32 @@ def main():
         help="Suppress per-file output; only print summary line",
     )
 
+    # queue-defer: set a defer_reason on a lean_work_queue row
+    queue_defer_parser = _add_parser(
+        "queue-defer",
+        "Set or clear a defer reason on a lean_work_queue row",
+        agent_visible=True,
+    )
+    queue_defer_parser.add_argument("row_id", nargs="?", help="lean_work_queue row id (16-char hex); not required with --list")
+    queue_defer_parser.add_argument(
+        "reason",
+        nargs="?",
+        help=(
+            "Defer reason (valid: data_blocked_on:<bd-id>, design-pending:<decision>, "
+            "file-conflict:<agent-id>, agent-cap, user-gate:<adj>, verify-first:<row-id>). "
+            "Omit to CLEAR the defer (re-activates the row)."
+        ),
+    )
+    queue_defer_parser.add_argument(
+        "detail",
+        nargs="?",
+        help="Optional free-text detail appended after reason",
+    )
+    queue_defer_parser.add_argument(
+        "--list", action="store_true",
+        help="List all deferred rows (read-only)",
+    )
+
     args = parser.parse_args()
 
     if args.help or not args.command:
@@ -2001,8 +2027,86 @@ def main():
                                     print(f"[DRIFT: lean_theorems.statement differs from current source for {theorem_name} — re-ingest needed]")
                                 break
 
+        elif args.command == "queue-defer":
+            import sqlite3 as _sqlite3
+            _VALID_DEFER_PREFIXES = (
+                "data_blocked_on:", "design-pending:", "file-conflict:",
+                "agent-cap", "user-gate:", "verify-first:",
+            )
+            db_path = os.path.expanduser("~/.cache/kb/knowledge.db")
+            if not os.path.exists(db_path):
+                print(f"DB not found: {db_path}", file=sys.stderr)
+                sys.exit(1)
+
+            conn = _sqlite3.connect(db_path, timeout=5)
+
+            if args.list or not args.row_id:
+                rows = conn.execute("""
+                    SELECT id, file, decl_name, class, readiness, defer_reason, defer_detail, updated_at
+                    FROM lean_work_queue
+                    WHERE defer_reason IS NOT NULL AND defer_reason != ''
+                    ORDER BY updated_at DESC
+                    LIMIT 50
+                """).fetchall()
+                conn.close()
+                if not rows:
+                    print("lean_work_queue: no deferred rows")
+                else:
+                    print(f"lean_work_queue: {len(rows)} deferred row(s)")
+                    for rid, file, decl, cls, readiness, defer_reason, defer_detail, ts in rows:
+                        import os.path as _op
+                        fname = _op.basename(file or "?")
+                        detail_str = f" ({defer_detail})" if defer_detail else ""
+                        print(f"  {rid[:10]}  {readiness} {cls}: {fname}::{decl or '(file-level)'}  reason={defer_reason}{detail_str}  [{ts}]")
+                sys.exit(0)
+
+            row_id = args.row_id
+            # Verify row exists
+            existing = conn.execute(
+                "SELECT id, class, readiness, defer_reason FROM lean_work_queue WHERE id = ?",
+                (row_id,),
+            ).fetchone()
+            if not existing:
+                conn.close()
+                print(f"queue-defer: row '{row_id}' not found in lean_work_queue", file=sys.stderr)
+                sys.exit(1)
+
+            if args.reason is None:
+                # Clear defer
+                conn.execute(
+                    "UPDATE lean_work_queue SET defer_reason = NULL, defer_detail = NULL, updated_at = datetime('now') WHERE id = ?",
+                    (row_id,),
+                )
+                conn.commit()
+                conn.close()
+                print(f"queue-defer: cleared defer on {row_id[:10]} (row re-activated)")
+                sys.exit(0)
+
+            reason = args.reason
+            detail = args.detail or ""
+
+            # Validate reason prefix
+            valid = any(reason == p or reason.startswith(p) for p in _VALID_DEFER_PREFIXES)
+            if not valid:
+                conn.close()
+                valid_list = ", ".join(_VALID_DEFER_PREFIXES)
+                print(
+                    f"queue-defer: invalid reason '{reason}'. Valid prefixes: {valid_list}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            conn.execute(
+                "UPDATE lean_work_queue SET defer_reason = ?, defer_detail = ?, updated_at = datetime('now') WHERE id = ?",
+                (reason, detail or None, row_id),
+            )
+            conn.commit()
+            conn.close()
+            _, cls, readiness, _ = existing
+            print(f"queue-defer: deferred {row_id[:10]} ({readiness} {cls}) — reason: {reason}" + (f" ({detail})" if detail else ""))
+            sys.exit(0)
+
         elif args.command == "flush-pending":
-            import os
             import fcntl
             from urllib.parse import urlsplit, urlunsplit
             from urllib.request import urlopen
