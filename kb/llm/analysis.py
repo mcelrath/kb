@@ -41,6 +41,11 @@ class ContentAnalyzer:
             r'^(?:CRITICAL\s+)?(?:CORRECTION|ERROR|FATAL\s+FLAW|WARNING|NOTE|IMPORTANT):\s*',
             '', text, flags=re.IGNORECASE
         )
+        # Escape XML-style special tokens that llama-cpp interprets as generation
+        # control tokens (e.g. <tool_call> = token 248058 in Qwen3.5).  Replacing
+        # angle brackets prevents the token from being re-tokenised as a special ID,
+        # which would truncate the LLM's output mid-JSON.
+        text = re.sub(r'<(/?(?:tool_call|tool_response|think|/think)[^>]*)>', r'[\1]', text)
 
         if evidence:
             text += f"\nEvidence: {evidence}"
