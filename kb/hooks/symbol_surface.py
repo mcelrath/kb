@@ -204,7 +204,10 @@ def query_symbols(
         advisories.extend(line for k, line in notation_candidates if k in new_key_set)
 
     # findings with matching fractions — project-scoped, rarity-gated
-    # Skip fractions appearing in >= 5 entries (arithmetic furniture like 1/4, 3/6)
+    # Skip entirely when project unknown: unscoped fraction hits are always cross-project FPs
+    # (vLLM/AWQ entries matching physics fracs, etc.)
+    if not project:
+        return advisories[:_MAX_ADVISORIES]
     _FRAC_RARITY = 5
     seen_fids: set[str] = set()
     for frac in fracs[:3]:

@@ -175,8 +175,10 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str],
         advisories.extend(line for k, line in notation_candidates if k in new_key_set)
 
     # --- findings: search for exact fractions / small constants — project-scoped ---
-    # Rarity gate: skip fractions that appear in >= 5 KB entries (arithmetic furniture
-    # like '1/2', '1/3', '3/4' fire constantly and carry no signal).
+    # Skip entirely when project unknown: unscoped hits are cross-project FPs.
+    # Rarity gate: skip fractions appearing in >= 5 entries (arithmetic furniture).
+    if not project:
+        return advisories
     _FRAC_RARITY_THRESHOLD = 5
     seen_fids: set[str] = set()  # dedup across frac iterations
     for frac in fracs[:5]:
