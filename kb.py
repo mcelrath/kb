@@ -656,7 +656,6 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refre
     total = len(rows)
     t0 = _time.time()
     interval = max(5, total // 100) if total else 1
-    _embed_server_down = False  # short-circuit after first Connection refused
 
     # Single pool shared across all rows; max_workers=2 so embed and LLM run
     # side-by-side without spawning unbounded threads.
@@ -674,11 +673,14 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refre
                 # sqlite3 connections cannot be used across threads.
                 existing_tags = kb._fetch_existing_tags(fproject)
 
-                # Fire LLM always; fire embed only if server appears reachable.
-                if not _embed_server_down:
-                    embed_fut = pool.submit(kb._embedding.embed, embed_text)
-                else:
-                    embed_fut = None
+                # Fire both concurrently; collect when both finish.
+                # Refresh uses more retries than the default (2) because the
+                # embedding server on ash restarts in ~2s after a crash — a
+                # longer retry budget means a transient crash is transparent.
+                def _embed_with_retries(t=embed_text):
+                    return kb._embedding._embed_remote(t, max_retries=5, base_delay=1.5)
+
+                embed_fut = pool.submit(_embed_with_retries)
 
                 def _llm(c=content, e=evidence, et=existing_tags):
                     s = kb._analyzer.generate_summary(c, e)
@@ -687,19 +689,12 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refre
 
                 llm_fut = pool.submit(_llm)
 
-                if embed_fut is not None:
-                    try:
-                        embedding = embed_fut.result()
-                    except Exception as e:
-                        embedding = None
-                        err_str = str(e)
-                        if "Connection refused" in err_str or "Connection reset" in err_str:
-                            _embed_server_down = True
-                            print(f"  EMBED SERVER DOWN — skipping embed for remaining rows ({e})")
-                        else:
-                            print(f"  EMBED FAIL {fid}: {e}")
-                else:
+                try:
+                    from kb.validation import serialize_f32, l2_normalize
+                    embedding = serialize_f32(l2_normalize(embed_fut.result()))
+                except Exception as e:
                     embedding = None
+                    print(f"  EMBED FAIL {fid}: {e}")
 
                 try:
                     summary, tags = llm_fut.result()
