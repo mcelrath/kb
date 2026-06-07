@@ -36,6 +36,11 @@ _LEAN_RE = re.compile(r'^\s*%\s*[Ll]ean:\s*(.+)', re.IGNORECASE)
 _EPIC_RE = re.compile(r'^\s*%\s*[Ee]pic:\s*(.+)', re.IGNORECASE)
 _KB_RE = re.compile(r'^\s*%\s*(kb-\d{8}-\S+)')
 
+# A valid ref token: path/to/module.ext optionally followed by ::Name
+# No spaces, no parentheses. Examples:
+#   cl44/foo.py::bar_fn   File.lean::TheoremName   project-1234
+_REF_RE = re.compile(r'^[\w./:-]+(?:::[\w.]+)?')
+
 # Structural TeX patterns
 _SECTION_RE = re.compile(r'\\(?:sub)*section\*?\{([^}]+)\}')
 _LABEL_RE = re.compile(r'\\label\{([^}]+)\}')
@@ -48,21 +53,62 @@ def _is_annotation_line(line: str) -> bool:
     return bool(_ANN_LINE.match(line))
 
 
+def _split_refs(raw: str) -> list[str]:
+    """Split a comma-separated ref list, ignoring commas inside parens/braces.
+
+    Each token is then stripped of any trailing free-text commentary (anything
+    after the first space following the ref pattern). This handles annotations
+    like:
+        cl44/foo.py::bar (some note with {0,3,12}), cl44/baz.py::qux
+    which should yield ['cl44/foo.py::bar', 'cl44/baz.py::qux'].
+    """
+    tokens: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in raw:
+        if ch in "([{":
+            depth += 1
+            current.append(ch)
+        elif ch in ")]}":
+            depth -= 1
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            tokens.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        tokens.append("".join(current).strip())
+
+    result: list[str] = []
+    for tok in tokens:
+        tok = tok.strip()
+        if not tok:
+            continue
+        # Strip everything after the first space (free-text commentary)
+        m = _REF_RE.match(tok)
+        if m:
+            result.append(m.group(0))
+        # If the token doesn't start with a ref pattern at all, skip it entirely
+        # (it was a fragment produced by a comma inside a parenthetical note)
+    return result
+
+
 def _parse_annotation_line(line: str) -> tuple[str, list[str]]:
     """Return (kind, values) for a single annotation line.
 
     kind is one of: 'python', 'lean', 'epic', 'kb'
-    values may be multiple comma-separated items (Lean allows e.g. Foo.lean, Bar.lean).
+    values are ref tokens — path/module.ext::name — with free-text commentary stripped.
     """
     m = _PYTHON_RE.match(line)
     if m:
-        return "python", [v.strip() for v in m.group(1).split(",") if v.strip()]
+        return "python", _split_refs(m.group(1))
     m = _LEAN_RE.match(line)
     if m:
-        return "lean", [v.strip() for v in m.group(1).split(",") if v.strip()]
+        return "lean", _split_refs(m.group(1))
     m = _EPIC_RE.match(line)
     if m:
-        return "epic", [v.strip() for v in m.group(1).split(",") if v.strip()]
+        return "epic", _split_refs(m.group(1))
     m = _KB_RE.match(line)
     if m:
         return "kb", [m.group(1).strip()]
