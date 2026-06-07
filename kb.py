@@ -637,21 +637,19 @@ def format_finding_summary(finding: dict) -> str:
     return f"{symbol} {finding['id']}: {content}"
 
 
-def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refresh"):
+def _run_refresh(kb, rows, dry_run: bool, commit_every: int = 1, label: str = "refresh"):
     """Core loop: summarize + retag + reembed each finding row.
 
-    Embedding (ash:8081) and LLM (tardis:9510) run in parallel per row — they
-    are independent servers, so there is no reason to queue them sequentially.
+    Embedding (ash:8081) and LLM (tardis:9510) run concurrently per row.
+    All I/O completes before any DB write opens. Each row is written with its
+    own BEGIN IMMEDIATE/COMMIT — lock held for microseconds, not seconds.
 
     rows: list of (id, project, content, evidence)
     Returns (ok, fail) counts.
-
-    Stop/start safe: rows with NULL summary are re-fetched on restart (default mode).
-    Committed every commit_every rows, so interrupting loses at most commit_every rows.
-    Ctrl+C commits progress so far and exits cleanly.
     """
     import time as _time
     from concurrent.futures import ThreadPoolExecutor
+    from kb.validation import serialize_f32, l2_normalize
 
     try:
         from tqdm import tqdm as _tqdm
@@ -667,82 +665,75 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refre
                 postfix={"ok": 0, "fail": 0},
                 dynamic_ncols=True) if _tqdm and not dry_run else None
 
+    def _write_row(fid, summary, tags, embedding):
+        """One fast write transaction per row; lock held for microseconds."""
+        kb.conn.execute("BEGIN IMMEDIATE")
+        if summary:
+            kb.conn.execute(
+                "UPDATE findings SET summary=?, updated_at=datetime('now') WHERE id=?",
+                (summary, fid),
+            )
+        if tags:
+            kb.conn.execute(
+                "UPDATE findings SET tags=?, updated_at=datetime('now') WHERE id=?",
+                (json.dumps(tags), fid),
+            )
+        if embedding is not None:
+            kb.conn.execute("DELETE FROM findings_vec WHERE id=?", (fid,))
+            kb.conn.execute(
+                "INSERT INTO findings_vec (id, embedding) VALUES (?,?)",
+                (fid, embedding),
+            )
+        kb.conn.commit()
+
     try:
-        # Single pool shared across all rows; max_workers=2 so embed and LLM run
-        # side-by-side without spawning unbounded threads.
         with ThreadPoolExecutor(max_workers=2) as pool:
-            for i, (fid, fproject, content, evidence) in enumerate(rows, 1):
+            for fid, fproject, content, evidence in rows:
                 embed_text = content + (" " + evidence if evidence else "")
 
                 if dry_run:
                     summary = kb._analyzer.generate_summary(content, evidence)
-                    tags: list = kb.suggest_tags(content, fproject)
-                    embedding = None
-                else:
-                    existing_tags = kb._fetch_existing_tags(fproject)
+                    print(f"[DRY] {fid} ({fproject}): {summary}")
+                    ok += 1
+                    if bar:
+                        bar.postfix["ok"] = ok
+                        bar.update(1)
+                    continue
 
-                    def _embed_with_retries(t=embed_text):
-                        return kb._embedding._embed_remote(t, max_retries=5, base_delay=1.5)
+                existing_tags = kb._fetch_existing_tags(fproject)
 
-                    embed_fut = pool.submit(_embed_with_retries)
+                def _embed(t=embed_text):
+                    return kb._embedding._embed_remote(t, max_retries=5, base_delay=1.5)
 
-                    def _llm(c=content, e=evidence, et=existing_tags):
-                        s = kb._analyzer.generate_summary(c, e)
-                        t = kb._analyzer.suggest_tags(c, et)
-                        return s, t
+                def _llm(c=content, e=evidence, et=existing_tags):
+                    s = kb._analyzer.generate_summary(c, e)
+                    t = kb._analyzer.suggest_tags(c, et)
+                    return s, t
 
-                    llm_fut = pool.submit(_llm)
+                # Both network calls run concurrently; no DB lock held.
+                embed_fut = pool.submit(_embed)
+                llm_fut   = pool.submit(_llm)
 
-                    try:
-                        from kb.validation import serialize_f32, l2_normalize
-                        embedding = serialize_f32(l2_normalize(embed_fut.result()))
-                    except Exception as e:
-                        embedding = None
-                        if bar:
-                            bar.write(f"  EMBED FAIL {fid}: {e}")
-                        else:
-                            print(f"  EMBED FAIL {fid}: {e}")
+                embedding = None
+                try:
+                    embedding = serialize_f32(l2_normalize(embed_fut.result()))
+                except Exception as e:
+                    (bar.write if bar else print)(f"  EMBED FAIL {fid}: {e}")
 
-                    try:
-                        summary, tags = llm_fut.result()
-                    except Exception as e:
-                        summary, tags = None, []
-                        if bar:
-                            bar.write(f"  LLM FAIL {fid}: {e}")
-                        else:
-                            print(f"  LLM FAIL {fid}: {e}")
+                summary = tags = None
+                try:
+                    summary, tags = llm_fut.result()
+                except Exception as e:
+                    (bar.write if bar else print)(f"  LLM FAIL {fid}: {e}")
 
                 if summary and len(summary) >= 10:
-                    if dry_run:
-                        print(f"[DRY] {fid} ({fproject}): {summary}")
-                    else:
-                        kb.conn.execute(
-                            "UPDATE findings SET summary=?, updated_at=datetime('now') WHERE id=?",
-                            (summary, fid),
-                        )
+                    _write_row(fid, summary, tags, embedding)
                     ok += 1
                 else:
                     fail += 1
-                    msg = f"  FAIL {fid} ({fproject}): {(content or '')[:60]!r}"
-                    if bar:
-                        bar.write(msg)
-                    else:
-                        print(msg)
-
-                if not dry_run:
-                    if tags:
-                        kb.conn.execute(
-                            "UPDATE findings SET tags=?, updated_at=datetime('now') WHERE id=?",
-                            (json.dumps(tags), fid),
-                        )
-                    if embedding is not None:
-                        kb.conn.execute("DELETE FROM findings_vec WHERE id=?", (fid,))
-                        kb.conn.execute(
-                            "INSERT INTO findings_vec (id, embedding) VALUES (?,?)",
-                            (fid, embedding),
-                        )
-                    if i % commit_every == 0:
-                        kb.conn.commit()
+                    (bar.write if bar else print)(
+                        f"  FAIL {fid} ({fproject}): {(content or '')[:60]!r}"
+                    )
 
                 if bar:
                     bar.postfix["ok"] = ok
@@ -751,20 +742,16 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int, label: str = "refre
 
     except KeyboardInterrupt:
         if bar:
-            bar.write(f"\nInterrupted at {ok+fail}/{total} — committing progress...")
+            bar.write(f"\nInterrupted at {ok+fail}/{total}")
             bar.close()
         else:
-            print(f"\nInterrupted at {ok+fail}/{total} — committing progress...")
-        if not dry_run:
-            kb.conn.commit()
+            print(f"\nInterrupted at {ok+fail}/{total}")
         elapsed = _time.time() - t0
         print(f"{label}: ok={ok} fail={fail} (interrupted after {elapsed/60:.1f}m)")
         return ok, fail
 
     if bar:
         bar.close()
-    if not dry_run:
-        kb.conn.commit()
     elapsed = _time.time() - t0
     print(f"{label}: ok={ok} fail={fail} total={total} elapsed={elapsed/60:.1f}m")
     return ok, fail
@@ -1084,7 +1071,6 @@ def main():
     refresh_parser.add_argument("-n", "--limit", type=int, default=0,
         help="Max rows to process (0 = no limit)")
     refresh_parser.add_argument("--dry-run", action="store_true")
-    refresh_parser.add_argument("--commit-every", type=int, default=5)
     refresh_parser.add_argument("--theorems", action="store_true",
         help="Also backfill statement_pure for lean theorems")
     refresh_parser.add_argument("--theorem-workers", type=int, default=8,
@@ -1753,9 +1739,8 @@ def main():
             )
             print(f"refresh: {len(rows)} findings "
                   f"(project={project or 'ALL'}, all={args.all}, dry={args.dry_run})"
-                  f"\n  (Ctrl+C safe: work is committed every {args.commit_every} rows;"
-                  f" restart without --all to resume from unprocessed rows)")
-            _run_refresh(kb, rows, dry_run=args.dry_run, commit_every=args.commit_every)
+                  f"\n  (Ctrl+C safe: each row committed immediately after I/O completes)")
+            _run_refresh(kb, rows, dry_run=args.dry_run, commit_every=1)
             if args.theorems:
                 _backfill_statement_pure(
                     kb, project=project,

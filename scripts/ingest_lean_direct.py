@@ -396,6 +396,7 @@ def main():
             return [(t["id"], summaries.get(t["name"], "")) for t in theorems]
 
         print(f"Generating summaries for {len(by_file)} files with {LLM_WORKERS} LLM workers...")
+
         with ThreadPoolExecutor(max_workers=LLM_WORKERS) as pool:
             futs = {pool.submit(_summarize_group, item): item for item in by_file.items()}
             bar = _tqdm(total=len(by_file), desc="summarize-only", unit="file",
@@ -403,30 +404,28 @@ def main():
             try:
                 done = 0
                 for fut in as_completed(futs):
-                    for tid, summary in (fut.result() or []):
-                        if summary:
-                            conn.execute(
-                                "UPDATE lean_theorems SET statement_pure=? WHERE id=?",
-                                (summary, tid)
-                            )
-                            updated += 1
+                    pairs = [(s, tid) for tid, s in (fut.result() or []) if s]
+                    if pairs:
+                        # I/O done in worker — write immediately, lock for microseconds
+                        conn.execute("BEGIN IMMEDIATE")
+                        conn.executemany(
+                            "UPDATE lean_theorems SET statement_pure=? WHERE id=?", pairs
+                        )
+                        conn.commit()
+                        updated += len(pairs)
                     done += 1
                     if bar:
                         bar.set_postfix(updated=updated)
                         bar.update(1)
                     elif done % 20 == 0 or done == len(by_file):
                         print(f"  files: {done}/{len(by_file)}  updated: {updated}")
-                    if done % 5 == 0:
-                        conn.commit()
             except KeyboardInterrupt:
                 if bar:
                     bar.close()
-                conn.commit()
                 print(f"\nInterrupted — summaries written: {updated}")
                 return
         if bar:
             bar.close()
-        conn.commit()
         print(f"\nDone.  Summaries written: {updated}")
         return
 
@@ -562,30 +561,27 @@ def main():
             try:
                 done = 0
                 for fut in as_completed(futs):
-                    for tid, summary in (fut.result() or []):
-                        if summary:
-                            conn.execute(
-                                "UPDATE lean_theorems SET statement_pure=? WHERE id=?",
-                                (summary, tid)
-                            )
-                            summarized += 1
+                    pairs = [(s, tid) for tid, s in (fut.result() or []) if s]
+                    if pairs:
+                        conn.execute("BEGIN IMMEDIATE")
+                        conn.executemany(
+                            "UPDATE lean_theorems SET statement_pure=? WHERE id=?", pairs
+                        )
+                        conn.commit()
+                        summarized += len(pairs)
                     done += 1
                     if bar:
                         bar.set_postfix(summaries=summarized)
                         bar.update(1)
                     elif done % 10 == 0 or done == len(new_by_file):
                         print(f"  files: {done}/{len(new_by_file)}  summaries: {summarized}")
-                    if done % 5 == 0:
-                        conn.commit()
             except KeyboardInterrupt:
                 if bar:
                     bar.close()
-                conn.commit()
                 print(f"\nInterrupted — Summaries written: {summarized}")
                 return
         if bar:
             bar.close()
-        conn.commit()
         print(f"Summaries written: {summarized}")
 
     print(f"\nDone.")
