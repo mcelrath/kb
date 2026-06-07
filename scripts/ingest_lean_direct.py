@@ -20,6 +20,7 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -37,8 +38,9 @@ MATHLIB_AUTHOR = "Bob McElrath"
 
 # LLM context: cap file content to avoid blowing the context window
 MAX_FILE_CHARS = 12_000
-# LLM parallel workers (LLM is serial on the server side; 2-4 avoids starvation)
-LLM_WORKERS = 3
+# LLM parallel workers. llama-server runs --parallel 1 by default; concurrent
+# requests just queue — no throughput gain, extra switching overhead.
+LLM_WORKERS = int(os.environ.get("KB_LLM_WORKERS", "1"))
 
 
 # ---------------------------------------------------------------------------

@@ -41,6 +41,7 @@ DEFAULT_SUBDIRS = [
     "clifford_common",
     "cl11",
     "cl22",
+    "scripts",
 ]
 
 
@@ -256,6 +257,37 @@ def parse_python_file(
 
     symbols = []
     for node in tree.body:
+        # Module-level annotated constants: T_C: float = ..., PHI_TODAY: float = ...
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            name = node.target.id
+            try:
+                ann = ast.unparse(node.annotation)
+            except Exception:
+                ann = "?"
+            val_str = ""
+            if node.value is not None:
+                try:
+                    val_str = " = " + ast.unparse(node.value)
+                except Exception:
+                    pass
+            sig = f"{name}: {ann}{val_str}"
+            status = _determine_status(name, file_path, all_exports)
+            symbols.append({
+                "name": name,
+                "kind": "constant",
+                "module": module,
+                "signature": sig,
+                "status": status,
+                "is_lru_cached": False,
+                "frame_hint": None,
+                "docstring_summary": None,
+                "lean_citations": module_lean,
+                "kb_refs": [],
+                "file": str(file_path),
+                "line": node.lineno,
+            })
+            continue
+
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
 
