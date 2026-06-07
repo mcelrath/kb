@@ -155,15 +155,17 @@ def main() -> None:
         cmd = ti.get('command', '')
         if 'bridge send' not in cmd:
             sys.exit(0)
-        # Extract heredoc body from bridge send command
-        m = re.search(r"<<'?EOF'?\n(.+?)(?:\nEOF|\Z)", cmd, re.DOTALL)
+        # Extract all text worth scanning: heredoc body + subject string
+        parts = []
+        # Heredoc body (handles << 'EOF', << EOF, <<'EOF')
+        m = re.search(r"<<\s*'?EOF'?\s*\n(.+?)(?:\nEOF\b|\Z)", cmd, re.DOTALL)
         if m:
-            prompt_text = m.group(1)
-        else:
-            # Try to extract the message after --message flag or quoted arg
-            m2 = re.search(r'bridge send\s+\S+\s+"([^"]+)"', cmd)
-            if m2:
-                prompt_text = m2.group(1)
+            parts.append(m.group(1))
+        # Subject string (quoted arg, may have flags between it and EOF)
+        m2 = re.search(r'bridge send\s+\S+\s+"([^"]+)"', cmd)
+        if m2:
+            parts.append(m2.group(1))
+        prompt_text = '\n'.join(parts)
     else:
         sys.exit(0)
 

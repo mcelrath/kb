@@ -144,7 +144,7 @@ def main() -> None:
     allowed_prefixes = (
         os.path.join(home, 'Physics'),
         os.path.join(home, 'Projects', 'ai', 'kb'),
-        '/tmp/claude-',    # bridge watcher output files
+        '/tmp/claude',     # bridge watcher output: /tmp/claude-1000/... or /tmp/claude-*/
         '/tmp/agent-',
     )
     if fpath and not any(fpath.startswith(p) for p in allowed_prefixes):
