@@ -14,14 +14,14 @@ curate_kb.py   # Automated curation: tagging, consolidation, entry points
 
 - Location: `~/.cache/kb/knowledge.db`
 - SQLite + sqlite-vec for vector similarity
-- Embeddings: remote server at `KB_EMBEDDING_URL` (default: http://ash:8080/embedding)
+- Embeddings: remote server at `KB_EMBEDDING_URL` (default: http://ash:8081/embedding)
 - LLM: remote server at `KB_LLM_URL` (default: http://tardis:9510/completion)
 
 ## Running
 
 ```bash
 # CLI
-KB_EMBEDDING_URL=http://ash:8080/embedding KB_EMBEDDING_DIM=4096 \
+KB_EMBEDDING_URL=http://ash:8081/embedding KB_EMBEDDING_DIM=4096 \
   .venv/bin/python kb.py <command>
 
 # MCP server (started automatically by Claude Code)
@@ -75,7 +75,7 @@ python3 -m py_compile kb.py kb_mcp.py
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | `KeyError: 'file'` | Script dict key mismatch | Use `r['filename']` not `r['file']` |
-| `HTTP 500 from embedding` | Server overloaded | Retry or check ash:8080 |
+| `HTTP 500 from embedding` | Server overloaded | Retry or check ash:8081 |
 | `RemoteDisconnected` | LLM server timeout | Check tardis:9510 |
 | Duplicate findings | Not searching first | Use `kb_detect_duplicates` before add |
 
