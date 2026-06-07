@@ -1086,6 +1086,16 @@ def main():
     ingest_scripts_parser.add_argument("--dry-run", action="store_true")
     ingest_scripts_parser.add_argument("-n", "--limit", type=int, default=50)
 
+    ingest_python_parser = ingest_sub.add_parser("python", help="Index Python symbols from cl44/clifford_common")
+    ingest_python_parser.add_argument("--root", default=str(Path.home() / "Physics/secular-constraints"),
+        help="Root of secular-constraints (default: ~/Physics/secular-constraints)")
+    ingest_python_parser.add_argument("--files", nargs="+", metavar="FILE",
+        help="Incremental mode: process only these files")
+    ingest_python_parser.add_argument("--project", default="algebraic-genesis")
+    ingest_python_parser.add_argument("--dry-run", action="store_true")
+    ingest_python_parser.add_argument("--no-notations", action="store_true",
+        help="Skip populating notations table")
+
     # Reconcile command
     reconcile_parser = _add_parser("reconcile", "Reconcile KB with source document", user_visible=False)
     reconcile_parser.add_argument("document", type=Path, help="Source document to reconcile against")
@@ -1765,6 +1775,24 @@ def main():
                 if args.dry_run:
                     cmd += ["--dry-run"]
                 _sp.run(cmd)
+
+            elif args.ingest_cmd == "python":
+                script_path = scripts_dir / "ingest_python.py"
+                if not script_path.exists():
+                    print(f"Error: {script_path} not found")
+                    sys.exit(1)
+                cmd = [sys.executable, str(script_path), "--root", args.root,
+                       "--project", args.project]
+                if getattr(args, "files", None):
+                    cmd += ["--files"] + args.files
+                if args.dry_run:
+                    cmd += ["--dry-run"]
+                if getattr(args, "no_notations", False):
+                    cmd += ["--no-notations"]
+                cmd += ["--db", str(args.db)]
+                result = _sp.run(cmd)
+                if result.returncode != 0:
+                    sys.exit(result.returncode)
 
             else:
                 ingest_parser.print_help()

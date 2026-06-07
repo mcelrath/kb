@@ -315,10 +315,24 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
     except sqlite3.OperationalError:
         _ = conn.execute("ALTER TABLE findings ADD COLUMN summary TEXT")
 
+    # Create vector table for python symbols
+    _ = conn.execute(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS python_symbols_vec USING vec0(
+            id TEXT PRIMARY KEY,
+            embedding float[{embedding_dim}]
+        )
+    """)
+
     # Schema migration: add finding_id column to lean_theorems if not exists
     try:
         _ = conn.execute("SELECT finding_id FROM lean_theorems LIMIT 1")
     except sqlite3.OperationalError:
         _ = conn.execute("ALTER TABLE lean_theorems ADD COLUMN finding_id TEXT")
+
+    # Schema migration: add project column to python_symbols if not exists
+    try:
+        _ = conn.execute("SELECT project FROM python_symbols LIMIT 1")
+    except sqlite3.OperationalError:
+        _ = conn.execute("ALTER TABLE python_symbols ADD COLUMN project TEXT")
 
     conn.commit()

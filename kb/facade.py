@@ -1601,6 +1601,143 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
     def concept_render_register(self, project: str | None = None, max_tokens: int = 600, framework_hints: list[str] | None = None, technique_hints: list[str] | None = None) -> str:
         return self._concepts.render_register(project, max_tokens, framework_hints, technique_hints)
 
+    # =========================================================================
+    # Python symbol index methods
+    # =========================================================================
+
+    def add_python_symbol(
+        self,
+        name: str,
+        kind: str,
+        module: str,
+        signature: str,
+        file: str,
+        line: int,
+        status: str = "public",
+        is_lru_cached: bool = False,
+        frame_hint: str | None = None,
+        redirect_to: str | None = None,
+        docstring_summary: str | None = None,
+        lean_citations: list[str] | None = None,
+        kb_refs: list[str] | None = None,
+        also_in_modules: list[dict[str, Any]] | None = None,
+        project: str | None = None,
+    ) -> dict[str, Any]:
+        """Add or update a Python symbol in the index.
+
+        Returns dict with 'id', 'is_new'.
+        """
+        existing = self.conn.execute(
+            "SELECT id FROM python_symbols WHERE name = ? AND module = ?",
+            (name, module),
+        ).fetchone()
+
+        now = datetime.now().isoformat()
+        sym_id = f"pysym-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        lean_json = json.dumps(lean_citations or [])
+        kb_json = json.dumps(kb_refs or [])
+        also_json = json.dumps(also_in_modules or [])
+
+        embed_text = f"{module}.{name}: {signature} {docstring_summary or ''}"
+        embedding = self._embed(embed_text)
+
+        if existing:
+            sym_id = existing[0]
+            self.conn.execute("""
+                UPDATE python_symbols SET kind=?, signature=?, status=?, is_lru_cached=?,
+                    frame_hint=?, redirect_to=?, docstring_summary=?, lean_citations=?,
+                    kb_refs=?, also_in_modules=?, file=?, line=?, project=?,
+                    updated_at=?, embedding=?
+                WHERE id=?
+            """, (kind, signature, status, int(is_lru_cached), frame_hint, redirect_to,
+                  docstring_summary, lean_json, kb_json, also_json, file, line, project,
+                  now, embedding, sym_id))
+            self.conn.execute("DELETE FROM python_symbols_vec WHERE id = ?", (sym_id,))
+            self.conn.execute(
+                "INSERT INTO python_symbols_vec (id, embedding) VALUES (?, ?)",
+                (sym_id, embedding),
+            )
+            self.conn.commit()
+            return {"id": sym_id, "is_new": False}
+
+        self.conn.execute("""
+            INSERT INTO python_symbols
+                (id, name, kind, module, signature, status, is_lru_cached,
+                 frame_hint, redirect_to, docstring_summary, lean_citations,
+                 kb_refs, also_in_modules, file, line, project, created_at, updated_at, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (sym_id, name, kind, module, signature, status, int(is_lru_cached),
+              frame_hint, redirect_to, docstring_summary, lean_json, kb_json, also_json,
+              file, line, project, now, now, embedding))
+        self.conn.execute(
+            "INSERT INTO python_symbols_vec (id, embedding) VALUES (?, ?)",
+            (sym_id, embedding),
+        )
+        self.conn.commit()
+        return {"id": sym_id, "is_new": True}
+
+    def search_python_symbols(
+        self,
+        query: str,
+        module: str | None = None,
+        status: str | None = None,
+        project: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Search Python symbols by semantic similarity."""
+        embedding = self._embed(query)
+
+        conditions = []
+        params: list[Any] = []
+        if module:
+            conditions.append("p.module LIKE ?")
+            params.append(f"{module}%")
+        if status:
+            conditions.append("p.status = ?")
+            params.append(status)
+        if project:
+            conditions.append("p.project = ?")
+            params.append(project)
+
+        vec_results = self.conn.execute(
+            f"""SELECT v.id, v.distance
+                FROM python_symbols_vec v
+                JOIN python_symbols p ON p.id = v.id
+                WHERE v.embedding MATCH ? AND k = ?
+                {"AND " + " AND ".join(conditions) if conditions else ""}
+                ORDER BY v.distance""",
+            (embedding, limit * 2, *params),
+        ).fetchall()
+
+        seen: dict[str, float] = {}
+        for sid, dist in vec_results:
+            if dist is not None:
+                seen[sid] = 1 - (dist ** 2) / 2
+
+        top_ids = sorted(seen, key=lambda x: seen[x], reverse=True)[:limit]
+        results = []
+        for sid in top_ids:
+            row = self.conn.execute(
+                """SELECT id, name, kind, module, signature, status, frame_hint,
+                          docstring_summary, lean_citations, kb_refs, file, line, project
+                   FROM python_symbols WHERE id = ?""",
+                (sid,),
+            ).fetchone()
+            if row:
+                r = dict(zip([
+                    "id", "name", "kind", "module", "signature", "status", "frame_hint",
+                    "docstring_summary", "lean_citations", "kb_refs", "file", "line", "project"
+                ], row))
+                r["similarity"] = round(seen[sid], 4)
+                for fld in ("lean_citations", "kb_refs"):
+                    if r.get(fld):
+                        try:
+                            r[fld] = json.loads(r[fld])
+                        except json.JSONDecodeError:
+                            r[fld] = []
+                results.append(r)
+        return results
+
     def close(self) -> None:
         """Close the database connection."""
         self.conn.close()
