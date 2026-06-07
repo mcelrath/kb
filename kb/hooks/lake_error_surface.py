@@ -14,10 +14,16 @@ import sqlite3
 
 _MAX = 3
 
-# Patterns for lake error lines worth diagnosing
-_UNKNOWN_ID_RE = re.compile(r'unknown identifier[\'"]?\s+[\'"]?([A-Za-z_][A-Za-z0-9_\'\.]+)', re.IGNORECASE)
-_UNKNOWN_CONST_RE = re.compile(r'unknown constant[\'"]?\s+[\'"]?([A-Za-z_][A-Za-z0-9_\'\.]+)', re.IGNORECASE)
-_DECL_NOT_FOUND_RE = re.compile(r'declaration[\'"]?\s+[\'"]?([A-Za-z_][A-Za-z0-9_\'\.]+)[\'"]?\s+not found', re.IGNORECASE)
+# Lean wraps identifiers in backticks: "Unknown identifier `Name.foo`"
+# All three patterns need backtick in the quote class, and optional whitespace
+# before the opening quote (Lean uses no space before the backtick).
+_Q = r"""['\"`]"""  # single-quote, double-quote, or backtick
+_UNKNOWN_ID_RE = re.compile(
+    rf'unknown identifier\s*{_Q}?\s*{_Q}?([A-Za-z_][A-Za-z0-9_\'.]+)', re.IGNORECASE)
+_UNKNOWN_CONST_RE = re.compile(
+    rf'unknown constant\s*{_Q}?\s*{_Q}?([A-Za-z_][A-Za-z0-9_\'.]+)', re.IGNORECASE)
+_DECL_NOT_FOUND_RE = re.compile(
+    rf'declaration\s*{_Q}?\s*{_Q}?([A-Za-z_][A-Za-z0-9_\'.]+){_Q}?\s+not found', re.IGNORECASE)
 
 
 def extract_error_names(output: str) -> list[str]:
