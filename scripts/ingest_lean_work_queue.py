@@ -87,9 +87,27 @@ def ingest(conn: sqlite3.Connection, dry_run: bool) -> tuple[int, int, int]:
         print(f'lean_contracts not accessible: {e}', file=sys.stderr)
         return 0, 0, 0
 
+    # Scratch/archive path filters — exclude files that should never be queued.
+    # archive/: files retired by 3206eaa4 (DW/Haar ban), not actionable.
+    # tmp/: iteration artifacts (explore_go, test_*, final_clean, full_proof*).
+    # Root-level scratch basenames: heuristic patterns for uncommitted scratch files.
+    _ARCHIVE_RE = re.compile(r'(^|/)archive/', re.IGNORECASE)
+    _TMP_RE = re.compile(r'(^|/)tmp/')
+    _SCRATCH_BASENAME_RE = re.compile(
+        r'/(explore_\w+|final_clean|full_proof\w*|test_\w+|scratch_\w*)\.lean$',
+        re.IGNORECASE,
+    )
+
     for file, decl, blocked_on, proof_grade, file_status in rows:
         if blocked_on:
             continue  # still waiting on a bead
+
+        # Skip archived, tmp, and scratch files — they are not agent-dispatchable.
+        file_path = file or ''
+        if (_ARCHIVE_RE.search(file_path)
+                or _TMP_RE.search(file_path)
+                or _SCRATCH_BASENAME_RE.search('/' + file_path)):
+            continue
 
         # Extract bd-id from file_status e.g. "open-contract (claude-b3fk)"
         bd_id = None
