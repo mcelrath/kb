@@ -173,8 +173,15 @@ def main() -> None:
         fracs = extract_fractions(content)
         advisories = query_symbols(conn, tokens, fracs)
         conn.close()
-        for line in advisories:
-            print(line, file=sys.stderr)
+        if advisories:
+            # PostToolUse hooks must emit JSON to stdout to inject context.
+            # Stderr on exit-0 is silently discarded by the harness.
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": "\n".join(advisories),
+                }
+            }))
     except Exception:
         pass
 

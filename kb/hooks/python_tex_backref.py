@@ -30,9 +30,18 @@ try:
         (f'%{basename}%',)
     ).fetchall()
     conn.close()
+    lines = []
     for tex_file, line, section, _ in rows:
         loc = f'{os.path.basename(tex_file)}:{line}'
         sec = f' §{section[:50]}' if section else ''
-        print(f'[TEX-CITES-THIS: {loc}{sec}]', file=sys.stderr)
+        lines.append(f'[TEX-CITES-THIS: {loc}{sec}]')
+    if lines:
+        # PostToolUse hooks must emit JSON to stdout; stderr on exit-0 is discarded.
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": "\n".join(lines),
+            }
+        }))
 except Exception:
     pass

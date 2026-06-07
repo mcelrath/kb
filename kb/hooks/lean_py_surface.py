@@ -25,7 +25,14 @@ try:
         (f'%{basename}%',)
     ).fetchall()
     conn.close()
-    for (module,) in rows:
-        print(f'[PY-CITES-THIS: {module} — cites {basename}]', file=sys.stderr)
+    lines = [f'[PY-CITES-THIS: {module} — cites {basename}]' for (module,) in rows]
+    if lines:
+        # PostToolUse hooks must emit JSON to stdout; stderr on exit-0 is discarded.
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": "\n".join(lines),
+            }
+        }))
 except Exception:
     pass
