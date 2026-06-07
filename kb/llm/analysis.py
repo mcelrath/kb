@@ -32,7 +32,7 @@ class ContentAnalyzer:
         """
         system_prompt = (
             "You write concise one-line summaries. Output ONLY JSON: "
-            '{\"summary\": \"...\"}. No intro phrases. Max 80 chars.'
+            '{\"summary\": \"...\"}. No intro phrases. Max 120 chars.'
         )
 
         text = content
@@ -45,11 +45,23 @@ class ContentAnalyzer:
         if evidence:
             text += f"\nEvidence: {evidence}"
 
-        prompt = f"Summarize in ONE technical line (max 80 chars):\n{text}"
+        # Extract CODIFIED references (file::function patterns) from content
+        codified_refs = re.findall(r'[\w/.-]+\.py::[\w.]+', text)
+        codified_hint = ""
+        if codified_refs:
+            codified_hint = f" Lead with 'CODIFIED: {codified_refs[0]}'."
+
+        prompt = (
+            f"Summarize in ONE technical line (max 120 chars)."
+            f" LEAD with: (1) any exact constants/fractions/named values present"
+            f" (e.g. G=17/24, α=3/64, c=3); (2) 'CODIFIED: file::fn' if the text"
+            f" cites a Python implementation.{codified_hint}"
+            f" If neither applies, give the best technical summary.\n{text}"
+        )
 
         result = self.llm_client.complete(
             prompt,
-            max_tokens=150,
+            max_tokens=200,
             temperature=0.2,
             system_prompt=system_prompt,
             timeout=30,
