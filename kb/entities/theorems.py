@@ -43,10 +43,25 @@ class TheoremRepository(EntityRepository):
         Returns dict with 'id', 'is_new'.
         """
         existing = self.conn.execute(
-            "SELECT id FROM lean_theorems WHERE lean_name = ? AND file = ?",
+            "SELECT id, finding_id FROM lean_theorems WHERE lean_name = ? AND file = ?",
             (lean_name, file),
         ).fetchone()
         if existing:
+            # Backfill finding_id if still NULL
+            if existing[1] is None:
+                lean_name_base = lean_name.split("::")[-1] if "::" in lean_name else lean_name
+                matching_finding = self.conn.execute(
+                    """SELECT id FROM findings
+                       WHERE content LIKE ? OR tags LIKE ?
+                       LIMIT 1""",
+                    (f"%lean:{lean_name_base}%", f"%{lean_name_base}%"),
+                ).fetchone()
+                if matching_finding:
+                    self.conn.execute(
+                        "UPDATE lean_theorems SET finding_id = ? WHERE id = ?",
+                        (matching_finding[0], existing[0]),
+                    )
+                    self.conn.commit()
             return {"id": existing[0], "is_new": False}
 
         tid = f"thm-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
@@ -69,6 +84,21 @@ class TheoremRepository(EntityRepository):
             "INSERT INTO lean_theorems_vec (id, embedding) VALUES (?, ?)",
             (tid, embedding),
         )
+
+        # Backfill finding_id: check if any finding already cites this theorem by name
+        lean_name_base = lean_name.split("::")[-1] if "::" in lean_name else lean_name
+        matching_finding = self.conn.execute(
+            """SELECT id FROM findings
+               WHERE content LIKE ? OR tags LIKE ?
+               LIMIT 1""",
+            (f"%lean:{lean_name_base}%", f"%{lean_name_base}%"),
+        ).fetchone()
+        if matching_finding:
+            self.conn.execute(
+                "UPDATE lean_theorems SET finding_id = ? WHERE id = ?",
+                (matching_finding[0], tid),
+            )
+
         self.conn.commit()
         return {"id": tid, "is_new": True}
 

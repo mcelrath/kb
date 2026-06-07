@@ -1927,6 +1927,31 @@ def main():
                 print(f"  Raw output: {proc.stdout[:400]}")
                 sys.exit(2)
 
+            # Name-based lean_theorems reconciliation: check indexed state per lean: tag
+            for lt in lean_tags:
+                theorem_name = lt[len("lean:"):] if lt.startswith("lean:") else lt
+                if not theorem_name or theorem_name in ("proven", "sorry", "partial"):
+                    # These are status tags, not theorem names; skip
+                    continue
+                rows = kb.conn.execute(
+                    "SELECT id, statement, statement_pure FROM lean_theorems WHERE lean_name LIKE ?",
+                    (f"%{theorem_name}%",),
+                ).fetchall()
+                if not rows:
+                    print(f"[NOT INDEXED: {theorem_name} not in lean_theorems — run kb ingest lean]")
+                else:
+                    # Compare stored statement against audit-reported declarations (if available)
+                    stored_stmt = rows[0][2] or rows[0][1]  # prefer statement_pure
+                    if entry:
+                        declarations = entry.get("declarations", [])
+                        for decl in declarations:
+                            decl_name = decl.get("name", "") if isinstance(decl, dict) else str(decl)
+                            if theorem_name in decl_name:
+                                decl_stmt = decl.get("statement", "") if isinstance(decl, dict) else ""
+                                if decl_stmt and stored_stmt and decl_stmt.strip() != stored_stmt.strip():
+                                    print(f"[DRIFT: lean_theorems.statement differs from current source for {theorem_name} — re-ingest needed]")
+                                break
+
         elif args.command == "flush-pending":
             import os
             import fcntl

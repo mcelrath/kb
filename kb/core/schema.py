@@ -173,6 +173,7 @@ SCHEMA_SQL = """
         tex_source TEXT,
         project TEXT,
         tags TEXT,
+        finding_id TEXT,  -- FK to findings.id, populated at ingest when a finding cites this theorem
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
@@ -243,6 +244,34 @@ SCHEMA_SQL = """
         depends_on_id TEXT REFERENCES lean_theorems(id) ON DELETE CASCADE,
         PRIMARY KEY (theorem_id, depends_on_id)
     );
+
+    -- Python symbol index
+    CREATE TABLE IF NOT EXISTS python_symbols (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,        -- 'function' | 'class'
+        module TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        status TEXT NOT NULL,      -- 'canonical' | 'public' | 'scratch' | 'archived' | 'retired'
+        is_lru_cached INTEGER DEFAULT 0,
+        frame_hint TEXT,
+        redirect_to TEXT,
+        docstring_summary TEXT,
+        lean_citations TEXT,       -- JSON array
+        kb_refs TEXT,              -- JSON array
+        also_in_modules TEXT,      -- JSON array
+        file TEXT NOT NULL,
+        line INTEGER NOT NULL,
+        project TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        embedding BLOB
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_python_symbols_name ON python_symbols(name);
+    CREATE INDEX IF NOT EXISTS idx_python_symbols_status ON python_symbols(status);
+    CREATE INDEX IF NOT EXISTS idx_python_symbols_module ON python_symbols(module);
+    CREATE INDEX IF NOT EXISTS idx_python_symbols_project ON python_symbols(project);
 """
 
 
@@ -285,5 +314,11 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
         _ = conn.execute("SELECT summary FROM findings LIMIT 1")
     except sqlite3.OperationalError:
         _ = conn.execute("ALTER TABLE findings ADD COLUMN summary TEXT")
+
+    # Schema migration: add finding_id column to lean_theorems if not exists
+    try:
+        _ = conn.execute("SELECT finding_id FROM lean_theorems LIMIT 1")
+    except sqlite3.OperationalError:
+        _ = conn.execute("ALTER TABLE lean_theorems ADD COLUMN finding_id TEXT")
 
     conn.commit()
