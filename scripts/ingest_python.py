@@ -130,8 +130,10 @@ def _has_lru_cache(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) 
 
 
 def _extract_lean_citations(text: str) -> list[str]:
-    """Extract # Lean: citations from a docstring or comment text."""
-    return re.findall(r'#\s*Lean:\s*([\w./]+(?:::[\w.]+)?)', text)
+    """Extract Lean: citations from docstrings or # Lean: inline comments."""
+    # Matches both:  "# Lean: Foo.lean::bar"  (inline comment)
+    #            and "Lean: Foo.lean::bar"      (inside a docstring)
+    return re.findall(r'(?:#\s*)?Lean:\s*([\w./]+(?:::[\w.]+)?)', text)
 
 
 def _extract_kb_refs(text: str) -> list[str]:

@@ -1,151 +1,125 @@
 #!/usr/bin/env python3
 """
-Direct Lean source parser for Mathlib theorem ingestion.
+Lean theorem ingestion — direct regex parser (no LeanDojo).
 
-Bypasses lean-dojo by parsing .lean files directly with regex.
-Extracts theorem/lemma declarations with their type signatures.
-Only processes files that have a corresponding .olean build artifact.
+Auto-discovers two repos:
+  1. ~/Physics/claude/proofs/  — all compiled .lean files
+  2. ~/Physics/mathlib4/       — only files authored by Bob McElrath on the ag branch
+
+Skips files without a .olean artifact (not yet compiled).
+Only inserts theorems not already in the DB (lean_name + file key).
+After inserting, runs one LLM call per file to generate human-readable
+LaTeX summaries stored in statement_pure.
 
 Usage:
-    python scripts/ingest_lean_direct.py [--mathlib-root DIR]
-        [--project NAME] [--workers N] [--limit N] [--module-filter PREFIX]
-        [--dry-run]
+    python scripts/ingest_lean_direct.py [--dry-run] [--limit N]
+        [--files FILE ...]       # incremental: process only these absolute paths
+        [--no-summarize]         # skip LLM summary pass (fast, post-commit hook)
+        [--summarize-only]       # only fill missing statement_pure, no new inserts
 """
 
 import argparse
+import json
 import re
+import subprocess
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# ---- Lean declaration regex ----
-# Matches: [@attr] [private|protected] theorem|lemma|def NAME
-DECL_RE = re.compile(
-    r'^(?:@\[[^\]]*\]\s*)*'              # optional attributes
-    r'(?:private\s+|protected\s+)?'       # optional private/protected
-    r'(theorem|lemma)\s+'                  # keyword (theorem or lemma only)
-    r'([\w\'\.]+)',                        # name
-    re.MULTILINE,
-)
-
 NAMESPACE_PUSH = re.compile(r'^namespace\s+([\w\'\.]+)', re.MULTILINE)
-NAMESPACE_POP = re.compile(r'^end\s+([\w\'\.]+)', re.MULTILINE)
-SECTION_PUSH = re.compile(r'^section\b', re.MULTILINE)
-SECTION_POP = re.compile(r'^end\b(?!\s+\w)', re.MULTILINE)
+NAMESPACE_POP  = re.compile(r'^end\s+([\w\'\.]+)', re.MULTILINE)
+
+PROOFS_ROOT    = Path.home() / "Physics/claude/proofs"
+MATHLIB_ROOT   = Path.home() / "Physics/mathlib4"
+MATHLIB_AUTHOR = "Bob McElrath"
+
+# LLM context: cap file content to avoid blowing the context window
+MAX_FILE_CHARS = 12_000
+# LLM parallel workers (LLM is serial on the server side; 2-4 avoids starvation)
+LLM_WORKERS = 3
+
+
+# ---------------------------------------------------------------------------
+# Repo helpers
+# ---------------------------------------------------------------------------
+
+def _repo_root_for(lean_file: Path) -> Path:
+    for parent in lean_file.parents:
+        if (parent / "lakefile.toml").exists() or (parent / "lakefile.lean").exists():
+            return parent
+    return lean_file.parent
 
 
 def module_from_path(lean_file: Path, repo_root: Path) -> str:
-    """Convert file path to dotted module name."""
     try:
         rel = lean_file.relative_to(repo_root)
     except ValueError:
-        # File outside repo_root (e.g. passed via --files from another repo).
-        # Use the stem path relative to the nearest ancestor that looks like a repo root.
-        for parent in lean_file.parents:
-            if (parent / ".lake").exists() or (parent / "lakefile.lean").exists():
-                try:
-                    rel = lean_file.relative_to(parent)
-                    return str(rel.with_suffix("")).replace("/", ".")
-                except ValueError:
-                    continue
-        # Fallback: use file stem only
-        return lean_file.stem
+        repo_root = _repo_root_for(lean_file)
+        try:
+            rel = lean_file.relative_to(repo_root)
+        except ValueError:
+            return lean_file.stem
     return str(rel.with_suffix("")).replace("/", ".")
 
 
-def extract_statement(text: str, match_start: int, match_end: int) -> str:
-    """Extract the type signature of a theorem declaration.
+def has_olean(lean_file: Path, repo_root: Path) -> bool:
+    try:
+        rel = lean_file.relative_to(repo_root)
+    except ValueError:
+        repo_root = _repo_root_for(lean_file)
+        try:
+            rel = lean_file.relative_to(repo_root)
+        except ValueError:
+            return False
+    olean = repo_root / ".lake" / "build" / "lib" / "lean" / rel.with_suffix(".olean")
+    return olean.exists()
 
-    Captures from the keyword position to := or where or next declaration.
-    """
-    # Find the end of the statement (before :=, by, where at top level)
-    # We'll scan character by character tracking paren depth
-    i = match_start
-    n = len(text)
-    depth = 0
-    stmt_end = match_end  # at minimum, just the name
 
-    # Find ':=' or 'where' or end of block at depth 0
-    while i < n:
-        c = text[i]
-        if c in '([{':
-            depth += 1
-        elif c in ')]}':
-            depth -= 1
-        elif depth == 0:
-            # Check for := or where or by at depth 0
-            if text[i:i+2] == ':=':
-                stmt_end = i
-                break
-            if text[i:i+3] == 'by\n' or text[i:i+3] == 'by ':
-                stmt_end = i
-                break
-            if text[i:i+5] == 'where':
-                stmt_end = i
-                break
-        i += 1
-    else:
-        stmt_end = min(match_start + 500, n)
+def mathlib_contribution_files() -> list[Path]:
+    """Return .lean files on the ag branch authored by MATHLIB_AUTHOR vs origin/master."""
+    try:
+        out = subprocess.check_output(
+            ["git", "log", "origin/master..ag",
+             "--oneline", f"--author={MATHLIB_AUTHOR}", "--name-only"],
+            cwd=str(MATHLIB_ROOT), text=True, stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return []
+    files = []
+    for line in out.splitlines():
+        if line.endswith(".lean") and "/" in line:
+            p = MATHLIB_ROOT / line.strip()
+            if p.exists():
+                files.append(p)
+    return sorted(set(files))
 
-    raw = text[match_start:stmt_end].strip()
-    # Collapse whitespace runs
-    return re.sub(r'\s+', ' ', raw)
 
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
 
 def parse_lean_file(lean_file: Path, repo_root: Path) -> list[dict]:
-    """Parse a .lean file and return theorem declarations."""
     try:
-        text = lean_file.read_text(errors='replace')
+        text = lean_file.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
 
     module = module_from_path(lean_file, repo_root)
-
-    # Build a simple namespace stack by line scanning
-    # For qualified names, track namespace openings/closings
+    lines  = text.splitlines()
+    results: list[dict] = []
     ns_stack: list[str] = []
-    results = []
-
-    lines = text.splitlines(keepends=True)
-    line_starts = []  # byte offset of each line start
-    pos = 0
-    for ln in lines:
-        line_starts.append(pos)
-        pos += len(ln)
-
-    def offset_to_lineno(offset: int) -> int:
-        lo, hi = 0, len(line_starts) - 1
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            if line_starts[mid] <= offset:
-                lo = mid
-            else:
-                hi = mid - 1
-        return lo + 1  # 1-indexed
-
-    # Process namespace/end interleaved with declarations
-    # Use a single pass over lines
-    ns_stack = []
-
     i = 0
-    while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
 
-        # Namespace push
-        m = re.match(r'^namespace\s+([\w\'\.]+)', stripped)
-        if m:
+    while i < len(lines):
+        if m := NAMESPACE_PUSH.match(lines[i]):
             ns_stack.append(m.group(1))
             i += 1
             continue
 
-        # End (pop namespace or section)
-        m = re.match(r'^end\s+([\w\'\.]+)', stripped)
-        if m:
+        if m := NAMESPACE_POP.match(lines[i]):
             name = m.group(1)
-            # Pop the matching namespace
             for j in range(len(ns_stack) - 1, -1, -1):
                 if ns_stack[j] == name:
                     ns_stack = ns_stack[:j]
@@ -153,82 +127,50 @@ def parse_lean_file(lean_file: Path, repo_root: Path) -> list[dict]:
             i += 1
             continue
 
-        # Theorem/lemma declaration (possibly with preceding attributes)
-        # Collect attribute lines before the declaration
-        decl_lines = []
         j = i
-        # Skip leading @[...] attribute lines
         while j < len(lines):
             s = lines[j].strip()
-            if s.startswith('@[') or s.startswith('-- ') or s == '':
-                if s.startswith('@[') or s == '':
-                    decl_lines.append(lines[j])
-                    j += 1
-                else:
-                    break
+            if s.startswith("@[") or s == "":
+                j += 1
             else:
                 break
 
-        # Check if current or upcoming line has theorem/lemma
         if j < len(lines):
             s = lines[j].strip()
-            dm = re.match(
-                r'^(?:private\s+|protected\s+)?(theorem|lemma)\s+([\w\'\.]+)',
-                s
-            )
+            dm = re.match(r'^(?:private\s+|protected\s+)?(theorem|lemma)\s+([\w\'\.]+)', s)
             if dm:
-                # Skip private declarations
                 is_private = bool(re.match(r'^private\s+', s))
                 if not is_private:
-                    kw = dm.group(1)
                     local_name = dm.group(2)
-                    lineno = j + 1  # 1-indexed
+                    lineno     = j + 1
 
-                    # Full name
-                    if ns_stack:
-                        full_name = module + "." + ".".join(ns_stack) + "." + local_name
-                    else:
-                        full_name = module + "." + local_name
+                    full_name = (module + "." + ".".join(ns_stack) + "." + local_name
+                                 if ns_stack else module + "." + local_name)
 
-                    # Collect statement text (up to ~20 lines or until := or by)
-                    stmt_lines = []
-                    k = j
-                    depth = 0
-                    found_end = False
+                    stmt_lines, depth, k = [], 0, j
                     while k < len(lines) and k < j + 30:
-                        ln_text = lines[k]
-                        stmt_lines.append(ln_text.rstrip())
-                        # Track bracket depth
-                        for ch in ln_text:
-                            if ch in '([{':
-                                depth += 1
-                            elif ch in ')]}':
-                                depth -= 1
-                        if depth == 0:
-                            # Check for := or by or where
-                            stripped_ln = ln_text.rstrip()
-                            if re.search(r':=\s*$|:=\s*by\b|\bwhere\s*$', stripped_ln):
-                                found_end = True
-                                k += 1
-                                break
-                            if k > j and re.match(r'\s*(theorem|lemma|def|instance|class|structure)\b', ln_text):
-                                # Hit next declaration
-                                k = k  # don't include
-                                break
+                        ln = lines[k]
+                        stmt_lines.append(ln.rstrip())
+                        for ch in ln:
+                            if ch in "([{": depth += 1
+                            elif ch in ")]}": depth -= 1
+                        if depth == 0 and re.search(r':=\s*$|:=\s*by\b|\bwhere\s*$', ln.rstrip()):
+                            break
+                        if k > j and re.match(r'\s*(theorem|lemma|def|instance|class|structure)\b', ln):
+                            break
                         k += 1
 
-                    stmt = ' '.join(l.strip() for l in stmt_lines if l.strip())
-                    # Clean up := and proof tail
+                    stmt = " ".join(l.strip() for l in stmt_lines if l.strip())
                     stmt = re.sub(r'\s*:=\s*(by\s*)?.*$', '', stmt, flags=re.DOTALL)
                     stmt = re.sub(r'\s+', ' ', stmt).strip()
 
                     results.append({
-                        'lean_name': full_name,
-                        'name': local_name,
-                        'statement': stmt,
-                        'module': module + ("." + ".".join(ns_stack) if ns_stack else ""),
-                        'file': str(lean_file.relative_to(repo_root)),
-                        'line': lineno,
+                        "lean_name": full_name,
+                        "name":      local_name,
+                        "statement": stmt,
+                        "module":    module + ("." + ".".join(ns_stack) if ns_stack else ""),
+                        "file":      str(lean_file.relative_to(repo_root)),
+                        "line":      lineno,
                     })
                 i = j + 1
                 continue
@@ -238,197 +180,360 @@ def parse_lean_file(lean_file: Path, repo_root: Path) -> list[dict]:
     return results
 
 
-def has_olean(lean_file: Path, repo_root: Path) -> bool:
-    """Check if a .lean file has been compiled (has .olean)."""
-    try:
-        rel = lean_file.relative_to(repo_root)
-    except ValueError:
-        # File outside repo_root (e.g. passed via --files from another repo).
-        # Try to find the olean relative to the file's own nearest .lake tree.
-        for parent in lean_file.parents:
-            lake = parent / ".lake" / "build" / "lib" / "lean"
-            if lake.exists():
-                try:
-                    rel = lean_file.relative_to(parent)
-                    olean = lake / rel.with_suffix(".olean")
-                    return olean.exists()
-                except ValueError:
-                    continue
-        return False
-    olean = repo_root / ".lake" / "build" / "lib" / "lean" / rel.with_suffix(".olean")
-    return olean.exists()
-
-
 def process_file(args: tuple) -> list[dict]:
-    lean_file, repo_root = args
-    lean_file = Path(lean_file)
-    repo_root = Path(repo_root)
+    lean_file, repo_root = Path(args[0]), Path(args[1])
     if not has_olean(lean_file, repo_root):
         return []
     return parse_lean_file(lean_file, repo_root)
 
 
+# ---------------------------------------------------------------------------
+# LLM summarization
+# ---------------------------------------------------------------------------
+
+SUMMARIZE_SYSTEM = """\
+You are a mathematical expositor translating Lean 4 theorem statements into \
+precise human-readable summaries. Output valid JSON only — no prose outside the JSON object.\
+"""
+
+SUMMARIZE_PROMPT = """\
+Below is a Lean 4 source file, followed by a list of theorem/lemma names to summarise.
+
+For each name, write exactly one sentence that:
+- States what the theorem asserts, including all quantifiers and key hypotheses
+- Uses standard LaTeX notation ($\\zeta(s)$, $\\mathrm{GL}_n$, $\\mathbb{{Z}}$, etc.)
+- Is precise enough that a mathematician could reconstruct the Lean statement
+- Is self-contained (do not say "the above" or refer to the file)
+
+Output a single JSON object mapping each name to its summary string.
+Do not include names not in the list. Do not add extra keys.
+
+FILE ({filename}):
+```lean
+{file_content}
+```
+
+THEOREMS TO SUMMARISE (JSON keys must match exactly):
+{names_json}
+"""
+
+
+def summarize_file_theorems(
+    lean_file: Path,
+    theorems: list[dict],
+    llm_client,
+) -> dict[str, str]:
+    """Call LLM once per file; return {local_name: summary_text}."""
+    try:
+        file_content = lean_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+
+    # Cap content to avoid blowing context window
+    file_content = file_content[:MAX_FILE_CHARS]
+    if len(file_content) == MAX_FILE_CHARS:
+        file_content += "\n... (truncated)"
+
+    names = [t["name"] for t in theorems]
+    names_json = json.dumps(names, indent=2)
+
+    prompt = SUMMARIZE_PROMPT.format(
+        filename=lean_file.name,
+        file_content=file_content,
+        names_json=names_json,
+    )
+
+    raw = llm_client.complete(
+        prompt,
+        system_prompt=SUMMARIZE_SYSTEM,
+        max_tokens=150 * len(names) + 200,  # ~150 tok per theorem
+        temperature=0.2,
+        timeout=120,
+        thinking=False,
+    )
+    if not raw:
+        return {}
+
+    # Parse JSON — strip markdown fences if present
+    raw = re.sub(r'^```(?:json)?\s*\n?', '', raw.strip())
+    raw = re.sub(r'\n?```\s*$', '', raw).strip()
+    try:
+        result = json.loads(raw)
+        if isinstance(result, dict):
+            return {k: v for k, v in result.items() if isinstance(v, str) and v.strip()}
+    except json.JSONDecodeError:
+        pass
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mathlib-root", default=str(Path.home() / "Physics/mathlib4"))
-    parser.add_argument("--project", default="mathlib")
-    parser.add_argument("--workers", type=int, default=32)
-    parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--module-filter", default=None,
-                        help="Only process files matching this module prefix")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--batch-size", type=int, default=500,
-                        help="Files per batch for progress reporting")
+    parser = argparse.ArgumentParser(description="Ingest Lean theorems into KB.")
+    parser.add_argument("--dry-run",        action="store_true")
+    parser.add_argument("--limit",          type=int, default=None)
+    parser.add_argument("--workers",        type=int, default=32)
+    parser.add_argument("--no-summarize",   action="store_true",
+                        help="Skip LLM summary pass (fast mode for post-commit hook)")
+    parser.add_argument("--summarize-only", action="store_true",
+                        help="Only fill missing statement_pure; skip new inserts")
     parser.add_argument("--files", nargs="+", metavar="FILE",
-                        help="Process ONLY these specific .lean files (incremental mode). "
-                             "Paths may be absolute or relative to --mathlib-root.")
+                        help="Incremental: process only these absolute .lean paths")
     args = parser.parse_args()
 
-    repo_root = Path(args.mathlib_root).expanduser()
-    if not repo_root.exists():
-        print(f"Not found: {repo_root}", file=sys.stderr)
-        sys.exit(1)
+    # Post-commit hook: skip summarize for speed; human ingestion runs it
+    if args.files and not args.summarize_only:
+        # Incremental hook runs are fast; don't block the commit on LLM calls
+        args.no_summarize = True
 
-    # Collect .lean files
-    if args.files:
-        # Incremental mode: process only the specified files
-        lean_files = []
+    # ---- Build file list ------------------------------------------------
+    if args.files and not args.summarize_only:
+        file_repo_pairs: list[tuple[Path, Path, str]] = []
         for f in args.files:
-            p = Path(f)
-            if not p.is_absolute():
-                p = repo_root / p
-            p = p.resolve()
-            if p.exists() and p.suffix == ".lean":
-                lean_files.append(p)
+            p = Path(f).resolve()
+            if not p.exists() or p.suffix != ".lean":
+                print(f"Warning: skipping {f}", file=sys.stderr)
+                continue
+            if str(p).startswith(str(MATHLIB_ROOT)):
+                repo, project = MATHLIB_ROOT, "mathlib"
             else:
-                print(f"Warning: skipping {f} (not found or not .lean)", file=sys.stderr)
-        print(f"Incremental mode: {len(lean_files)} .lean files specified")
+                repo = _repo_root_for(p)
+                project = "algebraic-genesis"
+            file_repo_pairs.append((p, repo, project))
+        print(f"Incremental mode: {len(file_repo_pairs)} .lean files")
     else:
-        lean_files = sorted(repo_root.glob("Mathlib/**/*.lean"))
-        if args.module_filter:
-            prefix = args.module_filter.replace(".", "/")
-            lean_files = [f for f in lean_files if prefix in str(f.relative_to(repo_root))]
-        print(f"Found {len(lean_files)} .lean files in Mathlib/")
+        file_repo_pairs = []
 
-    # Filter to compiled files
-    compiled = [f for f in lean_files if has_olean(f, repo_root)]
-    print(f"  {len(compiled)} have .olean artifacts")
+        if PROOFS_ROOT.exists():
+            proofs_files = sorted(PROOFS_ROOT.glob("**/*.lean"))
+            compiled = [(f, PROOFS_ROOT, "algebraic-genesis")
+                        for f in proofs_files if has_olean(f, PROOFS_ROOT)]
+            print(f"proofs/: {len(proofs_files)} .lean files, {len(compiled)} compiled")
+            file_repo_pairs.extend(compiled)
+
+        if MATHLIB_ROOT.exists():
+            contrib = mathlib_contribution_files()
+            compiled_m = [(f, MATHLIB_ROOT, "mathlib")
+                          for f in contrib if has_olean(f, MATHLIB_ROOT)]
+            print(f"mathlib4/ag contributions: {len(contrib)} files, {len(compiled_m)} compiled")
+            file_repo_pairs.extend(compiled_m)
 
     if args.dry_run:
-        # Show sample
-        sample = compiled[:5]
-        for f in sample:
-            results = parse_lean_file(f, repo_root)
-            for r in results[:3]:
-                print(f"  {r['lean_name']}: {r['statement'][:80]}")
-        print(f"\n[DRY RUN] Would ingest from {len(compiled)} files")
+        for f, repo, proj in file_repo_pairs[:5]:
+            thms = parse_lean_file(f, repo)
+            for t in thms[:3]:
+                print(f"  [{proj}] {t['lean_name']}: {t['statement'][:80]}")
+        print(f"\n[DRY RUN] Would process {len(file_repo_pairs)} files")
         return
 
+    # ---- Setup DB + LLM -------------------------------------------------
     import uuid
-    from datetime import datetime
+    from datetime import datetime, timezone
     from kb import KnowledgeBase
-    kb = KnowledgeBase()
+
+    kb   = KnowledgeBase()
     conn = kb._theorems.conn
 
+    llm = None
+    if not args.no_summarize:
+        from kb.llm.client import LLMClient
+        import os
+        llm_url = os.environ.get("KB_LLM_URL", "http://tardis:9510/completion")
+        llm = LLMClient(llm_url=llm_url)
+
+    # ---- summarize-only mode: fill missing statement_pure ---------------
+    if args.summarize_only:
+        if llm is None:
+            from kb.llm.client import LLMClient
+            import os
+            llm = LLMClient(llm_url=os.environ.get("KB_LLM_URL", "http://tardis:9510/completion"))
+
+        missing = conn.execute(
+            "SELECT id, lean_name, name, file, project FROM lean_theorems "
+            "WHERE (statement_pure IS NULL OR statement_pure = '') "
+            "  AND statement IS NOT NULL AND statement != '' "
+            "ORDER BY project, file"
+        ).fetchall()
+        print(f"Theorems missing statement_pure: {len(missing)}")
+        if args.limit:
+            missing = missing[:args.limit]
+
+        # Group by (project, file)
+        from itertools import groupby
+        by_file: dict[tuple, list] = {}
+        for row in missing:
+            tid, lean_name, name, rel_file, project = row
+            if project == "algebraic-genesis":
+                abs_file = PROOFS_ROOT / rel_file
+            else:
+                abs_file = MATHLIB_ROOT / rel_file
+            key = (str(abs_file), project)
+            by_file.setdefault(key, []).append({"id": tid, "name": name, "lean_name": lean_name})
+
+        updated = 0
+
+        def _summarize_group(item):
+            abs_path_str, project = item[0]
+            theorems = item[1]
+            abs_path = Path(abs_path_str)
+            if not abs_path.exists():
+                return []
+            summaries = summarize_file_theorems(abs_path, theorems, llm)
+            return [(t["id"], summaries.get(t["name"], "")) for t in theorems]
+
+        print(f"Generating summaries for {len(by_file)} files with {LLM_WORKERS} LLM workers...")
+        with ThreadPoolExecutor(max_workers=LLM_WORKERS) as pool:
+            futs = {pool.submit(_summarize_group, item): item for item in by_file.items()}
+            done = 0
+            for fut in as_completed(futs):
+                for tid, summary in (fut.result() or []):
+                    if summary:
+                        conn.execute(
+                            "UPDATE lean_theorems SET statement_pure=? WHERE id=?",
+                            (summary, tid)
+                        )
+                        updated += 1
+                done += 1
+                if done % 20 == 0 or done == len(by_file):
+                    conn.commit()
+                    print(f"  files: {done}/{len(by_file)}  updated: {updated}")
+        conn.commit()
+        print(f"\nDone.  Summaries written: {updated}")
+        return
+
+    # ---- Full ingest pass -----------------------------------------------
     added = skipped = total = 0
-    EMBED_BATCH = 64  # embed this many at once
+    EMBED_BATCH = 64
+    # newly inserted rows grouped by file, for post-insert summarization
+    new_by_file: dict[str, list[dict]] = {}  # abs_file_str -> [{id, name, lean_name}]
 
-    file_args = [(str(f), str(repo_root)) for f in compiled]
+    def flush_batch(batch: list[dict], project: str) -> tuple[int, int]:
+        if not batch:
+            return 0, 0
+        seen: set[tuple] = set()
+        unique = []
+        for t in batch:
+            k = (t["lean_name"], t["file"])
+            if k not in seen:
+                seen.add(k)
+                unique.append(t)
 
-    print(f"Parsing {len(compiled)} files with {args.workers} workers...")
-    with ProcessPoolExecutor(max_workers=args.workers) as pool:
-        futures = {pool.submit(process_file, a): a for a in file_args}
+        new_thms = [t for t in unique if not conn.execute(
+            "SELECT id FROM lean_theorems WHERE lean_name=? AND file=?",
+            (t["lean_name"], t["file"])
+        ).fetchone()]
+
+        if not new_thms:
+            return 0, len(unique)
+
+        embed_texts = [t["statement"] or t["lean_name"] for t in new_thms]
+        embeddings  = kb._theorems.embedding_service.embed_batch(embed_texts)
+        now = datetime.now(timezone.utc).isoformat()
+
+        a = 0
+        for thm, emb in zip(new_thms, embeddings):
+            tid = f"thm-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+            conn.execute(
+                """INSERT OR IGNORE INTO lean_theorems
+                   (id, lean_name, name, statement, declaration, module,
+                    file, line, project, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (tid, thm["lean_name"], thm["name"], thm["statement"],
+                 thm["statement"], thm["module"], thm["file"],
+                 thm["line"], project, now, now),
+            )
+            if emb is not None:
+                conn.execute("DELETE FROM lean_theorems_vec WHERE id=?", (tid,))
+                conn.execute("INSERT INTO lean_theorems_vec (id, embedding) VALUES (?,?)",
+                             (tid, emb))
+            a += 1
+            if not args.no_summarize:
+                # Track for summarization: need abs path
+                # file is stored relative to repo root; reconstruct abs path
+                if project == "algebraic-genesis":
+                    abs_f = str(PROOFS_ROOT / thm["file"])
+                else:
+                    abs_f = str(MATHLIB_ROOT / thm["file"])
+                new_by_file.setdefault(abs_f, []).append(
+                    {"id": tid, "name": thm["name"], "lean_name": thm["lean_name"]}
+                )
+
+        conn.commit()
+        return a, len(unique) - a
+
+    # ---- Parse + embed (parallel) ----------------------------------------
+    from itertools import groupby
+    sorted_pairs = sorted(file_repo_pairs, key=lambda x: x[2])
+    for project, grp in groupby(sorted_pairs, key=lambda x: x[2]):
+        group_files = list(grp)
+        file_args   = [(str(f), str(repo)) for f, repo, _ in group_files]
         pending: list[dict] = []
         done = 0
 
-        def flush_batch(batch: list[dict]) -> tuple[int, int]:
-            """Insert batch with batch embeddings. Returns (added, skipped)."""
-            if not batch:
-                return 0, 0
-            a = s = 0
-            # Deduplicate within batch
-            seen_keys: set[tuple] = set()
-            unique = []
-            for thm in batch:
-                k = (thm['lean_name'], thm['file'])
-                if k not in seen_keys:
-                    seen_keys.add(k)
-                    unique.append(thm)
+        print(f"\nParsing {len(file_args)} files [{project}] with {args.workers} workers...")
+        with ProcessPoolExecutor(max_workers=args.workers) as pool:
+            futures = {pool.submit(process_file, a): a for a in file_args}
 
-            # Check existing
-            new_thms = []
-            for thm in unique:
-                ex = conn.execute(
-                    "SELECT id FROM lean_theorems WHERE lean_name=? AND file=?",
-                    (thm['lean_name'], thm['file'])
-                ).fetchone()
-                if ex:
-                    s += 1
-                else:
-                    new_thms.append(thm)
+            for fut in as_completed(futures):
+                pending.extend(fut.result())
+                done += 1
 
-            if not new_thms:
-                return a, s
+                while len(pending) >= EMBED_BATCH:
+                    batch, pending = pending[:EMBED_BATCH], pending[EMBED_BATCH:]
+                    if args.limit and total >= args.limit:
+                        break
+                    a, s = flush_batch(batch, project)
+                    added += a; skipped += s; total += a + s
 
-            # Batch embed
-            embed_texts = [t['statement'] or t['lean_name'] for t in new_thms]
-            embeddings = kb._theorems.embedding_service.embed_batch(embed_texts)
-            now = datetime.utcnow().isoformat()
+                if done % 200 == 0 or done == len(file_args):
+                    print(f"  files: {done}/{len(file_args)}  added: {added}  skipped: {skipped}")
 
-            for thm, emb in zip(new_thms, embeddings):
-                tid = f"thm-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-                conn.execute(
-                    """INSERT OR IGNORE INTO lean_theorems
-                       (id, lean_name, name, statement, declaration, module,
-                        file, line, project, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (tid, thm['lean_name'], thm['name'], thm['statement'],
-                     thm['statement'], thm['module'], thm['file'],
-                     thm['line'], args.project, now, now),
-                )
-                if emb is not None:
-                    conn.execute("DELETE FROM lean_theorems_vec WHERE id=?", (tid,))
-                    conn.execute(
-                        "INSERT INTO lean_theorems_vec (id, embedding) VALUES (?,?)",
-                        (tid, emb),
-                    )
-                a += 1
-            conn.commit()
-            return a, s + len(unique) - len(new_thms)
-
-        for fut in as_completed(futures):
-            theorems = fut.result()
-            pending.extend(theorems)
-            done += 1
-
-            while len(pending) >= EMBED_BATCH:
-                batch = pending[:EMBED_BATCH]
-                pending = pending[EMBED_BATCH:]
                 if args.limit and total >= args.limit:
                     break
-                a, s = flush_batch(batch)
-                added += a
-                skipped += s
-                total += a + s
 
-            if done % 500 == 0 or done == len(file_args):
-                print(f"  files: {done}/{len(file_args)}  theorems: {total}  added: {added}")
+            if pending and not (args.limit and total >= args.limit):
+                a, s = flush_batch(pending, project)
+                added += a; skipped += s
 
-            if args.limit and total >= args.limit:
-                break
+    print(f"\nInserted: {added}  Skipped (dup): {skipped}")
 
-        # Flush remainder
-        if pending and not (args.limit and total >= args.limit):
-            a, s = flush_batch(pending)
-            added += a
-            skipped += s
-            total += a + s
+    # ---- LLM summarization pass (new theorems only) ---------------------
+    if not args.no_summarize and new_by_file and llm is not None:
+        print(f"\nGenerating summaries for {len(new_by_file)} files "
+              f"({sum(len(v) for v in new_by_file.values())} theorems) "
+              f"with {LLM_WORKERS} LLM workers...")
+
+        def _summarize_group(item):
+            abs_path_str, theorems = item
+            abs_path = Path(abs_path_str)
+            if not abs_path.exists():
+                return []
+            summaries = summarize_file_theorems(abs_path, theorems, llm)
+            return [(t["id"], summaries.get(t["name"], "")) for t in theorems]
+
+        summarized = 0
+        with ThreadPoolExecutor(max_workers=LLM_WORKERS) as pool:
+            futs = {pool.submit(_summarize_group, item): item
+                    for item in new_by_file.items()}
+            done = 0
+            for fut in as_completed(futs):
+                for tid, summary in (fut.result() or []):
+                    if summary:
+                        conn.execute(
+                            "UPDATE lean_theorems SET statement_pure=? WHERE id=?",
+                            (summary, tid)
+                        )
+                        summarized += 1
+                done += 1
+                if done % 10 == 0 or done == len(new_by_file):
+                    conn.commit()
+                    print(f"  files: {done}/{len(new_by_file)}  summaries: {summarized}")
+        conn.commit()
+        print(f"Summaries written: {summarized}")
 
     print(f"\nDone.")
-    print(f"  Files processed: {done}")
-    print(f"  Theorems added:  {added}")
-    print(f"  Theorems skipped (dup): {skipped}")
-    print(f"  Total in DB (project={args.project}): {kb._theorems.count(project=args.project)}")
 
 
 if __name__ == "__main__":

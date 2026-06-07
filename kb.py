@@ -866,7 +866,7 @@ _MAINT_CMDS = [
     ("ask",           'LLM: answer a question from KB  "question" [-p PROJECT]'),
     ("stats",         "counts by type and project"),
     ("flush-pending", "drain the offline-add queue"),
-    ("ingest",        "lean [--source proofs|mathlib] | scripts <dir>"),
+    ("ingest",        "lean | python | tex | scripts <dir>"),
     ("delete",        "<kb-id> [--force]"),
     ("export",        "<file.json> [-p PROJECT]"),
     ("import",        "<file.json>"),
@@ -1071,21 +1071,16 @@ def main():
     ingest_parser = _add_parser("ingest", "Ingest external content into KB")
     ingest_sub = ingest_parser.add_subparsers(dest="ingest_cmd")
 
-    ingest_lean_parser = ingest_sub.add_parser("lean", help="Ingest Lean theorems + backfill statement_pure")
-    ingest_lean_parser.add_argument("--source", choices=["proofs", "mathlib"], default="proofs",
-        help="Repo to ingest (default: proofs)")
-    ingest_lean_parser.add_argument("--direct", action="store_true",
-        help="Use direct regex parser (no LeanDojo required)")
-    ingest_lean_parser.add_argument("--project", default=None)
+    ingest_lean_parser = ingest_sub.add_parser("lean",
+        help="Ingest Lean theorems (proofs/ + mathlib4/ag, auto-discovered) with LLM summaries")
     ingest_lean_parser.add_argument("--dry-run", action="store_true")
     ingest_lean_parser.add_argument("--limit", type=int, default=None)
-    ingest_lean_parser.add_argument("--module-filter", default=None)
-    ingest_lean_parser.add_argument("--workers", type=int, default=8,
-        help="Parallel workers for statement_pure backfill (default 8)")
-    ingest_lean_parser.add_argument("--no-backfill", action="store_true",
-        help="Skip statement_pure generation after ingestion")
+    ingest_lean_parser.add_argument("--no-summarize", action="store_true",
+        help="Skip LLM summary generation (post-commit hook uses this automatically)")
+    ingest_lean_parser.add_argument("--summarize-only", action="store_true",
+        help="Only fill missing statement_pure for already-ingested theorems")
     ingest_lean_parser.add_argument("--files", nargs="+", metavar="FILE",
-        help="Incremental mode: process ONLY these .lean files (absolute paths preferred)")
+        help="Incremental: process only these absolute .lean paths")
 
     ingest_scripts_parser = ingest_sub.add_parser("scripts", help="Register scripts with LLM-generated purposes")
     ingest_scripts_parser.add_argument("directory", type=Path, help="Directory to scan")
@@ -1749,36 +1744,24 @@ def main():
             scripts_dir = Path(__file__).parent / "scripts"
 
             if args.ingest_cmd == "lean":
-                script = "ingest_lean_direct.py" if args.direct else "ingest_lean.py"
-                script_path = scripts_dir / script
+                script_path = scripts_dir / "ingest_lean_direct.py"
                 if not script_path.exists():
                     print(f"Error: {script_path} not found")
                     sys.exit(1)
                 cmd = [sys.executable, str(script_path)]
-                if args.direct:
-                    # ingest_lean_direct.py only supports mathlib-style repos
-                    root = (Path.home() / "Physics/mathlib4") if args.source == "mathlib" \
-                           else (Path.home() / "Physics/claude/proofs")
-                    cmd += ["--mathlib-root", str(root)]
-                else:
-                    cmd += ["--source", args.source]
-                if args.project:
-                    cmd += ["--project", args.project]
                 if args.dry_run:
                     cmd += ["--dry-run"]
                 if args.limit:
                     cmd += ["--limit", str(args.limit)]
-                if args.module_filter:
-                    cmd += ["--module-filter", args.module_filter]
+                if getattr(args, "no_summarize", False):
+                    cmd += ["--no-summarize"]
+                if getattr(args, "summarize_only", False):
+                    cmd += ["--summarize-only"]
                 if getattr(args, "files", None):
                     cmd += ["--files"] + args.files
                 result = _sp.run(cmd)
                 if result.returncode != 0:
                     sys.exit(result.returncode)
-                if not args.no_backfill and not args.dry_run:
-                    print("\nBackfilling statement_pure...")
-                    _backfill_statement_pure(kb, project=args.project,
-                                              workers=args.workers, dry_run=False)
 
             elif args.ingest_cmd == "scripts":
                 script_path = Path(__file__).parent / "auto_register_scripts.py"
