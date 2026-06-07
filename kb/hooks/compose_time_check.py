@@ -151,6 +151,7 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str],
     _not_base = (
         f"SELECT current_symbol, meaning FROM notations "
         f"WHERE current_symbol IN ({placeholders}) "
+        f"AND meaning IS NOT NULL "
         f"AND (meaning_source IS NULL OR meaning_source != 'generic-fallback')"
     )
     if project:
@@ -269,13 +270,15 @@ def query_contracts(conn: sqlite3.Connection, tokens: list[str],
         if project:
             rows = conn.execute(
                 "SELECT id, file, line, decl_name, statement FROM lean_contracts "
-                "WHERE (decl_name LIKE ? OR statement LIKE ?) AND project=? LIMIT 3",
+                "WHERE (decl_name LIKE ? OR statement LIKE ?) AND project=? "
+                "AND file NOT LIKE '%/archive/%' LIMIT 3",
                 (f'%{tok}%', f'%{tok}%', project),
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT id, file, line, decl_name, statement FROM lean_contracts "
-                "WHERE decl_name LIKE ? OR statement LIKE ? LIMIT 3",
+                "WHERE (decl_name LIKE ? OR statement LIKE ?) "
+                "AND file NOT LIKE '%/archive/%' LIMIT 3",
                 (f'%{tok}%', f'%{tok}%'),
             ).fetchall()
         for cid, fpath, line, decl_name, statement in rows:

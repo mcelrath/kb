@@ -181,6 +181,7 @@ def query_symbols(
     _not_base = (
         f"SELECT current_symbol, meaning FROM notations "
         f"WHERE current_symbol IN ({ph}) "
+        f"AND meaning IS NOT NULL "
         f"AND (meaning_source IS NULL OR meaning_source != 'generic-fallback')"
     )
     if project:

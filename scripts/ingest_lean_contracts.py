@@ -127,11 +127,25 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
         return {'inserted': 0, 'skipped': 0, 'errors': 1}
 
     now = datetime.now().isoformat()
-    inserted = skipped = 0
+    inserted = skipped = purged = 0
 
     # Ensure table exists (even in dry-run, so the SELECT below works)
     kb.conn.executescript(CREATE_TABLE)
     kb.conn.commit()
+
+    # Purge stale rows: files moved to archive/, deleted, or outside proofs_dir.
+    # lean-audit only returns files it found; rows for moved/deleted files linger.
+    if not dry_run:
+        existing = kb.conn.execute('SELECT id, file FROM lean_contracts WHERE project=?',
+                                   (project,)).fetchall()
+        for row_id, row_file in existing:
+            p = Path(row_file) if row_file else None
+            gone = p is None or not p.exists() or '/archive/' in row_file
+            if gone:
+                kb.conn.execute('DELETE FROM lean_contracts WHERE id=?', (row_id,))
+                purged += 1
+        if purged:
+            kb.conn.commit()
 
     for fpath, fdata in audit.items():
         sorry_lines = fdata.get('sorry_lines', []) + fdata.get('true_stub_lines', [])
@@ -180,7 +194,7 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
 
         kb.conn.commit()
 
-    return {'inserted': inserted, 'skipped': skipped, 'errors': 0}
+    return {'inserted': inserted, 'skipped': skipped, 'purged': purged, 'errors': 0}
 
 
 def main() -> None:
@@ -199,7 +213,7 @@ def main() -> None:
 
     print(f'Auditing {proofs_dir} (dry_run={args.dry_run})', file=sys.stderr)
     stats = ingest(proofs_dir, kb, args.project, args.dry_run)
-    print(f"Inserted: {stats['inserted']}  Skipped(unchanged): {stats['skipped']}  Errors: {stats['errors']}")
+    print(f"Inserted: {stats['inserted']}  Skipped(unchanged): {stats['skipped']}  Purged: {stats['purged']}  Errors: {stats['errors']}")
 
 
 if __name__ == '__main__':
