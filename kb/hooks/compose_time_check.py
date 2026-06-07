@@ -261,6 +261,7 @@ def query_contracts(conn: sqlite3.Connection, tokens: list[str],
 
     advisories = []
     seen: set[str] = set()
+    contract_candidates: list[tuple[str, str]] = []
     # Look for tokens in decl_name (exact component match) or statement (LIKE)
     for tok in all_tokens:
         if len(tok) < 5:
@@ -283,9 +284,13 @@ def query_contracts(conn: sqlite3.Connection, tokens: list[str],
             seen.add(cid)
             basename = os.path.basename(fpath or '')
             name_str = decl_name or '?'
-            advisories.append(
-                f'[SORRY-CONTRACT WAITING: {basename}:{line} — {name_str}]'
+            contract_candidates.append(
+                (f'lc:{cid}', f'[SORRY-CONTRACT WAITING: {basename}:{line} — {name_str}]')
             )
+
+    if contract_candidates:
+        new_keys = set(filter_unseen([k for k, _ in contract_candidates]))
+        advisories.extend(line for k, line in contract_candidates if k in new_keys)
     return advisories[:5]
 
 
