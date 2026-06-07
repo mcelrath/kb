@@ -9,7 +9,6 @@ import re
 from typing import Any
 
 from .client import LLMClient
-from ..constants import GREEK_MEANINGS
 
 
 class ContentAnalyzer:
@@ -323,17 +322,17 @@ Evidence:
     def detect_notations(self, content: str, existing_symbols: set[str] | None = None) -> list[dict[str, Any]]:
         """Detect mathematical/physics notations in content that should be tracked.
 
-        Uses hybrid approach: regex extraction + hardcoded meanings for reliability.
+        Returns candidate symbols only — meanings come from the notations DB table,
+        not from hardcoded fallbacks.
         """
-        # Extract Greek letters using regex (reliable)
+        # Extract Greek letters using Unicode range (U+03B1-U+03C9 lowercase, U+0391-U+03A9 uppercase)
         greek_pattern = r'[α-ωΑ-Ω]'
         found_greek = sorted(set(re.findall(greek_pattern, content)))
 
         parsed: list[dict[str, Any]] = []
         for letter in found_greek:
-            meaning = GREEK_MEANINGS.get(letter, '')
             exists = letter in existing_symbols if existing_symbols else False
-            parsed.append({"symbol": letter, "meaning": meaning, "exists": exists})
+            parsed.append({"symbol": letter, "exists": exists})
 
         return parsed
 

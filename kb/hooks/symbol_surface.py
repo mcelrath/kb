@@ -96,9 +96,11 @@ def query_symbols(
             redir = f' → {redirect_to}' if redirect_to else ''
             advisories.append(f'[RETIRED: {name}{redir}]')
 
-    # notations exact symbol match
+    # notations exact symbol match — skip generic-fallback rows (project-blind meanings)
     rows2 = conn.execute(
-        f'SELECT current_symbol, meaning FROM notations WHERE current_symbol IN ({ph}) LIMIT 10',
+        f"SELECT current_symbol, meaning FROM notations "
+        f"WHERE current_symbol IN ({ph}) AND (meaning_source IS NULL OR meaning_source != 'generic-fallback') "
+        f"LIMIT 10",
         tokens,
     ).fetchall()
     for sym, meaning in rows2:

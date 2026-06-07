@@ -113,9 +113,11 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str]) -> l
                 f'[ALREADY-CODIFIED: {name} RETIRED{redir}]'
             )
 
-    # --- notations exact symbol match ---
+    # --- notations exact symbol match (skip generic-fallback rows) ---
     rows2 = conn.execute(
-        f'SELECT current_symbol, meaning FROM notations WHERE current_symbol IN ({placeholders}) LIMIT 10',
+        f"SELECT current_symbol, meaning FROM notations "
+        f"WHERE current_symbol IN ({placeholders}) AND (meaning_source IS NULL OR meaning_source != 'generic-fallback') "
+        f"LIMIT 10",
         tokens,
     ).fetchall()
     for sym, meaning in rows2:

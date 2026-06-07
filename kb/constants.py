@@ -64,40 +64,14 @@ CONTENT_WARNINGS = {
     },
 }
 
-# Common Greek letter meanings for notation detection
-GREEK_MEANINGS = {
-    'α': 'fine structure constant / angle',
-    'β': 'velocity ratio v/c / angle',
-    'γ': 'Lorentz factor / gamma matrix',
-    'δ': 'Dirac delta / variation',
-    'ε': 'small parameter / Levi-Civita symbol',
-    'ζ': 'Riemann zeta',
-    'η': 'metric tensor',
-    'θ': 'angle / Heaviside step function',
-    'ι': 'inclusion map',
-    'κ': 'curvature / coupling',
-    'λ': 'eigenvalue / wavelength',
-    'μ': 'spacetime index / mass scale',
-    'ν': 'spacetime index / frequency',
-    'ξ': 'gauge parameter / coordinate',
-    'ο': 'omicron',
-    'π': 'pi / projection',
-    'ρ': 'density / representation',
-    'σ': 'Pauli matrix / cross section',
-    'τ': 'proper time / triality / tau lepton',
-    'υ': 'upsilon',
-    'φ': 'scalar field / angle',
-    'χ': 'susceptibility / character',
-    'ψ': 'spinor field / wavefunction',
-    'ω': 'angular frequency / cube root of unity',
-    'Γ': 'Christoffel symbol / gamma function',
-    'Δ': 'Laplacian / gap parameter',
-    'Θ': 'Heaviside function',
-    'Λ': 'cosmological constant / cutoff',
-    'Σ': 'sum / self-energy / bivector',
-    'Φ': 'flux / scalar field',
-    'Ψ': 'wavefunction',
-    'Ω': 'solid angle / density parameter',
+# Greek letter Unicode code points — used ONLY to identify which characters are Greek.
+# NEVER use this as a meanings source; meanings come from the notations DB table.
+# Meanings here are generic-physics fallbacks that are WRONG for this project.
+# (e.g. η = K_48 grading here, NOT metric tensor; α = alpha_triality, NOT fine structure)
+GREEK_MEANINGS: dict[str, str] = {
+    letter: '' for letter in
+    'αβγδεζηθικλμνξοπρστυφχψω'
+    'ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ'
 }
 
 # Unicode to ASCII mappings for summary generation
