@@ -77,8 +77,24 @@ def extract_candidate_tokens(text: str) -> list[str]:
     return list(candidates)
 
 
+_FRAC_CONTEXT_RE = re.compile(
+    r'(?:'
+    r'[A-Za-zα-ωΑ-Ω_]\w*\s*=\s*\d{1,4}/\d{1,4}'   # X = N/D (assignment context)
+    r'|\d{1,4}/\d{1,4}\s*[A-Za-zα-ωΑ-Ω_]'           # N/D followed by a unit/operator
+    r'|\b(?:value|exact|result|equals?|is)\s+\d{1,4}/\d{1,4}'  # value 17/24
+    r')',
+    re.IGNORECASE,
+)
+
+
 def extract_fractions(text: str) -> list[str]:
-    """Extract 'N/D' style exact fractions."""
+    """Extract 'N/D' style exact fractions that appear in an operator/value context.
+
+    Bare 'items 10/11' style list ranges are excluded — require an adjacent
+    operator name, assignment, or explicit value keyword.
+    """
+    if not _FRAC_CONTEXT_RE.search(text):
+        return []
     return re.findall(r'\b\d{1,4}/\d{1,4}\b', text)
 
 
@@ -151,7 +167,7 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str],
     _not_base = (
         f"SELECT current_symbol, meaning FROM notations "
         f"WHERE current_symbol IN ({placeholders}) "
-        f"AND meaning IS NOT NULL "
+        f"AND meaning IS NOT NULL AND meaning != '' AND meaning != '?' "
         f"AND (meaning_source IS NULL OR meaning_source != 'generic-fallback')"
     )
     if project:
@@ -290,12 +306,37 @@ def query_contracts(conn: sqlite3.Connection, tokens: list[str],
             if cid not in contract_meta:
                 contract_meta[cid] = (fpath, line, decl_name, file_status, discharge_target, contract_awaiting, proof_grade, data_blocked_on)
 
+    # Relevance gate: require the text explicitly mentions EITHER:
+    #   (a) the file basename (e.g. 'ChargedSectorKCharpolys'), OR
+    #   (b) the owning bd-id (e.g. 'claude-gyb.4'), OR
+    #   (c) decl_name verbatim (exact CamelCase match).
+    # This prevents contracts from firing on every git commit / bridge send
+    # that shares common tokens like "mass", "spectrum", "charpoly".
+    def _is_relevant(fpath: str | None, decl_name: str | None,
+                     file_status: str | None, text_lower: str) -> bool:
+        if fpath:
+            base = os.path.basename(fpath or '').replace('.lean', '').lower()
+            if len(base) >= 6 and base in text_lower:
+                return True
+        if decl_name and len(decl_name) >= 6 and decl_name.lower() in text_lower:
+            return True
+        # bd-id from file_status, e.g. 'open-contract (claude-gyb.4)'
+        if file_status:
+            bd_m = re.search(r'((?:claude|secular-constraints)-[a-z0-9]+(?:\.[0-9]+)?)', file_status)
+            if bd_m and bd_m.group(1).lower() in text_lower:
+                return True
+        return False
+
+    text_lower = raw_text.lower()
+
     # Only surface contracts with >= 2 distinct token hits (noise filter)
     contract_candidates: list[tuple[str, str]] = []
     for cid, hits in contract_hits.items():
         if hits < 2:
             continue
         fpath, line, decl_name, file_status, discharge_target, contract_awaiting, proof_grade, data_blocked_on = contract_meta[cid]
+        if not _is_relevant(fpath, decl_name, file_status, text_lower):
+            continue
         basename = os.path.basename(fpath or '')
         name_str = decl_name or '?'
         # Build suffix. Priority order:
@@ -367,6 +408,11 @@ def query_structural_facts(conn: sqlite3.Connection, text: str) -> list[str]:
     # Check whether any relation-shaped pattern fires
     has_relation = any(p.search(text) for p in _RELATION_PATTERNS)
     if not has_relation:
+        return []
+
+    # Echo suppression: if text is already citing certified_data (the source),
+    # the agent knows — don't quote the registry back at them.
+    if re.search(r'certified_data|STRUCTURAL.FACT|ALGEBRA_RELATIONS', text, re.IGNORECASE):
         return []
 
     # Load catalog of known operators (lhs + rhs)
