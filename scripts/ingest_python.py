@@ -29,16 +29,45 @@ from kb import KnowledgeBase, DEFAULT_DB_PATH
 # can block attempts to write them in cl44/ source.
 # Sources: cl44/canonical_operators.py comments, CLAUDE.md, tip's T3 test fixture.
 RETIRED_SYMBOLS: dict[str, str] = {
-    # gamma9_48: the old 48-element gamma9 alias; K_48 is the canonical Krein operator
+    # Krein / chirality operators
     "gamma9_48": "K_48",
-    # gamma_9: alias retired per canonical_operators.py line 1115 comment
     "gamma_9": "K_48",
-    # Old generating-functional names replaced by Z_species/S_eff
+    "chirality9_w": "K_w",
+    "gamma_5_48": "C_48",
+    "gamma5_48": "C_48",
+    # Old generating-functional names
     "partition_function_old": "Z_species",
     "effective_action": "S_eff",
-    # Old mass matrix names
-    "mass_matrix_old": "mass_matrix",
-    "MtM_old": "mass_matrix",
+    # Color/SU(3) sector — archived; no direct replacement
+    "sl3_bivector_48": "ARCHIVED",
+    "physical_color_su3_48": "ARCHIVED",
+    "color_generators_48": "sm_color_su3_48",
+    # Triality intertwiner renames
+    "triality_rotation_16": "Tw_w",
+    "_signed_triality_intertwiner_mp": "Tw_fock",
+    # Bare names retired in favour of explicit w-sector suffix
+    "bare_Q_EM": "Q_EM_w",
+    "bare_mhf": "mhf_w",
+    "m_vb_16": "m_vb_w",
+    "bare_m_vb": "m_vb_w",
+    "bare_Tw": "Tw_w",
+    # gamma9 on the 16-element Fock space
+    "gamma9_16": "gamma9_cl44",
+    # Grade / number operators
+    "N_grade": "N_grade_w",
+    "N_total_w": "N_grade_w",
+    # tau2 mass half-field
+    "tau2_m_hf": "tau2_M_w",
+    "bare_tau2_M": "tau2_M_w",
+    # Shift/mass matrices renamed this week
+    "shift_matrix_48": "M_g5_odd_48",
+    "scalar_shift_48": "M_g5_even_48",
+    "shift_matrix_full_48": "M_full_48",
+    # Sector charpoly scripts — archived; home is cl44.charpoly
+    "sector_charpolys_bare_g9": "ARCHIVED",
+    # Mixing angle modules renamed
+    "pmns": "q_minus1_mixing",
+    "ckm": "q_plus2_3_mixing",
 }
 
 # Modules considered canonical (exported + blessed)
