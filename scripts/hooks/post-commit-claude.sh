@@ -30,3 +30,9 @@ LEAN_F=$(echo "$CHANGED" | grep '\.lean$' | sed "s|^|$ROOT/|" | tr '\n' ' ')
 
 TEX_F=$(echo "$CHANGED" | grep '\.tex$' | sed "s|^|$ROOT/|" | tr '\n' ' ')
 [ -n "$TEX_F" ] && setsid nohup sh -c "$KB ingest tex --files $TEX_F" >>"$LOG" 2>&1 </dev/null &
+
+# Re-ingest lean_contracts (sorry-contract index) on any proofs/ .lean change
+if echo "$CHANGED" | grep -q 'proofs/.*\.lean$'; then
+  INGEST="$HOME/Projects/ai/kb/scripts/ingest_lean_contracts.py"
+  setsid nohup python3 "$INGEST" --proofs-dir "$ROOT/proofs" >>"$LOG" 2>&1 </dev/null &
+fi
