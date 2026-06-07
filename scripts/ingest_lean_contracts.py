@@ -62,6 +62,12 @@ _MIGRATE_COLS = [
     ('discharge_target', 'TEXT'),
 ]
 
+# Registered file_status vocabulary (enum).
+# open-contract    = real theorem statements, sorries pending discharge; safe to route to a discharge agent.
+# contract-skeleton = statements are PLACEHOLDERS (SublatticeLChain lesson); needs statement repair first,
+#                     route to the owning bd-id — NEVER to a discharge agent.
+FILE_STATUS_ENUM: frozenset[str] = frozenset({'open-contract', 'contract-skeleton'})
+
 
 # --- Source parsing ----------------------------------------------------------
 
@@ -70,13 +76,26 @@ _CONTRACT_RE = re.compile(r'--\s*CONTRACT:\s*(.+)')
 _DISCHARGES_RE = re.compile(r'--\s*DISCHARGES:\s*(.+)')
 _SORRY_CONTRACT_INLINE_RE = re.compile(r'--\s*SORRY-CONTRACT:\s*(.+)')
 
+# Capture just the status token before the optional "(bd-id)" suffix.
+_FILE_STATUS_TOKEN_RE = re.compile(r'^(\S+)')
 
-def _parse_file_status(source: str) -> str | None:
-    """Scan first 60 lines for -- LEAN-STATUS: marker (module docstring annotation)."""
+
+def _parse_file_status(source: str, fpath: str = '') -> str | None:
+    """Scan first 60 lines for -- LEAN-STATUS: marker. Validates against FILE_STATUS_ENUM."""
     for line in source.splitlines()[:60]:
         m = _LEAN_STATUS_RE.search(line)
         if m:
-            return m.group(1).strip()
+            raw = m.group(1).strip()
+            # Extract the status token (first word before optional "(bd-id)")
+            tok_m = _FILE_STATUS_TOKEN_RE.match(raw)
+            token = tok_m.group(1) if tok_m else raw
+            if token not in FILE_STATUS_ENUM:
+                print(
+                    f'WARN: {fpath}: LEAN-STATUS token "{token}" not in vocabulary '
+                    f'{sorted(FILE_STATUS_ENUM)}. Accepted as-is; check for typo.',
+                    file=__import__('sys').stderr,
+                )
+            return raw
     return None
 
 
@@ -238,7 +257,7 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
         except OSError:
             continue
 
-        file_status = _parse_file_status(source)
+        file_status = _parse_file_status(source, fpath=fpath)
 
         for entry in sorry_lines:
             lineno = entry.get('line', 0)

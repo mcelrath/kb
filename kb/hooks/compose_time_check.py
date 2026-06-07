@@ -296,13 +296,20 @@ def query_contracts(conn: sqlite3.Connection, tokens: list[str],
         fpath, line, decl_name, file_status, discharge_target, contract_awaiting = contract_meta[cid]
         basename = os.path.basename(fpath or '')
         name_str = decl_name or '?'
-        # Build suffix: DISCHARGES takes priority over CONTRACT, then file_status
+        # Build suffix: DISCHARGES takes priority over CONTRACT, then file_status.
+        # file_status semantics:
+        #   open-contract    → statements are trustworthy; discharge work is appropriate
+        #   contract-skeleton → statements are PLACEHOLDERS; route to owning bd-id, NOT a discharge agent
         if discharge_target:
             suffix = f' | DISCHARGES: {discharge_target}'
         elif contract_awaiting:
             suffix = f' | CONTRACT: {contract_awaiting[:70]}'
         elif file_status:
-            suffix = f' | CONTRACT-FILE: {file_status[:60]}'
+            fs_token = file_status.split()[0] if file_status else ''
+            if fs_token == 'contract-skeleton':
+                suffix = f' | SKELETON (statements are placeholders — repair statements first, do NOT attempt discharge): {file_status[:60]}'
+            else:
+                suffix = f' | CONTRACT-FILE: {file_status[:60]}'
         else:
             suffix = ''
         contract_candidates.append(
