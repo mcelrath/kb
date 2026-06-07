@@ -1628,7 +1628,8 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         Returns dict with 'id', 'is_new'.
         """
         existing = self.conn.execute(
-            "SELECT id FROM python_symbols WHERE name = ? AND module = ?",
+            "SELECT id, signature, status, file, line, docstring_summary, lean_citations, kb_refs "
+            "FROM python_symbols WHERE name = ? AND module = ?",
             (name, module),
         ).fetchone()
 
@@ -1638,11 +1639,24 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         kb_json = json.dumps(kb_refs or [])
         also_json = json.dumps(also_in_modules or [])
 
+        if existing:
+            # Skip the embedding + UPDATE entirely if nothing material changed.
+            old_lean = json.loads(existing["lean_citations"] or "[]")
+            old_kb = json.loads(existing["kb_refs"] or "[]")
+            if (existing["signature"] == signature
+                    and existing["status"] == status
+                    and existing["file"] == file
+                    and existing["line"] == line
+                    and existing["docstring_summary"] == docstring_summary
+                    and old_lean == (lean_citations or [])
+                    and old_kb == (kb_refs or [])):
+                return {"id": existing["id"], "is_new": False, "skipped": True}
+
         embed_text = f"{module}.{name}: {signature} {docstring_summary or ''}"
         embedding = self._embed(embed_text)
 
         if existing:
-            sym_id = existing[0]
+            sym_id = existing["id"]
             self.conn.execute("""
                 UPDATE python_symbols SET kind=?, signature=?, status=?, is_lru_cached=?,
                     frame_hint=?, redirect_to=?, docstring_summary=?, lean_citations=?,

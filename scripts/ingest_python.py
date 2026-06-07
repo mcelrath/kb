@@ -242,8 +242,11 @@ def parse_python_file(
         print(f"  Warning: cannot read {file_path}: {e}", file=sys.stderr)
         return []
 
+    import warnings
     try:
-        tree = ast.parse(source)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            tree = ast.parse(source)
     except SyntaxError as e:
         print(f"  Warning: syntax error in {file_path}: {e}", file=sys.stderr)
         return []
@@ -473,6 +476,7 @@ def main() -> None:
     COMMIT_EVERY = 50
     new_count = 0
     updated_count = 0
+    skipped_count = 0
     sym_iter = _tqdm(all_symbols, desc="insert", unit="sym", dynamic_ncols=True) if _tqdm else all_symbols
     try:
         for i, s in enumerate(sym_iter, 1):
@@ -493,6 +497,8 @@ def main() -> None:
             )
             if result["is_new"]:
                 new_count += 1
+            elif result.get("skipped"):
+                skipped_count += 1
             else:
                 updated_count += 1
             if i % COMMIT_EVERY == 0:
@@ -501,7 +507,7 @@ def main() -> None:
         if _tqdm and hasattr(sym_iter, 'close'):
             sym_iter.close()
         kb.conn.commit()
-        print(f"\nInterrupted — Inserted: {new_count}  Updated: {updated_count}")
+        print(f"\nInterrupted — New: {new_count}  Updated: {updated_count}  Skipped: {skipped_count}")
         return
     if _tqdm and hasattr(sym_iter, 'close'):
         sym_iter.close()
@@ -524,7 +530,7 @@ def main() -> None:
         multi_module_count += 1
 
     kb.conn.commit()
-    print(f"Inserted: {new_count}  Updated: {updated_count}  Multi-module: {multi_module_count}")
+    print(f"New: {new_count}  Updated: {updated_count}  Skipped(unchanged): {skipped_count}  Multi-module: {multi_module_count}")
 
     # Populate notations
     if not args.no_notations:
