@@ -87,23 +87,39 @@ def main() -> None:
     if 'lake' not in cmd:
         sys.exit(0)
 
-    # Get tool output — PostToolUse uses tool_result (not tool_response)
+    # Get tool output — try all known key/structure variants used by Claude Code
     output = ''
-    tr = data.get('tool_result') or data.get('tool_response') or {}
-    if isinstance(tr, str):
-        output = tr
-    elif isinstance(tr, dict):
-        stdout = tr.get('stdout') or ''
-        stderr = tr.get('stderr') or ''
-        output = stdout + stderr
-        if not output:
-            output = tr.get('output') or tr.get('content') or ''
-    elif isinstance(tr, list):
-        for item in tr:
-            if isinstance(item, dict):
-                output += item.get('text') or item.get('content') or ''
+    for key in ('tool_result', 'tool_response'):
+        tr = data.get(key)
+        if not tr:
+            continue
+        if isinstance(tr, str):
+            output = tr
+        elif isinstance(tr, dict):
+            # Try stdout+stderr first (full output), then combined keys
+            stdout = tr.get('stdout') or ''
+            stderr = tr.get('stderr') or ''
+            output = stdout + stderr
+            if not output:
+                output = tr.get('output') or tr.get('content') or ''
+        elif isinstance(tr, list):
+            for item in tr:
+                if isinstance(item, dict):
+                    output += (item.get('text') or item.get('content') or '')
+        if output:
+            break
+    # Final fallback: some Claude Code versions put output at top level
+    if not output:
+        for key in ('output', 'stdout', 'stderr', 'content'):
+            v = data.get(key)
+            if isinstance(v, str) and v:
+                output += v
 
-    if not output or 'error:' not in output.lower():
+    # Lean errors: "error: unknown identifier", "error(lean.unknownIdentifier)"
+    # Also handle piped invocations where stderr may be merged into stdout
+    _ERROR_SIGNALS = ('error:', 'lean.unknown', 'unknown identifier', 'unknown constant',
+                      'declaration not found', 'typecheck failed', 'synthesize')
+    if not output or not any(sig in output.lower() for sig in _ERROR_SIGNALS):
         sys.exit(0)
 
     db = os.path.expanduser('~/.cache/kb/knowledge.db')
