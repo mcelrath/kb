@@ -292,6 +292,31 @@ SCHEMA_SQL = """
 
     CREATE INDEX IF NOT EXISTS idx_tex_annotations_section ON tex_annotations(section_label);
     CREATE INDEX IF NOT EXISTS idx_tex_annotations_file ON tex_annotations(file);
+
+    -- Structural algebraic facts (commutators, eigenvalues, spectra, identities)
+    -- Single source = cl44.certified_data; this table holds pointers + lookup keys.
+    -- NOT semantically embedded: queries are exact-match on operator names.
+    CREATE TABLE IF NOT EXISTS structural_facts (
+        id TEXT PRIMARY KEY,
+        relation_type TEXT NOT NULL
+            CHECK(relation_type IN ('commutator','anticommutator','eigenvalue',
+                                    'trace','charpoly','identity','negative')),
+        lhs_operator TEXT NOT NULL,   -- e.g. 'C', 'K', 'M_odd', 'Q_EM'
+        rhs_operator TEXT,            -- NULL for unary relations (trace, eigenvalue, charpoly)
+        result_exact TEXT NOT NULL,   -- human-readable exact result, e.g. '0', '3/4 * I', 'MIXED'
+        negative INTEGER DEFAULT 0,   -- 1 if result asserts the relation does NOT hold
+        certified_data_key TEXT,      -- import path, e.g. 'cl44.certified_data.ALGEBRA_RELATIONS["C_Modd"]'
+        lean_thm TEXT,                -- qualified Lean theorem name or NULL
+        project TEXT NOT NULL DEFAULT 'algebraic-genesis',
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_structural_facts_lhs ON structural_facts(lhs_operator);
+    CREATE INDEX IF NOT EXISTS idx_structural_facts_rhs ON structural_facts(rhs_operator);
+    CREATE INDEX IF NOT EXISTS idx_structural_facts_type ON structural_facts(relation_type);
+    CREATE INDEX IF NOT EXISTS idx_structural_facts_lhs_rhs ON structural_facts(lhs_operator, rhs_operator);
 """
 
 
@@ -362,5 +387,33 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
         _ = conn.execute("SELECT project FROM python_symbols LIMIT 1")
     except sqlite3.OperationalError:
         _ = conn.execute("ALTER TABLE python_symbols ADD COLUMN project TEXT")
+
+    # Schema migration: structural_facts table (added 2026-06-07)
+    try:
+        _ = conn.execute("SELECT id FROM structural_facts LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS structural_facts (
+                id TEXT PRIMARY KEY,
+                relation_type TEXT NOT NULL
+                    CHECK(relation_type IN ('commutator','anticommutator','eigenvalue',
+                                            'trace','charpoly','identity','negative')),
+                lhs_operator TEXT NOT NULL,
+                rhs_operator TEXT,
+                result_exact TEXT NOT NULL,
+                negative INTEGER DEFAULT 0,
+                certified_data_key TEXT,
+                lean_thm TEXT,
+                project TEXT NOT NULL DEFAULT 'algebraic-genesis',
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_structural_facts_lhs ON structural_facts(lhs_operator);
+            CREATE INDEX IF NOT EXISTS idx_structural_facts_rhs ON structural_facts(rhs_operator);
+            CREATE INDEX IF NOT EXISTS idx_structural_facts_type ON structural_facts(relation_type);
+            CREATE INDEX IF NOT EXISTS idx_structural_facts_lhs_rhs
+                ON structural_facts(lhs_operator, rhs_operator);
+        """)
 
     conn.commit()

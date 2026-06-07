@@ -334,6 +334,99 @@ def query_contracts(conn: sqlite3.Connection, tokens: list[str],
     return advisories[:5]
 
 
+_RELATION_PATTERNS = [
+    re.compile(r'\[([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\]'),   # [A, B] commutator
+    re.compile(r'\{([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\}'),   # {A, B} anticommutator
+    re.compile(r'\beigenvalues?\s+of\s+([A-Za-z_]\w*)', re.I),
+    re.compile(r'\bspectrum\s+of\s+([A-Za-z_]\w*)', re.I),
+    re.compile(r'\bcharpoly\s+of\s+([A-Za-z_]\w*)', re.I),
+    re.compile(r'\bTr\s*[\(\[]([A-Za-z_]\w*)', re.I),
+    re.compile(r'\btrace\s+of\s+([A-Za-z_]\w*)', re.I),
+    re.compile(r'\bcommutes?\s+with\b', re.I),
+    re.compile(r'\banticommutes?\b', re.I),
+    re.compile(r'\brecompute\b', re.I),
+]
+
+_RECOMPUTE_RE = re.compile(r'\brecompute\b', re.I)
+
+
+def query_structural_facts(conn: sqlite3.Connection, text: str) -> list[str]:
+    """Surface structural-fact advisories when relation-shaped text + cataloged operators appear.
+
+    Fires when:
+      - Relation-shaped patterns ([A,B], {A,B}, 'commutes with', 'eigenvalues of', etc.)
+        appear AND at least one known operator name from structural_facts is found in text.
+      - OR 'recompute' appears with a known operator name (explicit recompute intent).
+    Never blocks; advisory only.
+    """
+    try:
+        conn.execute('SELECT 1 FROM structural_facts LIMIT 1')
+    except Exception:
+        return []
+
+    # Check whether any relation-shaped pattern fires
+    has_relation = any(p.search(text) for p in _RELATION_PATTERNS)
+    if not has_relation:
+        return []
+
+    # Load catalog of known operators (lhs + rhs)
+    known_ops = set()
+    rows = conn.execute(
+        'SELECT DISTINCT lhs_operator, rhs_operator FROM structural_facts'
+    ).fetchall()
+    for lhs, rhs in rows:
+        # Split on '/' or whitespace in composite names like 'shift_matrix_sq_48 / M_full_48'
+        for part in re.split(r'[/\s]+', lhs or ''):
+            if len(part) >= 3:
+                known_ops.add(part)
+        if rhs:
+            for part in re.split(r'[/\s]+', rhs):
+                if len(part) >= 3:
+                    known_ops.add(part)
+
+    # Find which known operators appear in the text
+    matched_ops: set[str] = set()
+    for op in known_ops:
+        # Require word-boundary match; avoid matching 'M_odd' inside 'M_odd_gram' via token check
+        if re.search(r'\b' + re.escape(op) + r'\b', text):
+            matched_ops.add(op)
+
+    if not matched_ops:
+        return []
+
+    # Query structural_facts for all entries whose lhs or rhs matches a found operator
+    advisories: list[str] = []
+    seen_ids: set[str] = set()
+    for op in matched_ops:
+        sf_rows = conn.execute(
+            "SELECT id, relation_type, lhs_operator, rhs_operator, result_exact, "
+            "       negative, certified_data_key, lean_thm, notes "
+            "FROM structural_facts "
+            "WHERE lhs_operator LIKE ? OR rhs_operator LIKE ? LIMIT 4",
+            (f'%{op}%', f'%{op}%'),
+        ).fetchall()
+        for sf_id, rtype, lhs, rhs, result, negative, cd_key, lean_thm, notes in sf_rows:
+            if sf_id in seen_ids:
+                continue
+            seen_ids.add(sf_id)
+            lhs_str = lhs or ''
+            rhs_str = rhs or ''
+            if rhs_str:
+                pair = f'{{{lhs_str},{rhs_str}}}' if rtype == 'anticommutator' else f'[{lhs_str},{rhs_str}]' if rtype == 'commutator' else f'{lhs_str}/{rhs_str}'
+            else:
+                pair = lhs_str
+            neg_tag = ' (NEGATIVE RESULT)' if negative else ''
+            src = cd_key or lean_thm or 'certified_data'
+            result_short = result[:120] if result else '?'
+            line = (f'[STRUCTURAL-FACT{neg_tag}: {rtype}({pair}) = {result_short} '
+                    f'({src}) — DO NOT RECOMPUTE; cite certified_data]')
+            if notes and len(notes) < 80:
+                line += f' note: {notes}'
+            advisories.append(line)
+
+    return advisories[:6]
+
+
 def main() -> None:
     data = json.load(sys.stdin)
     tool_name = data.get('tool_name', '')
@@ -375,6 +468,7 @@ def main() -> None:
         project = _project_from_cwd()
         advisories = query_db(conn, tokens, fracs, project=project)
         advisories += query_contracts(conn, tokens, project=project, raw_text=prompt_text)
+        advisories += query_structural_facts(conn, prompt_text)
         conn.close()
         if advisories:
             print(json.dumps({
