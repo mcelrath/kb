@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""H1: canonical-symbol-check — reads hook JSON from stdin, checks python_symbols."""
+"""H1: canonical-symbol-check — PreToolUse/Edit+Write on cl44/ Python files.
+
+Checks function/class names being written against python_symbols DB:
+  - RETIRED: blocks (exit 2) — stderr reaches agent as hook feedback
+  - CANONICAL: advisory (exit 0) — stdout JSON additionalContext (stderr discarded on exit 0)
+"""
 import sys
 import ast
 import json
@@ -35,6 +40,7 @@ if not os.path.exists(db):
 try:
     conn = sqlite3.connect(db, timeout=5)
     block = False
+    canonical_lines = []
     for name in set(names):
         rows = conn.execute(
             'SELECT status, module, file, line, redirect_to FROM python_symbols WHERE name=? LIMIT 3',
@@ -42,12 +48,24 @@ try:
         ).fetchall()
         for status, module, fpath, line, redirect_to in rows:
             if status == 'retired':
+                # PreToolUse blocking: stderr is shown as hook feedback on exit 2
                 print(f'[RETIRED: {name} → use {redirect_to or "?"} instead]', file=sys.stderr)
                 block = True
             elif status == 'canonical':
-                print(f'[CANONICAL: {module}.{name} ({fpath}:{line}) — is this what you are implementing?]',
-                      file=sys.stderr)
+                canonical_lines.append(
+                    f'[CANONICAL: {module}.{name} ({fpath}:{line}) — is this what you are implementing?]'
+                )
     conn.close()
+
+    if canonical_lines and not block:
+        # Advisory on exit 0: must use stdout JSON — stderr is discarded by harness
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": "\n".join(canonical_lines),
+            }
+        }))
+
     sys.exit(2 if block else 0)
 except Exception:
     sys.exit(0)
