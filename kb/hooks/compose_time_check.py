@@ -15,6 +15,12 @@ import sqlite3
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from _seen import filter_unseen  # noqa: E402
+try:
+    sys.path.insert(0, os.path.expanduser('~/.claude/hooks/lib'))
+    from ash_health import ash_down, STOP_LINE
+except Exception:
+    def ash_down(): return False
+    STOP_LINE = ''
 
 
 def extract_candidate_tokens(text: str) -> list[str]:
@@ -522,6 +528,13 @@ def main() -> None:
         sys.exit(0)
 
     if not prompt_text or len(prompt_text) < 20:
+        sys.exit(0)
+
+    # EMBEDDING-DOWN gate: ash:8081 down => semantic retrieval is BLIND. Surface a
+    # hard STOP at compute/dispatch time so the agent does not forge ahead blind.
+    if ash_down() and STOP_LINE:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "additionalContext": STOP_LINE}}))
         sys.exit(0)
 
     db = os.path.expanduser('~/.cache/kb/knowledge.db')
