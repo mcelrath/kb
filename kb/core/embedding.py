@@ -63,7 +63,7 @@ class EmbeddingService:
         self._cache_order.append(text_hash)
 
     def _embed_remote(
-        self, text: str, max_retries: int | None = None, base_delay: float = 2.0
+        self, text: str, max_retries: int | None = None, base_delay: float = 1.5
     ) -> list[float]:
         """Get embedding from remote endpoint (llama.cpp style).
 
@@ -85,7 +85,7 @@ class EmbeddingService:
             RuntimeError: If all retries fail
         """
         if max_retries is None:
-            max_retries = int(os.environ.get("KB_EMBED_MAX_RETRIES", "2"))
+            max_retries = int(os.environ.get("KB_EMBED_MAX_RETRIES", "5"))
         last_error: Exception | None = None
 
         for attempt in range(max_retries + 1):
