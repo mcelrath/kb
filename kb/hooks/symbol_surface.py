@@ -18,7 +18,9 @@ import re
 import sqlite3
 import warnings
 
-from ._seen import filter_unseen
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from _seen import filter_unseen  # noqa: E402
 
 _SCAN_EXTENSIONS = {
     '.lean', '.py', '.tex', '.md', '.txt', '.output', '.json',

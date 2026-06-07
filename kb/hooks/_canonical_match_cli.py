@@ -61,7 +61,9 @@ def main() -> None:
     tokens = _extract_tokens(text)
 
     # Collect hits — CANONICAL deduped cross-hook, RETIRED always shown
-    from ._seen import filter_unseen
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _seen import filter_unseen
 
     canonical_hits: list[tuple[str, str]] = []
     retired_lines: list[str] = []

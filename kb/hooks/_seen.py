@@ -15,8 +15,10 @@ Falls back to returning all keys when session state is unavailable.
 """
 import fcntl
 import os
+import sys
 
-from ._state import STATE_DIR, state_path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _state import STATE_DIR, state_path  # noqa: E402
 
 
 def filter_unseen(keys: list[str]) -> list[str]:
