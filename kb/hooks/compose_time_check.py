@@ -53,6 +53,13 @@ def extract_candidate_tokens(text: str) -> list[str]:
     for m in camel_re.finditer(text):
         candidates.add(m.group(1))
 
+    # Mixed-case with underscores: Z_species, W_of_J, S_eff, Q_EM_w, T_3_L
+    mixed_re = re.compile(r'\b([A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+)\b')
+    for m in mixed_re.finditer(text):
+        tok = m.group(1)
+        if len(tok) >= 3:
+            candidates.add(tok)
+
     # ALL_CAPS constants (≥3 chars)
     upper_re = re.compile(r'\b([A-Z][A-Z0-9_]{2,})\b')
     for m in upper_re.finditer(text):

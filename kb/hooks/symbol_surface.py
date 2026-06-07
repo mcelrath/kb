@@ -42,8 +42,14 @@ def extract_symbol_candidates(text: str) -> list[str]:
     for m in re.finditer(r'\b([A-Z][a-z]+(?:[A-Z][a-z0-9]+)+)\b', text):
         candidates.add(m.group(1))
 
-    # Short ALL_CAPS constants (G, G0, G_eff, etc.) — physics convention
-    for m in re.finditer(r'\b([A-Z][A-Z0-9_]{0,10})\b', text):
+    # Mixed-case identifiers with underscores: Z_species, W_of_J, S_eff, Q_EM_w
+    for m in re.finditer(r'\b([A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+)\b', text):
+        tok = m.group(1)
+        if len(tok) >= 3:
+            candidates.add(tok)
+
+    # ALL_CAPS constants (G, G0, G_eff, VIERBEIN_FACTOR, etc.) — physics convention
+    for m in re.finditer(r'\b([A-Z][A-Z0-9_]{0,30})\b', text):
         tok = m.group(1)
         if len(tok) >= 2:
             candidates.add(tok)
@@ -142,13 +148,14 @@ def main() -> None:
     if fpath and not any(fpath.startswith(p) for p in allowed_prefixes):
         sys.exit(0)
 
-    # Get file content from tool output (PostToolUse: tool_response)
-    tool_response = data.get('tool_response', '')
-    if isinstance(tool_response, dict):
-        content = tool_response.get('output', '') or ''
-    elif isinstance(tool_response, str):
-        content = tool_response
-    else:
+    # Read the file content directly from disk.
+    # (PostToolUse tool_response format varies; reading from disk is reliable.)
+    if not fpath or not os.path.isfile(fpath):
+        sys.exit(0)
+    try:
+        with open(fpath, encoding='utf-8', errors='replace') as fh:
+            content = fh.read(32768)  # scan first 32 KB
+    except OSError:
         sys.exit(0)
 
     if not content or len(content) < 50:
