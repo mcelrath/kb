@@ -40,7 +40,10 @@ CREATE TABLE IF NOT EXISTS lean_contracts (
     project TEXT,
     indexed_at_commit TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    file_status TEXT,         -- T1: -- LEAN-STATUS: <marker> in module docstring
+    contract_awaiting TEXT,   -- T2: -- CONTRACT: <description> above decl
+    discharge_target TEXT     -- emission: -- DISCHARGES: <FullyQualified.Name> above decl
 );
 CREATE INDEX IF NOT EXISTS idx_lc_file ON lean_contracts(file);
 CREATE INDEX IF NOT EXISTS idx_lc_project ON lean_contracts(project);
@@ -52,8 +55,69 @@ CREATE VIRTUAL TABLE IF NOT EXISTS lean_contracts_fts USING fts5(
 );
 """
 
+# Migration: columns added after initial schema (for existing installs)
+_MIGRATE_COLS = [
+    ('file_status', 'TEXT'),
+    ('contract_awaiting', 'TEXT'),
+    ('discharge_target', 'TEXT'),
+]
+
 
 # --- Source parsing ----------------------------------------------------------
+
+_LEAN_STATUS_RE = re.compile(r'--\s*LEAN-STATUS:\s*(.+)')
+_CONTRACT_RE = re.compile(r'--\s*CONTRACT:\s*(.+)')
+_DISCHARGES_RE = re.compile(r'--\s*DISCHARGES:\s*(.+)')
+_SORRY_CONTRACT_INLINE_RE = re.compile(r'--\s*SORRY-CONTRACT:\s*(.+)')
+
+
+def _parse_file_status(source: str) -> str | None:
+    """Scan first 60 lines for -- LEAN-STATUS: marker (module docstring annotation)."""
+    for line in source.splitlines()[:60]:
+        m = _LEAN_STATUS_RE.search(line)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
+def _parse_decl_annotation(source: str, sorry_line: int,
+                            pattern: re.Pattern) -> str | None:
+    """Scan comment lines immediately before the enclosing decl for a marker pattern."""
+    lines = source.splitlines()
+    # Walk backwards to find the enclosing decl
+    decl_line_idx = None
+    for i in range(min(sorry_line - 1, len(lines) - 1), -1, -1):
+        if _DECL_RE.match(lines[i]):
+            decl_line_idx = i
+            break
+    if decl_line_idx is None:
+        return None
+    # Scan up to 8 comment lines before the decl
+    start = max(0, decl_line_idx - 8)
+    for i in range(decl_line_idx - 1, start - 1, -1):
+        stripped = lines[i].strip()
+        m = pattern.search(stripped)
+        if m:
+            return m.group(1).strip()
+        # Stop at blank line or non-comment code
+        if stripped and not stripped.startswith('--') and not stripped.startswith('/-') \
+                and not stripped.startswith('@'):
+            break
+    return None
+
+
+def _parse_inline_sorry_contract(source: str, sorry_line: int) -> str | None:
+    """Check for informal -- SORRY-CONTRACT: marker on the sorry line itself or above it."""
+    lines = source.splitlines()
+    # Check the sorry line itself and the 3 lines above it
+    idx = sorry_line - 1
+    for i in range(idx, max(-1, idx - 4), -1):
+        if 0 <= i < len(lines):
+            m = _SORRY_CONTRACT_INLINE_RE.search(lines[i])
+            if m:
+                return m.group(1).strip()
+    return None
+
 
 _DECL_RE = re.compile(
     r'^(?:private\s+|protected\s+)?'
@@ -133,6 +197,13 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
     kb.conn.executescript(CREATE_TABLE)
     kb.conn.commit()
 
+    # Migrate: add new columns if missing (existing installs pre-dating AXIOM-CONTRACT)
+    existing_cols = {row[1] for row in kb.conn.execute('PRAGMA table_info(lean_contracts)')}
+    for col_name, col_type in _MIGRATE_COLS:
+        if col_name not in existing_cols:
+            kb.conn.execute(f'ALTER TABLE lean_contracts ADD COLUMN {col_name} {col_type}')
+    kb.conn.commit()
+
     # Build the set of live contract IDs from the current audit output.
     # Any DB row not in this set is either discharged (sorry removed in-place),
     # moved to archive/, or deleted — all stale.
@@ -167,6 +238,8 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
         except OSError:
             continue
 
+        file_status = _parse_file_status(source)
+
         for entry in sorry_lines:
             lineno = entry.get('line', 0)
             sorry_text = entry.get('text', '')
@@ -175,30 +248,52 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
             decl_name, statement = _extract_decl_at_line(source, lineno)
             namespace = _current_namespace(source, lineno)
 
+            # T2 annotations: per-decl markers in comments above the declaration
+            contract_awaiting = _parse_decl_annotation(source, lineno, _CONTRACT_RE)
+            discharge_target = _parse_decl_annotation(source, lineno, _DISCHARGES_RE)
+            # Fall back to informal inline marker if no formal T2 found
+            if not contract_awaiting and not discharge_target:
+                inline = _parse_inline_sorry_contract(source, lineno)
+                if inline:
+                    contract_awaiting = inline
+
             contract_id = f'lc-{Path(fpath).stem}-{lineno}'
 
-            # Check if already present and unchanged
+            # Check if already present and all fields unchanged
             existing = kb.conn.execute(
-                'SELECT id, sorry_text FROM lean_contracts WHERE id=?',
+                'SELECT sorry_text, file_status, contract_awaiting, discharge_target '
+                'FROM lean_contracts WHERE id=?',
                 (contract_id,),
             ).fetchone()
-            if existing and existing[1] == sorry_text:
+            if existing and existing[0] == sorry_text \
+                    and existing[1] == file_status \
+                    and existing[2] == contract_awaiting \
+                    and existing[3] == discharge_target:
                 skipped += 1
                 continue
 
             if dry_run:
-                print(f'  {fpath}:{lineno} [{kind}] {decl_name or "?"} — {(statement or "")[:80]}')
+                ann = ''
+                if file_status:
+                    ann += f' [LEAN-STATUS: {file_status}]'
+                if discharge_target:
+                    ann += f' [DISCHARGES: {discharge_target}]'
+                elif contract_awaiting:
+                    ann += f' [CONTRACT: {contract_awaiting[:60]}]'
+                print(f'  {fpath}:{lineno} [{kind}] {decl_name or "?"}{ann} — {(statement or "")[:60]}')
                 inserted += 1
                 continue
 
             kb.conn.execute("""
                 INSERT OR REPLACE INTO lean_contracts
                   (id, file, line, decl_name, namespace, statement, sorry_text,
-                   kind, project, indexed_at_commit, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   kind, project, indexed_at_commit, created_at, updated_at,
+                   file_status, contract_awaiting, discharge_target)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 contract_id, fpath, lineno, decl_name, namespace,
                 statement, sorry_text, kind, project, commit, now, now,
+                file_status, contract_awaiting, discharge_target,
             ))
             inserted += 1
 

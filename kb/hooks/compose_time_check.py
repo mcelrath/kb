@@ -263,39 +263,50 @@ def query_contracts(conn: sqlite3.Connection, tokens: list[str],
     # Track how many distinct tokens match each contract; require >= 2 to surface.
     # A single common token ("mass", "spectrum") matches too many unrelated contracts.
     contract_hits: dict[str, int] = {}       # cid -> distinct token hit count
-    contract_meta: dict[str, tuple] = {}     # cid -> (fpath, line, decl_name)
+    contract_meta: dict[str, tuple] = {}     # cid -> (fpath, line, decl_name, file_status, discharge_target, contract_awaiting)
     for tok in all_tokens:
         if len(tok) < 5:
             continue
         if project:
             rows = conn.execute(
-                "SELECT id, file, line, decl_name FROM lean_contracts "
+                "SELECT id, file, line, decl_name, file_status, discharge_target, contract_awaiting "
+                "FROM lean_contracts "
                 "WHERE (decl_name LIKE ? OR statement LIKE ?) AND project=? "
                 "AND file NOT LIKE '%/archive/%' LIMIT 3",
                 (f'%{tok}%', f'%{tok}%', project),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, file, line, decl_name FROM lean_contracts "
+                "SELECT id, file, line, decl_name, file_status, discharge_target, contract_awaiting "
+                "FROM lean_contracts "
                 "WHERE (decl_name LIKE ? OR statement LIKE ?) "
                 "AND file NOT LIKE '%/archive/%' LIMIT 3",
                 (f'%{tok}%', f'%{tok}%'),
             ).fetchall()
-        for cid, fpath, line, decl_name in rows:
+        for cid, fpath, line, decl_name, file_status, discharge_target, contract_awaiting in rows:
             contract_hits[cid] = contract_hits.get(cid, 0) + 1
             if cid not in contract_meta:
-                contract_meta[cid] = (fpath, line, decl_name)
+                contract_meta[cid] = (fpath, line, decl_name, file_status, discharge_target, contract_awaiting)
 
     # Only surface contracts with >= 2 distinct token hits (noise filter)
     contract_candidates: list[tuple[str, str]] = []
     for cid, hits in contract_hits.items():
         if hits < 2:
             continue
-        fpath, line, decl_name = contract_meta[cid]
+        fpath, line, decl_name, file_status, discharge_target, contract_awaiting = contract_meta[cid]
         basename = os.path.basename(fpath or '')
         name_str = decl_name or '?'
+        # Build suffix: DISCHARGES takes priority over CONTRACT, then file_status
+        if discharge_target:
+            suffix = f' | DISCHARGES: {discharge_target}'
+        elif contract_awaiting:
+            suffix = f' | CONTRACT: {contract_awaiting[:70]}'
+        elif file_status:
+            suffix = f' | CONTRACT-FILE: {file_status[:60]}'
+        else:
+            suffix = ''
         contract_candidates.append(
-            (f'lc:{cid}', f'[SORRY-CONTRACT WAITING: {basename}:{line} — {name_str}]')
+            (f'lc:{cid}', f'[SORRY-CONTRACT WAITING: {basename}:{line} — {name_str}{suffix}]')
         )
 
     advisories: list[str] = []
