@@ -270,6 +270,16 @@ def summarize_file_theorems(
             return {k: v for k, v in result.items() if isinstance(v, str) and v.strip()}
     except json.JSONDecodeError:
         pass
+    # LLM sometimes returns LaTeX with bare backslashes (\mathrm, \ n, etc.)
+    # which are invalid JSON escapes.  Repair: double any backslash not already
+    # part of a valid JSON escape sequence (\", \\, \/, \b, \f, \n, \r, \t, \uXXXX).
+    repaired = re.sub(r'\\(?!["\\/bfnrtu]|u[0-9a-fA-F]{4})', r'\\\\', raw)
+    try:
+        result = json.loads(repaired)
+        if isinstance(result, dict):
+            return {k: v for k, v in result.items() if isinstance(v, str) and v.strip()}
+    except json.JSONDecodeError:
+        pass
     return {}
 
 
