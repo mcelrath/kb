@@ -23,8 +23,8 @@ _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from _seen import filter_unseen  # noqa: E402
 
 _MIN_TOKEN_LEN = 5
-_MIN_HITS = 2        # tokens from prompt that must appear in issue text
-_MAX_SURFACE = 5     # max issues to surface per hook call
+_MIN_HITS = 3        # tokens from prompt that must appear in issue text (raised from 2 per archie #4474)
+_MAX_SURFACE = 3     # max issues to surface per hook call (reduced from 5)
 def _find_bd() -> str:
     """Find bd executable — may be in nvm or ~/.local/bin."""
     import shutil

@@ -47,20 +47,30 @@ try:
     ).fetchall()
 
     supersede_kw = re.compile(
-        r'\b(supersed|refut|stale|retired|scope.guard|obsolete|replaced|archived)\w*\b',
+        r'\b(supersed|refut|stale|retired|scope.guard|obsolete|replaced|archived|do not use|deprecated)\w*\b',
         re.IGNORECASE,
     ) if finding_rows else None
+
+    # Only surface plain KB-MENTION (non-supersede) if the finding also contains
+    # action-relevant vocabulary — scope guards, blockers, or warnings.
+    action_kw = re.compile(
+        r'\b(block|warn|caution|must not|do not|avoid|danger|hazard|before|prerequisite|requires?)\b',
+        re.IGNORECASE,
+    )
 
     shown = 0
     for fid, summary, content in finding_rows:
         if shown >= _MAX_FINDINGS:
             break
-        if supersede_kw and supersede_kw.search(content or ''):
+        content_str = content or ''
+        if supersede_kw and supersede_kw.search(content_str):
             label = 'SUPERSEDED/REFUTED'
-        else:
+        elif action_kw.search(content_str):
             label = 'KB-MENTION'
+        else:
+            continue  # plain mention without action vocabulary — skip (noise per archie #4474)
         short_id = fid[:20] if fid else '?'
-        preview = (summary or (content or '')[:60])[:70]
+        preview = (summary or content_str[:60])[:70]
         lines.append(f'[{label}: {short_id} — {preview}]')
         shown += 1
 
