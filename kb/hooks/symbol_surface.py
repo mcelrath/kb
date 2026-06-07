@@ -156,7 +156,7 @@ def main() -> None:
         sys.exit(0)
     try:
         with open(fpath, encoding='utf-8', errors='replace') as fh:
-            content = fh.read(32768)  # scan first 32 KB
+            content = fh.read(1 << 20)  # scan up to 1 MB (covers all project files)
     except OSError:
         sys.exit(0)
 
