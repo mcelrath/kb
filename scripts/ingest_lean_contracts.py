@@ -133,14 +133,24 @@ def ingest(proofs_dir: Path, kb: KnowledgeBase, project: str, dry_run: bool) -> 
     kb.conn.executescript(CREATE_TABLE)
     kb.conn.commit()
 
-    # Purge stale rows: files moved to archive/, deleted, or outside proofs_dir.
-    # lean-audit only returns files it found; rows for moved/deleted files linger.
+    # Build the set of live contract IDs from the current audit output.
+    # Any DB row not in this set is either discharged (sorry removed in-place),
+    # moved to archive/, or deleted — all stale.
+    live_ids: set[str] = set()
+    for fpath, fdata in audit.items():
+        sorry_lines = fdata.get('sorry_lines', []) + fdata.get('true_stub_lines', [])
+        for entry in sorry_lines:
+            lineno = entry.get('line', 0)
+            live_ids.add(f'lc-{Path(fpath).stem}-{lineno}')
+
+    # Purge stale rows: discharged in-place, moved to archive/, or deleted.
     if not dry_run:
         existing = kb.conn.execute('SELECT id, file FROM lean_contracts WHERE project=?',
                                    (project,)).fetchall()
         for row_id, row_file in existing:
             p = Path(row_file) if row_file else None
-            gone = p is None or not p.exists() or '/archive/' in row_file
+            gone = (p is None or not p.exists() or '/archive/' in row_file
+                    or row_id not in live_ids)
             if gone:
                 kb.conn.execute('DELETE FROM lean_contracts WHERE id=?', (row_id,))
                 purged += 1
