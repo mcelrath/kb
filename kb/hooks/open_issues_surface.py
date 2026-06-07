@@ -50,30 +50,43 @@ def _extract_tokens(text: str) -> set[str]:
     return tokens
 
 
+def _current_repo_root() -> str | None:
+    """Return the git repo root of the current working directory."""
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--show-toplevel'],
+            capture_output=True, text=True, timeout=3,
+            cwd=os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()),
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
 def _load_open_issues() -> list[dict]:
-    """Load open bd issues from all repos. Returns list of issue dicts."""
+    """Load open bd issues from the CURRENT repo only. Cross-repo surfacing
+    caused false-positive advisories (secular-constraints issues in kb sessions)."""
     issues: list[dict] = []
-    # Run bd list in both project repos
-    roots = [
-        os.path.expanduser('~/Physics/secular-constraints'),
-        os.path.expanduser('~/Projects/ai/kb'),
-    ]
-    for root in roots:
-        if not os.path.isdir(os.path.join(root, '.beads')):
-            continue
-        try:
-            result = subprocess.run(
-                f'{_BD} list --status=open --json',
-                shell=True, capture_output=True, text=True, timeout=5,
-                cwd=root,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                batch = json.loads(result.stdout)
-                for item in batch:
-                    item['_root'] = root
-                issues.extend(batch)
-        except Exception:
-            pass
+    root = _current_repo_root()
+    if not root:
+        return issues
+    if not os.path.isdir(os.path.join(root, '.beads')):
+        return issues
+    try:
+        result = subprocess.run(
+            f'{_BD} list --status=open --json',
+            shell=True, capture_output=True, text=True, timeout=5,
+            cwd=root,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            batch = json.loads(result.stdout)
+            for item in batch:
+                item['_root'] = root
+            issues.extend(batch)
+    except Exception:
+        pass
     return issues
 
 
