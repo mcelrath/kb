@@ -11,6 +11,17 @@ from urllib.request import Request, urlopen
 
 from ..constants import DEFAULT_LLM_URL
 
+# Tokenizers for models like Qwen3.5 register XML-style tags as special token IDs
+# (e.g. <tool_call>=248058, <think>=248068).  When such strings appear in user
+# message content they are re-tokenized as special IDs, corrupting generation.
+# Replace angle brackets with Unicode mathematical angle brackets (U+27E8/27E9)
+# so the tokenizer never sees the raw `<` / `>` characters.
+_SPECIAL_TOKEN_RE = re.compile(r'<(/?[a-zA-Z_][a-zA-Z0-9_]*)>')
+
+def _escape_special_tokens(text: str) -> str:
+    """Replace <tag> / </tag> with ⟨tag⟩ / ⟨/tag⟩ to prevent tokenizer reinterpretation."""
+    return _SPECIAL_TOKEN_RE.sub(r'⟨\1⟩', text)
+
 
 class LLMClient:
     """Client for LLM completions with query expansion caching."""
@@ -69,7 +80,7 @@ class LLMClient:
                 messages: list[dict[str, str]] = []
                 if system_prompt:
                     messages.append({"role": "system", "content": system_prompt})
-                messages.append({"role": "user", "content": prompt})
+                messages.append({"role": "user", "content": _escape_special_tokens(prompt)})
 
                 body: dict[str, object] = {
                     "model": "qwen3.6",
