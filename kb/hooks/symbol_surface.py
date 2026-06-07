@@ -203,8 +203,23 @@ def query_symbols(
         new_key_set = set(new_keys)
         advisories.extend(line for k, line in notation_candidates if k in new_key_set)
 
-    # findings with matching fractions — project-scoped
+    # findings with matching fractions — project-scoped, rarity-gated
+    # Skip fractions appearing in >= 5 entries (arithmetic furniture like 1/4, 3/6)
+    _FRAC_RARITY = 5
+    seen_fids: set[str] = set()
     for frac in fracs[:3]:
+        if project:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM findings WHERE content LIKE ? AND project=?",
+                (f'%{frac}%', project),
+            ).fetchone()[0]
+        else:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM findings WHERE content LIKE ?",
+                (f'%{frac}%',),
+            ).fetchone()[0]
+        if count >= _FRAC_RARITY:
+            continue
         if project:
             rows3 = conn.execute(
                 "SELECT id, summary FROM findings WHERE content LIKE ? AND project=? LIMIT 2",
@@ -216,12 +231,17 @@ def query_symbols(
                 (f'%{frac}%',),
             ).fetchall()
         for fid, summary in rows3:
+            if not fid or fid in seen_fids:
+                continue
+            if not summary or not summary.strip():
+                continue
+            seen_fids.add(fid)
             key = f'frac:{frac}:{fid}'
             if key in seen:
                 continue
             seen.add(key)
-            preview = (summary or '?')[:70]
-            short_id = fid[:20] if fid else '?'
+            preview = summary.strip()[:70]
+            short_id = fid[:20]
             advisories.append(f'[KB-VALUE: {frac} — {short_id}: {preview}]')
 
     return advisories[:_MAX_ADVISORIES]

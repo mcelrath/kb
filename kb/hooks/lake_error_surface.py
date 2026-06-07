@@ -87,13 +87,17 @@ def main() -> None:
     if 'lake' not in cmd:
         sys.exit(0)
 
-    # Get tool output — PostToolUse has tool_response
+    # Get tool output — PostToolUse uses tool_result (not tool_response)
     output = ''
-    tr = data.get('tool_response') or {}
+    tr = data.get('tool_result') or data.get('tool_response') or {}
     if isinstance(tr, str):
         output = tr
     elif isinstance(tr, dict):
-        output = tr.get('output') or tr.get('stdout') or tr.get('content') or ''
+        stdout = tr.get('stdout') or ''
+        stderr = tr.get('stderr') or ''
+        output = stdout + stderr
+        if not output:
+            output = tr.get('output') or tr.get('content') or ''
     elif isinstance(tr, list):
         for item in tr:
             if isinstance(item, dict):
