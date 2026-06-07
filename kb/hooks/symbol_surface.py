@@ -4,35 +4,77 @@ for python_symbols and notations mentioned in the file content.
 
 Fires PostToolUse/Read. Advisory only (exit 0 always).
 
-Use case: archie reads a bridge message containing "sigma_gap_equation" or "G=17/24"
-and this hook surfaces [CANONICAL: ...] before archie re-derives it.
+Extraction strategy by file type:
+  .py   — ast.walk() over parsed AST: Name + Attribute nodes only.
+          Zero false positives from comments/strings. No regex.
+  other — regex fallback for unstructured text (bridge output, .md, .lean, .tex).
+          Accepts more noise; good enough for symbol names in prose.
 """
 import sys
 import json
 import os
+import ast
 import re
 import sqlite3
+import warnings
 
-
-# File extensions that carry source-code / bridge-message content worth scanning.
-# Excludes large binary / data files.
 _SCAN_EXTENSIONS = {
     '.lean', '.py', '.tex', '.md', '.txt', '.output', '.json',
-    '',  # extensionless files (bridge output, etc.)
+    '',  # extensionless (bridge output, etc.)
 }
 
-# Minimum symbol length to avoid flooding on 1-2 char tokens.
 _MIN_SYMBOL_LEN = 3
-
-# Max advisories before truncating (avoid wall of text on huge files).
 _MAX_ADVISORIES = 12
 
 
-def extract_symbol_candidates(text: str) -> list[str]:
-    """Extract symbol/function name candidates from arbitrary text."""
+# ---------------------------------------------------------------------------
+# Python extraction — AST-based, no false positives from comments/strings
+# ---------------------------------------------------------------------------
+
+def extract_from_python(source: str) -> list[str]:
+    """Parse Python source and return every referenced name via AST walk.
+
+    Collects:
+      Name nodes       — bare identifiers (variables, functions, constants)
+      Attribute nodes  — the attribute part of dotted access (obj.attr -> attr)
+
+    Ignores everything inside string literals and comments by construction.
+    """
+    candidates: set[str] = set()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', SyntaxWarning)
+            tree = ast.parse(source)
+    except SyntaxError:
+        # Fall back to regex on unparseable files
+        return extract_from_text(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            name = node.id
+            if len(name) >= _MIN_SYMBOL_LEN:
+                candidates.add(name)
+        elif isinstance(node, ast.Attribute):
+            attr = node.attr
+            if len(attr) >= _MIN_SYMBOL_LEN:
+                candidates.add(attr)
+
+    return list(candidates)
+
+
+# ---------------------------------------------------------------------------
+# Generic text extraction — regex fallback for unstructured content
+# ---------------------------------------------------------------------------
+
+def extract_from_text(text: str) -> list[str]:
+    """Extract symbol candidates from arbitrary text via regex.
+
+    Used for .lean, .tex, .md, bridge output, and Python files that fail to parse.
+    Accepts some noise (tokens from comments/strings); that's acceptable for prose.
+    """
     candidates: set[str] = set()
 
-    # snake_case names: likely function/constant references
+    # snake_case
     for m in re.finditer(r'\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b', text):
         tok = m.group(1)
         if len(tok) >= _MIN_SYMBOL_LEN:
@@ -42,16 +84,10 @@ def extract_symbol_candidates(text: str) -> list[str]:
     for m in re.finditer(r'\b([A-Z][a-z]+(?:[A-Z][a-z0-9]+)+)\b', text):
         candidates.add(m.group(1))
 
-    # Mixed-case identifiers with underscores: Z_species, W_of_J, S_eff, Q_EM_w
+    # Mixed-case with underscores: Z_species, W_of_J, Q_EM_w, T_3_L
     for m in re.finditer(r'\b([A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+)\b', text):
         tok = m.group(1)
-        if len(tok) >= 3:
-            candidates.add(tok)
-
-    # ALL_CAPS constants (G, G0, G_eff, VIERBEIN_FACTOR, etc.) — physics convention
-    for m in re.finditer(r'\b([A-Z][A-Z0-9_]{0,30})\b', text):
-        tok = m.group(1)
-        if len(tok) >= 2:
+        if len(tok) >= _MIN_SYMBOL_LEN:
             candidates.add(tok)
 
     # Greek letters
@@ -65,6 +101,10 @@ def extract_fractions(text: str) -> list[str]:
     return re.findall(r'\b(\d{1,4}/\d{1,4})\b', text)
 
 
+# ---------------------------------------------------------------------------
+# DB queries
+# ---------------------------------------------------------------------------
+
 def query_symbols(
     conn: sqlite3.Connection,
     tokens: list[str],
@@ -76,11 +116,12 @@ def query_symbols(
     advisories = []
     seen: set[str] = set()
 
-    # python_symbols exact match
     ph = ','.join('?' * len(tokens))
+
+    # python_symbols exact name match
     rows = conn.execute(
         f'SELECT name, kind, status, module, file, line, redirect_to '
-        f'FROM python_symbols WHERE name IN ({ph}) LIMIT 30',
+        f'FROM python_symbols WHERE name IN ({ph}) LIMIT 40',
         tokens,
     ).fetchall()
     for name, kind, status, module, fpath, line, redirect_to in rows:
@@ -96,10 +137,11 @@ def query_symbols(
             redir = f' → {redirect_to}' if redirect_to else ''
             advisories.append(f'[RETIRED: {name}{redir}]')
 
-    # notations exact symbol match — skip generic-fallback rows (project-blind meanings)
+    # notations — skip generic-fallback rows
     rows2 = conn.execute(
         f"SELECT current_symbol, meaning FROM notations "
-        f"WHERE current_symbol IN ({ph}) AND (meaning_source IS NULL OR meaning_source != 'generic-fallback') "
+        f"WHERE current_symbol IN ({ph}) "
+        f"AND (meaning_source IS NULL OR meaning_source != 'generic-fallback') "
         f"LIMIT 10",
         tokens,
     ).fetchall()
@@ -110,7 +152,7 @@ def query_symbols(
         seen.add(key)
         advisories.append(f'[NOTATION: {sym} = {(meaning or "?")[:60]}]')
 
-    # findings: exact fractions (small set — max 3)
+    # findings with matching fractions
     for frac in fracs[:3]:
         rows3 = conn.execute(
             "SELECT id, summary FROM findings WHERE content LIKE ? LIMIT 2",
@@ -128,6 +170,10 @@ def query_symbols(
     return advisories[:_MAX_ADVISORIES]
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def main() -> None:
     data = json.load(sys.stdin)
     if data.get('tool_name') != 'Read':
@@ -138,25 +184,21 @@ def main() -> None:
     if ext not in _SCAN_EXTENSIONS:
         sys.exit(0)
 
-    # Only scan files from known project roots + bridge output dirs
-    # to avoid false hits on unrelated system files.
     home = os.path.expanduser('~')
     allowed_prefixes = (
         os.path.join(home, 'Physics'),
         os.path.join(home, 'Projects', 'ai', 'kb'),
-        '/tmp/claude',     # bridge watcher output: /tmp/claude-1000/... or /tmp/claude-*/
+        '/tmp/claude',
         '/tmp/agent-',
     )
     if fpath and not any(fpath.startswith(p) for p in allowed_prefixes):
         sys.exit(0)
 
-    # Read the file content directly from disk.
-    # (PostToolUse tool_response format varies; reading from disk is reliable.)
     if not fpath or not os.path.isfile(fpath):
         sys.exit(0)
     try:
         with open(fpath, encoding='utf-8', errors='replace') as fh:
-            content = fh.read(1 << 20)  # scan up to 1 MB (covers all project files)
+            content = fh.read()
     except OSError:
         sys.exit(0)
 
@@ -169,13 +211,15 @@ def main() -> None:
 
     try:
         conn = sqlite3.connect(db, timeout=3)
-        tokens = extract_symbol_candidates(content)
-        fracs = extract_fractions(content)
+        if ext == '.py':
+            tokens = extract_from_python(content)
+            fracs = []  # fractions in Python source aren't math notation
+        else:
+            tokens = extract_from_text(content)
+            fracs = extract_fractions(content)
         advisories = query_symbols(conn, tokens, fracs)
         conn.close()
         if advisories:
-            # PostToolUse hooks must emit JSON to stdout to inject context.
-            # Stderr on exit-0 is silently discarded by the harness.
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "PostToolUse",
