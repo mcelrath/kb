@@ -66,6 +66,29 @@ def lookup_names(conn: sqlite3.Connection, names: list[str]) -> list[str]:
             except Exception:
                 pass
 
+        # Near-miss fallback: trailing-char typo (most common lake failure).
+        # Try name[:-1]% LIKE and last-token FTS prefix if all above miss.
+        if not rows and len(name) >= 6:
+            stem = name[:-1]
+            rows = conn.execute(
+                "SELECT lt.name, lt.file FROM lean_theorems lt "
+                "WHERE lt.name LIKE ? OR lt.lean_name LIKE ? LIMIT 3",
+                (f'{stem}%', f'%.{stem}%'),
+            ).fetchall()
+            if not rows:
+                # FTS prefix on the last underscore-component
+                last_tok = name.rsplit('_', 1)[-1] if '_' in name else name.rsplit('.', 1)[-1]
+                if len(last_tok) >= 4:
+                    try:
+                        rows = conn.execute(
+                            "SELECT lt.name, lt.file FROM lean_theorems lt "
+                            "JOIN lean_theorems_fts ON lt.rowid = lean_theorems_fts.rowid "
+                            "WHERE lean_theorems_fts MATCH ? LIMIT 3",
+                            (f'{last_tok}*',),
+                        ).fetchall()
+                    except Exception:
+                        pass
+
         for thm_name, thm_file in rows:
             key = f'{thm_name}:{thm_file}'
             if key in seen:
