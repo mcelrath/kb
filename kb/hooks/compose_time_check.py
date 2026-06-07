@@ -219,6 +219,76 @@ def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str],
     return advisories
 
 
+def _contract_tokens(text: str) -> list[str]:
+    """Extract tokens suitable for sorry-contract matching (less strict than dispatch tokenizer)."""
+    toks: set[str] = set()
+    # All word-like tokens >= 5 chars (catches 'charpoly', 'irreducible', etc.)
+    for m in re.finditer(r'\b([A-Za-z][A-Za-z0-9]{4,})\b', text):
+        toks.add(m.group(1).lower())
+    # CamelCase components: split 'ChargedSectorKCharpolys' -> ['charged', 'sector', 'charpolys']
+    for m in re.finditer(r'\b([A-Z][a-z0-9]+)\b', text):
+        tok = m.group(1).lower()
+        if len(tok) >= 5:
+            toks.add(tok)
+    # snake_case components
+    for m in re.finditer(r'\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b', text):
+        for part in m.group(1).split('_'):
+            if len(part) >= 5:
+                toks.add(part)
+    # Light stemming: add singular form for common plurals (charpolys -> charpoly)
+    extras: set[str] = set()
+    for tok in toks:
+        if tok.endswith('s') and len(tok) > 6:
+            extras.add(tok[:-1])
+        if tok.endswith('es') and len(tok) > 7:
+            extras.add(tok[:-2])
+    toks |= extras
+    return list(toks)
+
+
+def query_contracts(conn: sqlite3.Connection, tokens: list[str],
+                    project: str | None = None, raw_text: str = '') -> list[str]:
+    """Surface open sorry-contracts whose decl_name or statement matches tokens."""
+    # Use raw_text for better tokenization if available
+    all_tokens = list(set(tokens) | set(_contract_tokens(raw_text))) if raw_text else tokens
+    if not all_tokens:
+        return []
+    # Check table exists
+    try:
+        conn.execute('SELECT 1 FROM lean_contracts LIMIT 1')
+    except Exception:
+        return []
+
+    advisories = []
+    seen: set[str] = set()
+    # Look for tokens in decl_name (exact component match) or statement (LIKE)
+    for tok in all_tokens:
+        if len(tok) < 5:
+            continue
+        if project:
+            rows = conn.execute(
+                "SELECT id, file, line, decl_name, statement FROM lean_contracts "
+                "WHERE (decl_name LIKE ? OR statement LIKE ?) AND project=? LIMIT 3",
+                (f'%{tok}%', f'%{tok}%', project),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, file, line, decl_name, statement FROM lean_contracts "
+                "WHERE decl_name LIKE ? OR statement LIKE ? LIMIT 3",
+                (f'%{tok}%', f'%{tok}%'),
+            ).fetchall()
+        for cid, fpath, line, decl_name, statement in rows:
+            if cid in seen:
+                continue
+            seen.add(cid)
+            basename = os.path.basename(fpath or '')
+            name_str = decl_name or '?'
+            advisories.append(
+                f'[SORRY-CONTRACT WAITING: {basename}:{line} — {name_str}]'
+            )
+    return advisories[:5]
+
+
 def main() -> None:
     data = json.load(sys.stdin)
     tool_name = data.get('tool_name', '')
@@ -259,6 +329,7 @@ def main() -> None:
         fracs = extract_fractions(prompt_text)
         project = _project_from_cwd()
         advisories = query_db(conn, tokens, fracs, project=project)
+        advisories += query_contracts(conn, tokens, project=project, raw_text=prompt_text)
         conn.close()
         if advisories:
             print(json.dumps({
