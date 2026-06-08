@@ -13,7 +13,8 @@ import os
 import re
 
 import sys as _sys, os as _os
-_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+# _seen/_state now live in the global hook lib (kb-bp4 P6).
+_sys.path.insert(0, _os.path.expanduser('~/.claude/hooks/lib'))
 from _seen import filter_unseen  # noqa: E402
 
 d = json.load(sys.stdin)
