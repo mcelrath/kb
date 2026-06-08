@@ -1605,6 +1605,57 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
     # Python symbol index methods
     # =========================================================================
 
+    @staticmethod
+    def _python_symbol_content_hash(
+        project: str | None,
+        module: str,
+        name: str,
+        signature: str,
+        docstring_summary: str | None,
+    ) -> str:
+        """SHA-256 content hash for a Python symbol.
+
+        Covers project+module+name (identity) plus signature and
+        docstring_summary (content), so decorator/return-type changes and
+        docstring edits are detected as distinct.
+        """
+        import hashlib
+        raw = "\x00".join([
+            project or "",
+            module,
+            name,
+            signature,
+            docstring_summary or "",
+        ])
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    @staticmethod
+    def _python_symbol_stable_id(project: str | None, module: str, name: str) -> str:
+        """Stable deterministic ID for a Python symbol, keyed on (project, module, name).
+
+        This is the *identity* hash -- it does not change when the signature or
+        docstring changes, so it can be used as a stable FK / lookup key.
+        """
+        import hashlib
+        raw = "\x00".join([project or "", module, name])
+        return "pysym-" + hashlib.sha256(raw.encode()).hexdigest()[:20]
+
+    def _ensure_python_symbol_hash_columns(self) -> None:
+        """Add content_hash and symbol_id columns if they don't exist yet (idempotent)."""
+        existing_cols = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(python_symbols)").fetchall()
+        }
+        if "content_hash" not in existing_cols:
+            self.conn.execute(
+                "ALTER TABLE python_symbols ADD COLUMN content_hash TEXT"
+            )
+        if "symbol_id" not in existing_cols:
+            self.conn.execute(
+                "ALTER TABLE python_symbols ADD COLUMN symbol_id TEXT"
+            )
+        self.conn.commit()
+
     def add_python_symbol(
         self,
         name: str,
@@ -1627,29 +1678,28 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
         Returns dict with 'id', 'is_new'.
         """
+        # Ensure new columns exist (idempotent ALTER TABLE; fast after first call)
+        self._ensure_python_symbol_hash_columns()
+
+        content_hash = self._python_symbol_content_hash(
+            project, module, name, signature, docstring_summary
+        )
+        symbol_id = self._python_symbol_stable_id(project, module, name)
+
         existing = self.conn.execute(
-            "SELECT id, signature, status, file, line, docstring_summary, lean_citations, kb_refs "
+            "SELECT id, content_hash "
             "FROM python_symbols WHERE name = ? AND module = ?",
             (name, module),
         ).fetchone()
 
         now = datetime.now().isoformat()
-        sym_id = f"pysym-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         lean_json = json.dumps(lean_citations or [])
         kb_json = json.dumps(kb_refs or [])
         also_json = json.dumps(also_in_modules or [])
 
         if existing:
-            # Skip the embedding + UPDATE entirely if nothing material changed.
-            old_lean = json.loads(existing["lean_citations"] or "[]")
-            old_kb = json.loads(existing["kb_refs"] or "[]")
-            if (existing["signature"] == signature
-                    and existing["status"] == status
-                    and existing["file"] == file
-                    and existing["line"] == line
-                    and existing["docstring_summary"] == docstring_summary
-                    and old_lean == (lean_citations or [])
-                    and old_kb == (kb_refs or [])):
+            # Skip embedding + UPDATE entirely when nothing material changed.
+            if existing["content_hash"] == content_hash:
                 return {"id": existing["id"], "is_new": False, "skipped": True}
 
         embed_text = f"{module}.{name}: {signature} {docstring_summary or ''}"
@@ -1661,11 +1711,11 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
                 UPDATE python_symbols SET kind=?, signature=?, status=?, is_lru_cached=?,
                     frame_hint=?, redirect_to=?, docstring_summary=?, lean_citations=?,
                     kb_refs=?, also_in_modules=?, file=?, line=?, project=?,
-                    updated_at=?, embedding=?
+                    updated_at=?, embedding=?, content_hash=?, symbol_id=?
                 WHERE id=?
             """, (kind, signature, status, int(is_lru_cached), frame_hint, redirect_to,
                   docstring_summary, lean_json, kb_json, also_json, file, line, project,
-                  now, embedding, sym_id))
+                  now, embedding, content_hash, symbol_id, sym_id))
             self.conn.execute("DELETE FROM python_symbols_vec WHERE id = ?", (sym_id,))
             self.conn.execute(
                 "INSERT INTO python_symbols_vec (id, embedding) VALUES (?, ?)",
@@ -1674,21 +1724,71 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             self.conn.commit()
             return {"id": sym_id, "is_new": False}
 
+        sym_id = symbol_id
         self.conn.execute("""
             INSERT INTO python_symbols
                 (id, name, kind, module, signature, status, is_lru_cached,
                  frame_hint, redirect_to, docstring_summary, lean_citations,
-                 kb_refs, also_in_modules, file, line, project, created_at, updated_at, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 kb_refs, also_in_modules, file, line, project, created_at, updated_at,
+                 embedding, content_hash, symbol_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (sym_id, name, kind, module, signature, status, int(is_lru_cached),
               frame_hint, redirect_to, docstring_summary, lean_json, kb_json, also_json,
-              file, line, project, now, now, embedding))
+              file, line, project, now, now, embedding, content_hash, symbol_id))
         self.conn.execute(
             "INSERT INTO python_symbols_vec (id, embedding) VALUES (?, ?)",
             (sym_id, embedding),
         )
         self.conn.commit()
         return {"id": sym_id, "is_new": True}
+
+    def prune_python_symbols_for_file(
+        self,
+        file: str,
+        live_names_modules: set[tuple[str, str]],
+    ) -> int:
+        """Delete stale python_symbols rows for a file after re-ingest.
+
+        Removes rows whose (name, module) is NOT in live_names_modules.
+        Also cleans python_symbols_vec.  Returns count of deleted rows.
+
+        Guard: if live_names_modules is empty, nothing is deleted (parse
+        failure / empty file must not wipe existing rows).
+        """
+        if not live_names_modules:
+            return 0
+        rows = self.conn.execute(
+            "SELECT id, name, module FROM python_symbols WHERE file = ?",
+            (file,),
+        ).fetchall()
+        to_delete = [
+            row["id"]
+            for row in rows
+            if (row["name"], row["module"]) not in live_names_modules
+        ]
+        if not to_delete:
+            return 0
+        for sid in to_delete:
+            self.conn.execute("DELETE FROM python_symbols_vec WHERE id = ?", (sid,))
+            self.conn.execute("DELETE FROM python_symbols WHERE id = ?", (sid,))
+        self.conn.commit()
+        return len(to_delete)
+
+    def delete_python_symbols_for_file(self, file: str) -> int:
+        """Remove ALL python_symbols rows for a deleted/removed file.
+
+        Also cleans python_symbols_vec. Returns count of deleted rows.
+        """
+        rows = self.conn.execute(
+            "SELECT id FROM python_symbols WHERE file = ?", (file,)
+        ).fetchall()
+        for row in rows:
+            self.conn.execute("DELETE FROM python_symbols_vec WHERE id = ?", (row["id"],))
+        result = self.conn.execute(
+            "DELETE FROM python_symbols WHERE file = ?", (file,)
+        )
+        self.conn.commit()
+        return result.rowcount
 
     def search_python_symbols(
         self,

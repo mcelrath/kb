@@ -487,9 +487,23 @@ def main() -> None:
         action="store_true",
         help="Skip populating notations table",
     )
+    parser.add_argument(
+        "--deleted",
+        nargs="+",
+        metavar="FILE",
+        help="Remove all python_symbols rows for these deleted/renamed files",
+    )
     args = parser.parse_args()
 
     kb = KnowledgeBase(db_path=args.db)
+
+    # Handle --deleted: remove all rows for explicitly-deleted files and exit.
+    if args.deleted:
+        for fpath in args.deleted:
+            fpath_str = str(Path(fpath).expanduser().resolve())
+            n = kb.delete_python_symbols_for_file(fpath_str)
+            print(f"Deleted {n} rows for removed file: {fpath_str}", file=sys.stderr)
+        return
 
     root = args.root.expanduser().resolve()
 
@@ -581,6 +595,29 @@ def main() -> None:
         return
     if _tqdm and hasattr(sym_iter, 'close'):
         sym_iter.close()
+
+    # PRUNE: when ingesting with --files, delete stale rows (symbols that vanished from each file).
+    # Guard: only prune when a specific file list was provided, and only after parse succeeded.
+    # A parse failure returns [] from parse_python_file and skips prune for that file (empty guard
+    # in prune_python_symbols_for_file ensures empty live set => no deletion).
+    if args.files and not args.dry_run:
+        pruned_total = 0
+        # Build per-file live (name, module) sets from successfully-parsed symbols
+        file_to_live: dict[str, set[tuple[str, str]]] = {}
+        for s in all_symbols:
+            fpath_str = s["file"]
+            if fpath_str not in file_to_live:
+                file_to_live[fpath_str] = set()
+            file_to_live[fpath_str].add((s["name"], s["module"]))
+        for fpath in [str(Path(f).expanduser().resolve()) for f in args.files]:
+            live = file_to_live.get(fpath, set())
+            # If parse returned nothing for this file, live is empty; prune guard fires => 0 deleted.
+            n = kb.prune_python_symbols_for_file(fpath, live)
+            if n:
+                print(f"  Pruned {n} stale symbol(s) from {fpath}", file=sys.stderr)
+            pruned_total += n
+        if pruned_total:
+            print(f"Total pruned: {pruned_total}", file=sys.stderr)
 
     # Populate also_in_modules: group by name, update rows where name appears in >1 module
     name_to_entries: dict[str, list[dict[str, Any]]] = {}
