@@ -127,7 +127,7 @@ class EmbeddingService:
             + f"Check that embedding server at {self.embedding_url} is running."
         )
 
-    def embed(self, text: str) -> bytes:
+    def embed(self, text: str, max_retries: int | None = None) -> bytes:
         """Generate embedding for text using remote endpoint.
 
         Embeddings are L2-normalized so L2 distance can be used for cosine similarity.
@@ -135,8 +135,14 @@ class EmbeddingService:
 
         Results are cached (LRU, max entries configurable) to avoid redundant API calls.
 
+        Args:
+            max_retries: retry budget passed to _embed_remote. None uses the
+                KB_EMBED_MAX_RETRIES default (5). The interactive SEARCH path
+                passes a small value so a down embedding server fails fast and
+                degrades to FTS instead of blocking ~46s on exponential backoff.
+
         Raises:
-            RuntimeError: If embedding_url is not configured
+            RuntimeError: If embedding_url is not configured, or all retries fail
         """
         if not self.embedding_url:
             raise RuntimeError(
@@ -148,7 +154,7 @@ class EmbeddingService:
         if cached is not None:
             return serialize_f32(cached)
 
-        embedding = self._embed_remote(text)
+        embedding = self._embed_remote(text, max_retries=max_retries)
         embedding = l2_normalize(embedding)
         self._cache_put(text_hash, embedding)
         return serialize_f32(embedding)

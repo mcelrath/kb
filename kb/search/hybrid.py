@@ -5,7 +5,9 @@ Combines vector similarity and full-text search using Reciprocal Rank Fusion.
 """
 
 import json
+import os
 import sqlite3
+import sys
 from datetime import datetime
 from typing import Any, Callable
 
@@ -72,30 +74,47 @@ class HybridSearch:
 
         vector_results: dict[str, dict[str, Any]] = {}
         fts_results: dict[str, dict[str, Any]] = {}
+        degraded = False  # set when the embedding server is down -> FTS-only
 
-        # Vector similarity search (instruction prefix for query embeddings)
+        # Vector similarity search (instruction prefix for query embeddings).
+        # The query embed fails FAST (small retry budget) so a down embedding
+        # server degrades to the local FTS index instead of blocking ~46s on
+        # exponential backoff and then crashing the whole search (kb-zma).
         prefixed_query = f"Instruct: Given a search query, retrieve relevant research findings\nQuery: {search_query}"
-        query_embedding = self.embedding_service.embed(prefixed_query)
-        sql = """
-            SELECT f.*, v.distance
-            FROM findings f
-            JOIN findings_vec v ON f.id = v.id
-            WHERE v.embedding MATCH ?
-            AND k = ?
-        """
-        params: list[Any] = [query_embedding, limit * 3]
-        rows = self.conn.execute(sql, params).fetchall()
+        try:
+            query_embedding = self.embedding_service.embed(
+                prefixed_query,
+                max_retries=int(os.environ.get("KB_SEARCH_EMBED_RETRIES", "1")),
+            )
+            sql = """
+                SELECT f.*, v.distance
+                FROM findings f
+                JOIN findings_vec v ON f.id = v.id
+                WHERE v.embedding MATCH ?
+                AND k = ?
+            """
+            params: list[Any] = [query_embedding, limit * 3]
+            rows = self.conn.execute(sql, params).fetchall()
 
-        for rank, row in enumerate(rows, 1):
-            distance = float(row["distance"])
-            vector_results[row["id"]] = {
-                "row": row,
-                "rank": rank,
-                "similarity": 1 - (distance ** 2) / 2,
-            }
+            for rank, row in enumerate(rows, 1):
+                distance = float(row["distance"])
+                vector_results[row["id"]] = {
+                    "row": row,
+                    "rank": rank,
+                    "similarity": 1 - (distance ** 2) / 2,
+                }
+        except Exception as e:
+            # Embedding server unreachable: degrade to FTS-only rather than crash.
+            degraded = True
+            print(
+                f"kb search: EMBEDDING DOWN ({type(e).__name__}: {str(e)[:80]}) — "
+                "vector search skipped, returning FTS keyword results only. "
+                "An empty result now means no KEYWORD match, NOT 'nothing relevant'.",
+                file=sys.stderr,
+            )
 
-        # Full-text search (for hybrid)
-        if hybrid:
+        # Full-text search (run for hybrid, OR as the sole signal when degraded)
+        if hybrid or degraded:
             fts_query = search_query.replace('"', '""')
             try:
                 sql = """
@@ -117,7 +136,6 @@ class HybridSearch:
             except sqlite3.OperationalError:
                 # FTS query failed (e.g., syntax error), skip keyword results
                 if verbose:
-                    import sys
                     print(f"FTS query failed for: {fts_query}", file=sys.stderr)
 
         # Merge results using Reciprocal Rank Fusion (RRF)
@@ -189,8 +207,9 @@ class HybridSearch:
             except (ValueError, TypeError):
                 recency_factor = 1.0
 
-            # Combined score
-            base_score = data["rrf_score"] if hybrid else data["vector_sim"]
+            # Combined score (use RRF when hybrid OR degraded — in degraded mode
+            # vector_sim is 0 for every row, so RRF/FTS rank is the only signal).
+            base_score = data["rrf_score"] if (hybrid or degraded) else data["vector_sim"]
             final_score = base_score * recency_factor
 
             results.append({
