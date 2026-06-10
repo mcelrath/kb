@@ -63,7 +63,8 @@ class EmbeddingService:
         self._cache_order.append(text_hash)
 
     def _embed_remote(
-        self, text: str, max_retries: int | None = None, base_delay: float = 1.5
+        self, text: str, max_retries: int | None = None, base_delay: float = 1.5,
+        timeout: float | None = None,
     ) -> list[float]:
         """Get embedding from remote endpoint (llama.cpp style).
 
@@ -102,7 +103,8 @@ class EmbeddingService:
                 headers={"Content-Type": "application/json"},
             )
             try:
-                with urlopen(req, timeout=int(os.environ.get("KB_EMBED_TIMEOUT", "180"))) as resp:
+                _to = timeout if timeout else int(os.environ.get("KB_EMBED_TIMEOUT", "180"))
+                with urlopen(req, timeout=_to) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     # llama.cpp format: [{"index": 0, "embedding": [[tok1], [tok2], ...]}]
                     # Mean pool across all token embeddings
@@ -127,7 +129,8 @@ class EmbeddingService:
             + f"Check that embedding server at {self.embedding_url} is running."
         )
 
-    def embed(self, text: str, max_retries: int | None = None) -> bytes:
+    def embed(self, text: str, max_retries: int | None = None,
+              timeout: float | None = None) -> bytes:
         """Generate embedding for text using remote endpoint.
 
         Embeddings are L2-normalized so L2 distance can be used for cosine similarity.
@@ -154,7 +157,7 @@ class EmbeddingService:
         if cached is not None:
             return serialize_f32(cached)
 
-        embedding = self._embed_remote(text, max_retries=max_retries)
+        embedding = self._embed_remote(text, max_retries=max_retries, timeout=timeout)
         embedding = l2_normalize(embedding)
         self._cache_put(text_hash, embedding)
         return serialize_f32(embedding)

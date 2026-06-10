@@ -85,6 +85,11 @@ class HybridSearch:
             query_embedding = self.embedding_service.embed(
                 prefixed_query,
                 max_retries=int(os.environ.get("KB_SEARCH_EMBED_RETRIES", "1")),
+                # SLOW (not just down) must also degrade fast: a search query embed
+                # is sub-second when healthy, so cap the per-attempt wait short
+                # (vs the 180s ingest default) -> a slow server falls to FTS in
+                # seconds instead of blocking ~180s. Tune via KB_SEARCH_EMBED_TIMEOUT.
+                timeout=float(os.environ.get("KB_SEARCH_EMBED_TIMEOUT", "10")),
             )
             sql = """
                 SELECT f.*, v.distance
