@@ -1179,6 +1179,57 @@ def main():
         help="Suppress per-file output; only print summary line",
     )
 
+    # configure: host-wide and per-project config UX (Phase 5, kb-2c3)
+    configure_parser = _add_parser(
+        "configure",
+        "Configure kb: embedding provider, summary mode, project setup",
+    )
+    # Global flags
+    configure_parser.add_argument(
+        "--provider",
+        choices=list(["ollama-local", "voyage", "openai", "gemini", "jina", "local-llamacpp"]),
+        help="Embedding provider (default: ollama-local; triggers non-interactive mode)",
+    )
+    configure_parser.add_argument("--model", help="Embedding model name")
+    configure_parser.add_argument("--dim", type=int, help="Embedding dimension")
+    configure_parser.add_argument(
+        "--format", dest="format", choices=["llamacpp", "openai"],
+        help="Embedding wire format (default: openai for all hosted providers)"
+    )
+    configure_parser.add_argument("--url", help="Embedding server URL")
+    configure_parser.add_argument(
+        "--summary-mode", choices=["none", "local-llm", "subscription-sdk", "api"],
+        help="Summary generation mode"
+    )
+    configure_parser.add_argument(
+        "--key", help="Embedding API key (written to settings.local.json, gitignore-verified)"
+    )
+    configure_parser.add_argument(
+        "--reembed", action="store_true",
+        help="Run `kb reembed --force` immediately if model/dim changed"
+    )
+    configure_parser.add_argument(
+        "--config-dir", type=Path,
+        help="Global config dir (default: $CLAUDE_CONFIG_DIR or ~/.claude). Tests pass this."
+    )
+    # Per-project flags
+    configure_parser.add_argument(
+        "--project", dest="project", metavar="TAG",
+        help="Per-project mode: set project tag (non-interactive, safe in background agents)"
+    )
+    configure_parser.add_argument(
+        "--enable-tracker", action="store_true",
+        help="(--project) Write .beads/config.yaml backend: kb"
+    )
+    configure_parser.add_argument(
+        "--db-path-override", metavar="PATH",
+        help="(--project) Write KB_DB=PATH to the project's .claude/settings.json env"
+    )
+    configure_parser.add_argument(
+        "--project-dir", type=Path,
+        help="(--project) Project root directory (default: cwd)"
+    )
+
     # queue-defer: set a defer_reason on a lean_work_queue row
     queue_defer_parser = _add_parser(
         "queue-defer",
@@ -1360,6 +1411,11 @@ def main():
                 evidence=args.evidence,
             )
             sys.exit(0)
+
+    # configure: does not need KnowledgeBase — dispatch early
+    if args.command == "configure":
+        from kb.configure import configure_main
+        sys.exit(configure_main(args))
 
     # Initialize KB
     kb = KnowledgeBase(
