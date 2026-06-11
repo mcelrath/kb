@@ -14,3 +14,5 @@ build/
 # Dolt database files (added by bd init)
 .dolt/
 *.db
+tmp/bd_export/
+tmp/issues_smoke/*.db*
