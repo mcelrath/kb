@@ -94,7 +94,7 @@ Embedding-model identity is tracked in `embedding_meta`. `kb embed-status` shows
 - **GPU (~16GB):** `qwen3-embedding:8b` (4096d, top quality). Do NOT run an 8B embedder on CPU (1-6s/embed — blows the timeout).
 - AVOID nomic-embed-text / all-MiniLM as the default: confirmed WEAK on code+science (~15-25pt MTEB retrieval gap, absent from code leaderboards). Vec-table dim target = 1024. `KB_EMBED_TIMEOUT` default 180s is a generous ceiling; the search path fast-fails to FTS.
 
-Summaries default to `local-llm` (tardis:9510). `subscription-sdk` (Haiku via claude_agent_sdk, scrubs a stale `ANTHROPIC_API_KEY`) is built but pending an Agent-SDK credit pool (kb-zi9).
+Summaries: the CALLER provides one — `kb add --summary "<one sentence>"`. The agent that wrote the finding writes its summary in the same turn (free, smart, no second model); this is preferred and is the documented convention. `KB_SUMMARY_MODE` is only the FALLBACK when no `--summary` is passed: `extractive` (default, no-LLM first-sentence) | `none` | `local-llm` (tardis:9510) | `subscription-sdk` (Haiku via claude_agent_sdk, pending Agent-SDK credits, kb-zi9) | `api`.
 
 CAUTION: `kb configure` WITHOUT `--config-dir` defaults to the real `~/.claude` — tests/smokes MUST pass `--config-dir <temp>` or they clobber the live config (see kb-2c3 retro).
 

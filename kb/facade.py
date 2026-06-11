@@ -329,6 +329,7 @@ Finding 2: {candidate['content'][:300]}"""
         sprint: str | None = None,
         tags: list[str] | None = None,
         evidence: str | None = None,
+        summary: str | None = None,
         check_duplicate: bool = True,
         duplicate_threshold: float = 0.85,
         check_contradictions: bool = True,
@@ -407,7 +408,11 @@ Finding 2: {candidate['content'][:300]}"""
         tags = self._validate_tags(tags)
         tags_json = json.dumps(tags)
 
-        summary = self._generate_summary(content, evidence)
+        # Caller-provided summary wins: the LLM that WROTE this finding hands us a
+        # one-liner in the same turn (smart, free, no second model). Only fall back
+        # to auto-generation (extractive by default) when no summary is supplied.
+        if summary is None:
+            summary = self._generate_summary(content, evidence)
 
         if embedding is None:
             embedding = self._embed(content + " " + (evidence or ""))

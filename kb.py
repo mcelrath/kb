@@ -110,6 +110,7 @@ def _queue_async_add(
     sprint: str | None,
     tags: list[str] | None,
     evidence: str | None,
+    summary: str | None = None,
 ) -> None:
     """Write a queue file readable by `kb flush-pending` and detach a flusher.
 
@@ -138,6 +139,8 @@ def _queue_async_add(
     if evidence:
         # Header is single-line; multi-line evidence belongs in content.
         header_lines.append(f"# evidence: {evidence}")
+    if summary:
+        header_lines.append(f"# summary: {summary}")
     payload = "\n".join(header_lines) + ("\n\n" if header_lines else "") + content + "\n"
 
     tmp = qfile.with_suffix(".txt.partial")
@@ -967,6 +970,9 @@ def main():
     add_parser.add_argument("-s", "--sprint", help="Sprint name")
     add_parser.add_argument("--tags", nargs="+", help="Tags")
     add_parser.add_argument("-e", "--evidence", help="Evidence/code snippet")
+    add_parser.add_argument("--summary", help="One-sentence summary YOU (the author) write for "
+        "this finding — preferred: you wrote the content, so summarize it in-context. "
+        "If omitted, kb falls back to an extractive (no-LLM) blurb.")
     add_parser.add_argument("-f", "--file", type=Path, help="Read content from file")
     add_parser.add_argument("--no-duplicate-check", action="store_true", help="Skip duplicate checking")
     add_parser.add_argument("--no-auto-tag", action="store_true", help="Skip auto-tagging")
@@ -1438,6 +1444,7 @@ def main():
                     sprint=args.sprint,
                     tags=args.tags,
                     evidence=args.evidence,
+                    summary=args.summary,
                     check_duplicate=not args.no_duplicate_check,
                     auto_tag=not args.no_auto_tag,
                 )
@@ -1453,6 +1460,7 @@ def main():
                         sprint=args.sprint,
                         tags=args.tags,
                         evidence=args.evidence,
+                        summary=args.summary,
                     )
                     sys.exit(0)
                 raise
@@ -2315,6 +2323,7 @@ def main():
                         sprint=headers.get("sprint") or None,
                         tags=tags,
                         evidence=headers.get("evidence") or None,
+                        summary=headers.get("summary") or None,
                         check_duplicate=False,  # caller already decided to queue
                     )
                     finding_id = result.get("id") if isinstance(result, dict) else result
