@@ -16,6 +16,9 @@ DEFAULT_DB_PATH = Path(os.environ.get("KB_DB") or (Path.home() / ".cache" / "kb"
 # Embedding configuration (REQUIRED - no local fallback)
 DEFAULT_EMBEDDING_URL = os.environ.get("KB_EMBEDDING_URL", "http://ash:8081/embedding")
 DEFAULT_EMBEDDING_DIM = int(os.environ.get("KB_EMBEDDING_DIM", "4096"))
+DEFAULT_EMBEDDING_FORMAT = os.environ.get("KB_EMBEDDING_FORMAT", "llamacpp")
+DEFAULT_EMBEDDING_MODEL = os.environ.get("KB_EMBEDDING_MODEL", "")
+DEFAULT_EMBEDDING_KEY = os.environ.get("KB_EMBEDDING_KEY", "")
 
 # LLM configuration for query expansion
 DEFAULT_LLM_URL = os.environ.get("KB_LLM_URL", "http://tardis:9510/completion")

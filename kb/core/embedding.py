@@ -10,10 +10,13 @@ import os
 import random
 import sys
 import time
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from ..constants import DEFAULT_EMBEDDING_URL, DEFAULT_EMBEDDING_DIM
+from ..constants import (
+    DEFAULT_EMBEDDING_URL, DEFAULT_EMBEDDING_DIM,
+    DEFAULT_EMBEDDING_FORMAT, DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_KEY,
+)
 from ..validation import serialize_f32, l2_normalize
 
 
@@ -22,6 +25,13 @@ class EmbeddingService:
 
     Embeddings are L2-normalized so L2 distance can be used for cosine similarity.
     For normalized vectors: cosine_similarity = 1 - L2_distance²/2
+
+    Supports two request/response formats:
+      - llamacpp: {"content": text} request, per-token embedding arrays needing
+        mean-pooling. Default for back-compat with ash:8081.
+      - openai: {"input": text, "model": M} request, single pre-pooled embedding
+        at data[0].embedding. Covers OpenAI, Voyage, Jina, Ollama, TEI etc.
+        Sends Authorization: Bearer header when embedding_key is set.
     """
 
     _cache: dict[str, list[float]]
@@ -29,18 +39,27 @@ class EmbeddingService:
     _cache_max: int
     embedding_url: str
     embedding_dim: int
+    embedding_format: str
+    embedding_model: str
+    embedding_key: str
 
     def __init__(
         self,
         embedding_url: str = DEFAULT_EMBEDDING_URL,
         embedding_dim: int = DEFAULT_EMBEDDING_DIM,
         cache_max: int = 500,
+        embedding_format: str = DEFAULT_EMBEDDING_FORMAT,
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+        embedding_key: str = DEFAULT_EMBEDDING_KEY,
     ):
         self.embedding_url = embedding_url
         self.embedding_dim = embedding_dim
         self._cache_max = cache_max
         self._cache = {}
         self._cache_order = []
+        self.embedding_format = embedding_format
+        self.embedding_model = embedding_model
+        self.embedding_key = embedding_key
 
     def _cache_get(self, text_hash: str) -> list[float] | None:
         """Get embedding from cache, updating LRU order."""
@@ -62,14 +81,87 @@ class EmbeddingService:
         self._cache[text_hash] = embedding
         self._cache_order.append(text_hash)
 
+    def _embed_remote_llamacpp(self, text: str, timeout: float) -> list[float]:
+        """Fetch embedding using llama.cpp format: {"content": text}.
+
+        Response is per-token arrays; mean-pools to a single vector.
+        """
+        req = Request(
+            self.embedding_url,
+            data=json.dumps({"content": text}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        with urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            # llama.cpp format: [{"index": 0, "embedding": [[tok1], [tok2], ...]}]
+            token_embeddings = data[0]["embedding"]
+            if len(token_embeddings) == 1:
+                return list(token_embeddings[0])
+            # Mean pooling across all token embeddings
+            dim = len(token_embeddings[0])
+            pooled = [0.0] * dim
+            for tok_emb in token_embeddings:
+                for i, v in enumerate(tok_emb):
+                    pooled[i] += v
+            n = len(token_embeddings)
+            return [v / n for v in pooled]
+
+    def _embed_remote_openai(self, text: str, timeout: float) -> list[float]:
+        """Fetch embedding using OpenAI-compatible format.
+
+        POSTs {"input": text, "model": M, "dimensions": D} to self.embedding_url.
+        The `dimensions` field is omitted on retry if the provider returns HTTP 400
+        mentioning "dimensions" (some providers reject it).
+
+        Response: data[0].embedding — already a single pooled vector; NO mean-pooling.
+        Adds Authorization: Bearer header when self.embedding_key is set.
+        """
+        headers = {"Content-Type": "application/json"}
+        if self.embedding_key:
+            headers["Authorization"] = f"Bearer {self.embedding_key}"
+
+        body: dict = {"input": text}
+        if self.embedding_model:
+            body["model"] = self.embedding_model
+        body["dimensions"] = self.embedding_dim
+
+        req = Request(
+            self.embedding_url,
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+        )
+        try:
+            with urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return list(data["data"][0]["embedding"])
+        except HTTPError as e:
+            # On HTTP 400 mentioning "dimensions" in the response body, retry
+            # without that field (some providers reject it).
+            if e.code == 400:
+                try:
+                    err_body = e.read().decode("utf-8", errors="replace")
+                except Exception:
+                    err_body = ""
+                if "dimension" in err_body.lower():
+                    retry_body = {k: v for k, v in body.items() if k != "dimensions"}
+                    req2 = Request(
+                        self.embedding_url,
+                        data=json.dumps(retry_body).encode("utf-8"),
+                        headers=headers,
+                    )
+                    with urlopen(req2, timeout=timeout) as resp2:
+                        data2 = json.loads(resp2.read().decode("utf-8"))
+                        return list(data2["data"][0]["embedding"])
+            raise
+
     def _embed_remote(
         self, text: str, max_retries: int | None = None, base_delay: float = 1.5,
         timeout: float | None = None,
     ) -> list[float]:
-        """Get embedding from remote endpoint (llama.cpp style).
+        """Get embedding from remote endpoint.
 
-        llama.cpp returns per-token embeddings. We use mean pooling to get
-        a single embedding for the entire text.
+        Dispatches to the format-specific helper (_embed_remote_llamacpp or
+        _embed_remote_openai) based on self.embedding_format.
 
         Retries with exponential backoff + jitter on failure. No fallback to local
         model to prevent dimension mismatch errors.
@@ -77,7 +169,7 @@ class EmbeddingService:
         Args:
             text: Text to embed
             max_retries: Maximum number of retry attempts. If None, uses
-                KB_EMBED_MAX_RETRIES env var (default 2). Interactive `kb add`
+                KB_EMBED_MAX_RETRIES env var (default 5). Interactive `kb add`
                 sets this to 1 for fast-fail-and-queue behavior; flush-pending
                 and reembed leave it at the default for their longer retry budget.
             base_delay: Base delay in seconds (doubles each retry with jitter)
@@ -88,6 +180,7 @@ class EmbeddingService:
         if max_retries is None:
             max_retries = int(os.environ.get("KB_EMBED_MAX_RETRIES", "5"))
         last_error: Exception | None = None
+        _to = float(timeout) if timeout else float(os.environ.get("KB_EMBED_TIMEOUT", "180"))
 
         for attempt in range(max_retries + 1):
             if attempt > 0:
@@ -97,28 +190,11 @@ class EmbeddingService:
                 print(f"Embedding retry {attempt}/{max_retries} after {delay:.1f}s...", file=sys.stderr)
                 time.sleep(delay)
 
-            req = Request(
-                self.embedding_url,
-                data=json.dumps({"content": text}).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-            )
             try:
-                _to = timeout if timeout else int(os.environ.get("KB_EMBED_TIMEOUT", "180"))
-                with urlopen(req, timeout=_to) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    # llama.cpp format: [{"index": 0, "embedding": [[tok1], [tok2], ...]}]
-                    # Mean pool across all token embeddings
-                    token_embeddings = data[0]["embedding"]
-                    if len(token_embeddings) == 1:
-                        return list(token_embeddings[0])
-                    # Mean pooling
-                    dim = len(token_embeddings[0])
-                    pooled = [0.0] * dim
-                    for tok_emb in token_embeddings:
-                        for i, v in enumerate(tok_emb):
-                            pooled[i] += v
-                    n = len(token_embeddings)
-                    return [v / n for v in pooled]
+                if self.embedding_format == "openai":
+                    return self._embed_remote_openai(text, _to)
+                else:
+                    return self._embed_remote_llamacpp(text, _to)
             except (URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError,
                     ConnectionError, OSError) as e:
                 last_error = e
@@ -203,30 +279,55 @@ class EmbeddingService:
             return results  # type: ignore
 
         uncached_texts = [texts[i] for i in uncached_indices]
-        req = Request(
-            self.embedding_url,
-            data=json.dumps({"content": uncached_texts}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
+        _batch_timeout = int(os.environ.get("KB_EMBED_BATCH_TIMEOUT", "300"))
+
         try:
-            with urlopen(req, timeout=int(os.environ.get("KB_EMBED_BATCH_TIMEOUT", "300"))) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                # llama.cpp batch format: list of [{"index": N, "embedding": [[...]]}]
-                for idx, item in enumerate(data):
-                    orig_i = uncached_indices[idx]
-                    token_embeddings = item["embedding"]
-                    if len(token_embeddings) == 1:
-                        vec = list(token_embeddings[0])
-                    else:
-                        dim = len(token_embeddings[0])
-                        pooled = [0.0] * dim
-                        for tok_emb in token_embeddings:
-                            for j, v in enumerate(tok_emb):
-                                pooled[j] += v
-                        vec = [v / len(token_embeddings) for v in pooled]
-                    vec = l2_normalize(vec)
-                    self._cache_put(hashes[orig_i], vec)
-                    results[orig_i] = serialize_f32(vec)
+            if self.embedding_format == "openai":
+                headers = {"Content-Type": "application/json"}
+                if self.embedding_key:
+                    headers["Authorization"] = f"Bearer {self.embedding_key}"
+                body: dict = {"input": uncached_texts}
+                if self.embedding_model:
+                    body["model"] = self.embedding_model
+                req = Request(
+                    self.embedding_url,
+                    data=json.dumps(body).encode("utf-8"),
+                    headers=headers,
+                )
+                with urlopen(req, timeout=_batch_timeout) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    # OpenAI batch format: {"data": [{"index": N, "embedding": [...]}]}
+                    # Sort by index to match input order
+                    items = sorted(data["data"], key=lambda x: x["index"])
+                    for idx, item in enumerate(items):
+                        orig_i = uncached_indices[idx]
+                        vec = l2_normalize(list(item["embedding"]))
+                        self._cache_put(hashes[orig_i], vec)
+                        results[orig_i] = serialize_f32(vec)
+            else:
+                req = Request(
+                    self.embedding_url,
+                    data=json.dumps({"content": uncached_texts}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with urlopen(req, timeout=_batch_timeout) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    # llama.cpp batch format: list of [{"index": N, "embedding": [[...]]}]
+                    for idx, item in enumerate(data):
+                        orig_i = uncached_indices[idx]
+                        token_embeddings = item["embedding"]
+                        if len(token_embeddings) == 1:
+                            vec = list(token_embeddings[0])
+                        else:
+                            dim = len(token_embeddings[0])
+                            pooled = [0.0] * dim
+                            for tok_emb in token_embeddings:
+                                for j, v in enumerate(tok_emb):
+                                    pooled[j] += v
+                            vec = [v / len(token_embeddings) for v in pooled]
+                        vec = l2_normalize(vec)
+                        self._cache_put(hashes[orig_i], vec)
+                        results[orig_i] = serialize_f32(vec)
         except Exception:
             # Fallback: embed one at a time
             for i in uncached_indices:
