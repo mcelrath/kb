@@ -159,21 +159,26 @@ class KnowledgeBase:
     def _generate_summary(self, content: str, evidence: str | None = None) -> str | None:
         """Generate summary for finding.
 
-        Routing controlled by KB_SUMMARY_MODE env var (default: local-llm):
-          none             -> always return None (no summary generated)
-          local-llm        -> existing ContentAnalyzer via local LLM server (default)
+        Routing controlled by KB_SUMMARY_MODE env var (default: extractive).
+          extractive       -> no-LLM first-sentence blurb (DEFAULT — zero VRAM/cost,
+                              no second model; the easy out-of-the-box path)
+          none             -> always return None (search shows raw content)
+          local-llm        -> ContentAnalyzer via local LLM server (needs a 2nd model)
           subscription-sdk -> claude_agent_sdk.query (Haiku, subscription OAuth,
                               ANTHROPIC_API_KEY scrubbed so stale key is bypassed)
           api              -> same as local-llm for now (future: direct API path)
         """
-        mode = os.environ.get("KB_SUMMARY_MODE", "local-llm")
+        mode = os.environ.get("KB_SUMMARY_MODE", "extractive")
         if mode == "none":
             return None
+        if mode == "extractive":
+            from .llm.extractive import extractive_summary
+            return extractive_summary(content, evidence)
         if mode == "subscription-sdk":
             from .llm.summary_sdk import summarize_one
             text = content + (" " + evidence if evidence else "")
             return summarize_one(text)
-        # local-llm (default) and api both use the existing analyzer path
+        # local-llm and api use the LLM analyzer path
         return self._analyzer.generate_summary(content, evidence)
 
     def expand_query(self, query: str, project: str | None = None, verbose: bool = False) -> str:
