@@ -154,15 +154,32 @@ class TestEmbeddingFormats(unittest.TestCase):
         )
 
     def test_llamacpp_default_no_env(self):
-        """Default format (no env) is llamacpp — back-compat assertion."""
-        svc = EmbeddingService.__new__(EmbeddingService)
-        # Instantiate with defaults (env-free)
-        svc.__init__(
-            embedding_url=f"{self.base_url}/embedding",
-            embedding_dim=3,
-            # embedding_format NOT passed -> picks up DEFAULT_EMBEDDING_FORMAT
-        )
-        self.assertEqual(svc.embedding_format, "llamacpp")
+        """Back-compat: with KB_EMBEDDING_FORMAT UNSET, the default is llamacpp.
+
+        Hermetic: pops the env var (a contaminated ambient env — e.g. a stray
+        `kb configure` — must not flip this contract) and reloads the import-time
+        constant before asserting.
+        """
+        import os
+        import importlib
+        saved = os.environ.pop("KB_EMBEDDING_FORMAT", None)
+        try:
+            from kb import constants
+            from kb.core import embedding as emb
+            importlib.reload(constants)
+            importlib.reload(emb)
+            svc = emb.EmbeddingService(
+                embedding_url=f"{self.base_url}/embedding",
+                embedding_dim=3,
+            )
+            self.assertEqual(svc.embedding_format, "llamacpp")
+        finally:
+            if saved is not None:
+                os.environ["KB_EMBEDDING_FORMAT"] = saved
+            from kb import constants as _c
+            from kb.core import embedding as _e
+            importlib.reload(_c)
+            importlib.reload(_e)
 
     # --- openai path ---
 
