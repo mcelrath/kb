@@ -33,27 +33,28 @@ from typing import Any
 
 PROVIDERS: dict[str, dict[str, Any]] = {
     "ollama-local": {
-        "label": "Ollama local (recommended, free, private)",
+        "label": "Ollama local (recommended; free, private)",
         "format": "openai",
         "url": "http://localhost:11434/v1/embeddings",
         "models": [
-            ("qwen3-embedding", 4096, "matches current dim — no reembed needed"),
-            ("nomic-embed-text", 768, "smaller, faster"),
+            ("qwen3-embedding:0.6b", 1024, "CPU-capable ~0.6B; strong on code+science (MTEB-Code 75) — recommended default"),
+            ("qwen3-embedding:8b", 4096, "GPU (~16GB); top code+science quality"),
+            ("nomic-embed-text", 768, "tiny/fast but WEAK on code+science — only if RAM-starved"),
         ],
-        "default_model": "qwen3-embedding",
-        "default_dim": 4096,
+        "default_model": "qwen3-embedding:0.6b",
+        "default_dim": 1024,
         "needs_key": False,
     },
     "voyage": {
-        "label": "Voyage AI (OpenAI-compatible, 200M tokens free)",
+        "label": "Voyage AI (free hosted, code-specialized; 200M tokens free, no GPU)",
         "format": "openai",
         "url": "https://api.voyageai.com/v1/embeddings",
         "models": [
-            ("voyage-3-lite", 512, "fast, free tier"),
-            ("voyage-3", 1024, "better quality"),
+            ("voyage-code-3", 1024, "code-specialized, top code retrieval — recommended hosted"),
+            ("voyage-3.5", 1024, "strong general"),
         ],
-        "default_model": "voyage-3-lite",
-        "default_dim": 512,
+        "default_model": "voyage-code-3",
+        "default_dim": 1024,
         "needs_key": True,
     },
     "openai": {
@@ -103,11 +104,12 @@ PROVIDERS: dict[str, dict[str, Any]] = {
     },
 }
 
-SUMMARY_MODES = ["none", "local-llm", "subscription-sdk", "api"]
+SUMMARY_MODES = ["extractive", "none", "local-llm", "subscription-sdk", "api"]
 SUMMARY_MODE_LABELS = {
-    "none": "No summaries (fastest)",
-    "local-llm": "Local LLM server (default, no external calls)",
-    "subscription-sdk": "Claude Haiku via Agent SDK (subscription billing)",
+    "extractive": "Extractive, no LLM (default — first sentence, zero VRAM/cost)",
+    "none": "No summaries (raw content shown)",
+    "local-llm": "Local LLM server (needs a second model)",
+    "subscription-sdk": "Claude Haiku via Agent SDK (subscription credits)",
     "api": "Claude API (requires ANTHROPIC_API_KEY)",
 }
 
@@ -415,9 +417,9 @@ def run_global_configure(
     resolved_summary = summary_mode
     if interactive and resolved_summary is None:
         sm_options = [(k, f"{k}: {SUMMARY_MODE_LABELS[k]}") for k in SUMMARY_MODES]
-        resolved_summary = _choose("Summary mode", sm_options, "local-llm")
+        resolved_summary = _choose("Summary mode", sm_options, "extractive")
     if resolved_summary is None:
-        resolved_summary = "local-llm"
+        resolved_summary = "extractive"
 
     # ------------------------------------------------------------------
     # 3. Key (secret)

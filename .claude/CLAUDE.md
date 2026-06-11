@@ -83,12 +83,16 @@ python3 -m py_compile kb.py kb_mcp.py
 
 Two-layer config via `kb configure`:
 
-- GLOBAL (once per host, interactive or flags): `kb configure --provider ollama --model qwen3-embedding:8b --dim 4096 --format openai --url http://localhost:11434/v1/embeddings --summary-mode local-llm`. Writes non-secret `KB_*` env to `settings.json` (MERGE, never clobber); `KB_EMBEDDING_KEY` → `settings.local.json` ONLY after `git check-ignore` confirms it's ignored (refuses otherwise). Seeds `embedding_meta`.
+- GLOBAL (once per host, interactive or flags): `kb configure --provider ollama --model qwen3-embedding:0.6b --dim 1024 --format openai --url http://localhost:11434/v1/embeddings --summary-mode extractive`. Writes non-secret `KB_*` env to `settings.json` (MERGE, never clobber); `KB_EMBEDDING_KEY` → `settings.local.json` ONLY after `git check-ignore` confirms it's ignored (refuses otherwise). Seeds `embedding_meta`.
 - PER-PROJECT (non-interactive, agent-safe): `kb configure --project <tag> --enable-tracker [--db PATH]`. Writes `.beads/config.yaml: backend: kb` (merge) + per-project `KB_DB`. Reuses global. `/project-setup` runs this as its Phase-5 tail.
 
 Env vars: `KB_EMBEDDING_FORMAT` (`llamacpp`|`openai`), `KB_EMBEDDING_URL`, `KB_EMBEDDING_MODEL`, `KB_EMBEDDING_DIM`, `KB_EMBEDDING_KEY` (secret→settings.local.json), `KB_SUMMARY_MODE` (`none`|`local-llm`|`subscription-sdk`|`api`), `KB_DB`. Unset ⇒ defaults to ash:8081 llamacpp 4096.
 
-Embedding-model identity is tracked in `embedding_meta`. `kb embed-status` shows configured-vs-stored + verdict. CHANGING model/dim requires `kb reembed --force` (a dim change DROPs+recreates all 7 `_vec` tables at the new dim and re-embeds; FTS covers the window). Recommended local default: `ollama pull qwen3-embedding:8b` (4096 — matches the ash index, NO re-embed) or `nomic-embed-text` (768, lighter, needs re-embed).
+Embedding-model identity is tracked in `embedding_meta`. `kb embed-status` shows configured-vs-stored + verdict. CHANGING model/dim requires `kb reembed --force` (a dim change DROPs+recreates all 7 `_vec` tables at the new dim and re-embeds; FTS covers the window). Embedding model choice (code+science benchmarks, June 2026 research — kb-au2):
+- **CPU / no GPU (recommended default):** `ollama pull qwen3-embedding:0.6b` (1024d, Apache-2.0, MTEB-Code 75 — ~0.2-0.6s/embed on CPU, within timeout).
+- **Free hosted, code-specialized:** voyage-code-3 (1024d, 200M tokens free, needs API key) — zero local compute.
+- **GPU (~16GB):** `qwen3-embedding:8b` (4096d, top quality). Do NOT run an 8B embedder on CPU (1-6s/embed — blows the timeout).
+- AVOID nomic-embed-text / all-MiniLM as the default: confirmed WEAK on code+science (~15-25pt MTEB retrieval gap, absent from code leaderboards). Vec-table dim target = 1024. `KB_EMBED_TIMEOUT` default 180s is a generous ceiling; the search path fast-fails to FTS.
 
 Summaries default to `local-llm` (tardis:9510). `subscription-sdk` (Haiku via claude_agent_sdk, scrubs a stale `ANTHROPIC_API_KEY`) is built but pending an Agent-SDK credit pool (kb-zi9).
 
