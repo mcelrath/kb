@@ -166,6 +166,8 @@ class IssuesRepository(EntityRepository):
         status: str | None = None,
         type: str | None = None,
         parent_id: str | None = None,
+        assignee: str | None = None,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """List issues with optional filters."""
         conditions: list[str] = []
@@ -182,11 +184,18 @@ class IssuesRepository(EntityRepository):
         if parent_id:
             conditions.append("parent_id = ?")
             params.append(parent_id)
+        if assignee:
+            conditions.append("assignee = ?")
+            params.append(assignee)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        limit_sql = ""
+        if limit is not None:
+            limit_sql = " LIMIT ?"
+            params.append(limit)
 
         rows = self.conn.execute(
             f"""SELECT id, type, status, priority, parent_id, title, project, tags, created_at
-                FROM issues {where} ORDER BY priority, created_at""",
+                FROM issues {where} ORDER BY priority, created_at{limit_sql}""",
             params,
         ).fetchall()
         results = []

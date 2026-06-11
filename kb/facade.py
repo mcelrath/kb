@@ -1622,8 +1622,8 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
     def issue_get(self, issue_id: str) -> dict[str, Any] | None:
         return self._issues.get(issue_id)
 
-    def issue_list(self, project: str | None = None, status: str | None = None, type: str | None = None, parent_id: str | None = None) -> list[dict[str, Any]]:
-        return self._issues.list(project=project, status=status, type=type, parent_id=parent_id)
+    def issue_list(self, project: str | None = None, status: str | None = None, type: str | None = None, parent_id: str | None = None, assignee: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+        return self._issues.list(project=project, status=status, type=type, parent_id=parent_id, assignee=assignee, limit=limit)
 
     def issue_search(self, query: str, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
         return self._issues.search(query, project=project, limit=limit)

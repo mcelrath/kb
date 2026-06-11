@@ -492,9 +492,13 @@ def cmd_list(args: Any, kb: Any) -> int:
     status = getattr(args, "status", None)
     parent = getattr(args, "parent", None)
     project = getattr(args, "project", None)
+    itype = getattr(args, "type", None)
+    assignee = getattr(args, "assignee", None)
+    limit = getattr(args, "limit", None)
     as_json = getattr(args, "json", False)
 
-    rows = kb.issue_list(project=project, status=status, parent_id=parent)
+    rows = kb.issue_list(project=project, status=status, parent_id=parent,
+                         type=itype, assignee=assignee, limit=limit)
 
     if as_json:
         # For list, we need the full row data for projection — list() returns summary rows
@@ -681,6 +685,9 @@ def build_parser():
     p = sub.add_parser("list", help="List issues")
     p.add_argument("--status", default=None)
     p.add_argument("--parent", default=None)
+    p.add_argument("--type", default=None)
+    p.add_argument("--assignee", default=None)
+    p.add_argument("--limit", type=int, default=None)
     p.add_argument("--json", action="store_true")
 
     # dep subcommand
