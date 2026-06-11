@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""
+kbt — kb-native issue tracker with transition passthrough.
+
+Backend resolution (highest priority first):
+1. KBT_BACKEND env var (test-only override; logged to stderr when it fires)
+2. .beads/config.yaml `backend:` key found by walking UP from cwd
+3. Default: 'dolt' (no .beads/ found — all projects stay on dolt until migrated)
+
+When backend == 'dolt':  os.execvp('bd', ['bd'] + sys.argv[1:])
+  exec-replace gives byte-identical stdin/stdout/stderr/exit-code/signals.
+  subprocess.run would silently break heredoc callers and $? checks.
+
+When backend == 'kb':  dispatch to kb/issue_cli.py
+"""
+
+import os
+import sys
+from pathlib import Path
+
+# Ensure the project's kb package is importable when invoked directly
+_here = Path(__file__).resolve().parent
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
+
+
+def main() -> None:
+    from kb.issue_cli import resolve_backend, run
+
+    backend = resolve_backend(Path.cwd())
+
+    if backend == "dolt":
+        # TRANSITION PASSTHROUGH: exec-replace with the real bd binary.
+        # os.execvp replaces this process entirely — no return, no subprocess
+        # overhead, byte-identical stdin/stdout/stderr/exit/signals.
+        # sys.argv[0] is 'kbt'; pass 'bd' as argv[0] to bd so bd sees its own name.
+        os.execvp("bd", ["bd"] + sys.argv[1:])
+        # execvp only returns on failure (ENOENT etc.)
+        print("kbt: exec bd failed — is bd installed?", file=sys.stderr)
+        sys.exit(127)
+
+    # backend == 'kb'
+    sys.exit(run(sys.argv[1:]))
+
+
+if __name__ == "__main__":
+    main()

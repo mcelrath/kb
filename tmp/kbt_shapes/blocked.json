@@ -1,0 +1,49 @@
+[
+  {
+    "id": "kb-sg0.8",
+    "title": "P8: cutover+retire (flip all flags, delete passthrough, type -a bd removal, stop dolt.service, uninstall @beads/bd, archive .beads); full loop on kb; tests green",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "owner": "mcelrath@users.noreply.github.com",
+    "created_at": "2026-06-11T09:43:46Z",
+    "created_by": "Bob McElrath",
+    "updated_at": "2026-06-11T05:43:58Z",
+    "blocked_by_count": 3,
+    "blocked_by": [
+      "kb-sg0.5",
+      "kb-sg0.6",
+      "kb-sg0.7"
+    ]
+  },
+  {
+    "id": "kb-sg0.6",
+    "title": "P6: rename all bd-\u003ekbt refs (CLAUDE.md/hooks/review+dispatch agents/skills/preambles); NO-OP under passthrough; verify workflows on kbt",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "owner": "mcelrath@users.noreply.github.com",
+    "created_at": "2026-06-11T09:43:45Z",
+    "created_by": "Bob McElrath",
+    "updated_at": "2026-06-11T05:43:57Z",
+    "blocked_by_count": 1,
+    "blocked_by": [
+      "kb-sg0.3"
+    ]
+  },
+  {
+    "id": "kb-sg0.5",
+    "title": "P5: surfacing hooks (open_issues_surface + compose_time_check) -\u003e kb issues table, project-filtered isolation, vector + open/closed",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "owner": "mcelrath@users.noreply.github.com",
+    "created_at": "2026-06-11T09:43:44Z",
+    "created_by": "Bob McElrath",
+    "updated_at": "2026-06-11T05:43:56Z",
+    "blocked_by_count": 1,
+    "blocked_by": [
+      "kb-sg0.3"
+    ]
+  }
+]
