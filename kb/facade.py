@@ -34,6 +34,7 @@ from .entities.scripts import ScriptsRepository
 from .entities.documents import DocumentsRepository
 from .entities.theorems import TheoremRepository
 from .entities.concepts import ConceptRepository
+from .entities.issues import IssuesRepository
 
 
 class KnowledgeBase:
@@ -94,6 +95,7 @@ class KnowledgeBase:
     _documents: DocumentsRepository
     _theorems: TheoremRepository
     _concepts: ConceptRepository
+    _issues: IssuesRepository
 
     def __init__(
         self,
@@ -130,6 +132,7 @@ class KnowledgeBase:
         self._documents = DocumentsRepository(self.conn)
         self._theorems = TheoremRepository(self.conn, self._embedding)
         self._concepts = ConceptRepository(self.conn, self._embedding)
+        self._issues = IssuesRepository(self.conn, self._embedding)
 
     # =========================================================================
     # Backward-compatible methods delegating to subsystems
@@ -1389,6 +1392,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             "scripts": self.conn.execute("SELECT COUNT(*) FROM scripts").fetchone()[0],
             "lean_theorems": self.conn.execute("SELECT COUNT(*) FROM lean_theorems").fetchone()[0],
             "concepts": self.conn.execute("SELECT COUNT(*) FROM concepts").fetchone()[0],
+            "issues": self.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0],
         }
         grand_total = sum(counts.values())
         print(
@@ -1396,6 +1400,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             f"scripts={counts['scripts']} "
             f"lean_theorems={counts['lean_theorems']} "
             f"concepts={counts['concepts']} "
+            f"issues={counts['issues']} "
             f"GRAND_TOTAL={grand_total}",
             file=sys.stderr,
             flush=True,
@@ -1495,6 +1500,12 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             "SELECT id, claim FROM concepts",
             "concepts_vec",
             lambda r: r["claim"] or "",
+        )
+        _do_table(
+            "issues",
+            "SELECT id, title, description FROM issues",
+            "issues_vec",
+            lambda r: r["title"] + (" " + r["description"] if r["description"] else ""),
         )
 
         return stats
@@ -1600,6 +1611,22 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
     def concept_render_register(self, project: str | None = None, max_tokens: int = 600, framework_hints: list[str] | None = None, technique_hints: list[str] | None = None) -> str:
         return self._concepts.render_register(project, max_tokens, framework_hints, technique_hints)
+
+    # =========================================================================
+    # Issue tracker methods
+    # =========================================================================
+
+    def issue_create(self, title: str, **kwargs) -> dict[str, Any]:
+        return self._issues.create(title, **kwargs)
+
+    def issue_get(self, issue_id: str) -> dict[str, Any] | None:
+        return self._issues.get(issue_id)
+
+    def issue_list(self, project: str | None = None, status: str | None = None, type: str | None = None, parent_id: str | None = None) -> list[dict[str, Any]]:
+        return self._issues.list(project=project, status=status, type=type, parent_id=parent_id)
+
+    def issue_search(self, query: str, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+        return self._issues.search(query, project=project, limit=limit)
 
     # =========================================================================
     # Python symbol index methods

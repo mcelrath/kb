@@ -318,6 +318,84 @@ SCHEMA_SQL = """
     CREATE INDEX IF NOT EXISTS idx_structural_facts_type ON structural_facts(relation_type);
     CREATE INDEX IF NOT EXISTS idx_structural_facts_lhs_rhs ON structural_facts(lhs_operator, rhs_operator);
 
+    -- Issue tracker (kb-native replacement for beads/bd)
+    CREATE TABLE IF NOT EXISTS issues (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL CHECK(type IN ('task','bug','feature','epic','chore','spike','decision')),
+        status TEXT NOT NULL DEFAULT 'open'
+            CHECK(status IN ('open','in_progress','blocked','closed')),
+        priority INTEGER DEFAULT 2,
+        parent_id TEXT REFERENCES issues(id),
+        title TEXT NOT NULL,
+        description TEXT,
+        design_file TEXT,
+        assignee TEXT,
+        close_reason TEXT,
+        project TEXT,
+        tags TEXT,  -- JSON array
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        closed_at TEXT,
+        closed_by_session TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project);
+    CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+    CREATE INDEX IF NOT EXISTS idx_issues_parent_id ON issues(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_issues_type ON issues(type);
+    CREATE INDEX IF NOT EXISTS idx_issues_project_status ON issues(project, status);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
+        title, description,
+        content='issues',
+        content_rowid='rowid'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS issues_ai AFTER INSERT ON issues BEGIN
+        INSERT INTO issues_fts(rowid, title, description)
+        VALUES (new.rowid, new.title, new.description);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS issues_ad AFTER DELETE ON issues BEGIN
+        INSERT INTO issues_fts(issues_fts, rowid, title, description)
+        VALUES ('delete', old.rowid, old.title, old.description);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS issues_au AFTER UPDATE ON issues BEGIN
+        INSERT INTO issues_fts(issues_fts, rowid, title, description)
+        VALUES ('delete', old.rowid, old.title, old.description);
+        INSERT INTO issues_fts(rowid, title, description)
+        VALUES (new.rowid, new.title, new.description);
+    END;
+
+    CREATE TABLE IF NOT EXISTS issue_deps (
+        issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+        depends_on_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+        type TEXT NOT NULL CHECK(type IN ('blocks','parent-child','discovered-from','related','supersedes')),
+        created_at TEXT NOT NULL,
+        created_by TEXT,
+        PRIMARY KEY (issue_id, depends_on_id, type)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_issue_deps_issue ON issue_deps(issue_id);
+    CREATE INDEX IF NOT EXISTS idx_issue_deps_depends_on ON issue_deps(depends_on_id);
+
+    CREATE TABLE IF NOT EXISTS issue_comments (
+        id TEXT PRIMARY KEY,
+        issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        author TEXT,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_issue_comments_issue ON issue_comments(issue_id);
+
+    CREATE TABLE IF NOT EXISTS child_counters (
+        parent_id TEXT PRIMARY KEY,
+        counter INTEGER NOT NULL
+    );
+
     -- Proof work queue: tracks unblocked Lean tasks so tip cannot stop silently.
     -- Rows inserted by: bd_close_reingest (cleared-contract), ingest_lean_work_queue.py
     -- (bulk bootstrap), compose_time_check (routing-deposit), and manually.
@@ -381,6 +459,12 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
     """)
     _ = conn.execute(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS concepts_vec USING vec0(
+            id TEXT PRIMARY KEY,
+            embedding float[{embedding_dim}]
+        )
+    """)
+    _ = conn.execute(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS issues_vec USING vec0(
             id TEXT PRIMARY KEY,
             embedding float[{embedding_dim}]
         )
