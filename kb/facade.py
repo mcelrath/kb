@@ -123,6 +123,12 @@ class KnowledgeBase:
             expand_query=lambda q, p, v: self._llm.expand_query(q, p, embedding_url, v)
         )
 
+        # Seed embedding_meta on first run (idempotent; no-op if row exists)
+        try:
+            self._ensure_embedding_meta()
+        except Exception:
+            pass  # Non-fatal: DB may be read-only or during migration
+
         # Initialize entity repositories
         self._scripts = ScriptsRepository(
             self.conn,
@@ -1371,58 +1377,230 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         ).fetchone()
         return (row["cnt"] or 0, row["latest"] or "")
 
+    # =========================================================================
+    # Embedding model metadata
+    # =========================================================================
+
+    def _embedding_signature(self) -> str:
+        """SHA-256 of format|url|model|dim from current EmbeddingService config."""
+        import hashlib
+        raw = "|".join([
+            self._embedding.embedding_format,
+            self._embedding.embedding_url,
+            self._embedding.embedding_model,
+            str(self._embedding.embedding_dim),
+        ])
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    def _ensure_embedding_meta(self) -> None:
+        """Seed embedding_meta on first run; no-op if row already exists.
+
+        If no row exists, this means either a brand-new DB or an existing DB
+        that predates embedding_meta. In both cases we assume the current config
+        matches whatever was used (safe: existing vectors were made with the same
+        server).  We silently seed and commit; no STOP, no mismatch.
+        """
+        row = self.conn.execute(
+            "SELECT id FROM embedding_meta WHERE id = 1"
+        ).fetchone()
+        if row is not None:
+            return  # already seeded
+
+        sig = self._embedding_signature()
+        now = datetime.now().isoformat()
+        self.conn.execute("""
+            INSERT INTO embedding_meta (id, format, url, model, dim, signature, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?, ?)
+        """, (
+            self._embedding.embedding_format,
+            self._embedding.embedding_url,
+            self._embedding.embedding_model,
+            self._embedding.embedding_dim,
+            sig,
+            now,
+        ))
+        self.conn.commit()
+
+    def embedding_status(self) -> dict[str, Any]:
+        """Return embedding config status: stored vs configured + verdict.
+
+        Verdicts:
+          ok                   signatures match (or meta just seeded)
+          no-meta              table missing or no row (legacy DB pre-migration)
+          mismatch-same-dim    model/url/format changed but dim is same
+          mismatch-dim-change  dim changed (requires _vec recreate + full reembed)
+        """
+        configured_sig = self._embedding_signature()
+        configured = {
+            "format": self._embedding.embedding_format,
+            "url": self._embedding.embedding_url,
+            "model": self._embedding.embedding_model,
+            "dim": self._embedding.embedding_dim,
+            "signature": configured_sig,
+        }
+
+        try:
+            row = self.conn.execute(
+                "SELECT format, url, model, dim, signature, updated_at FROM embedding_meta WHERE id = 1"
+            ).fetchone()
+        except Exception:
+            # Table doesn't exist yet (very old DB)
+            return {
+                "configured": configured,
+                "stored": None,
+                "verdict": "no-meta",
+                "message": "No embedding_meta row; run `kb reembed --force` to initialize.",
+            }
+
+        if row is None:
+            return {
+                "configured": configured,
+                "stored": None,
+                "verdict": "no-meta",
+                "message": "No embedding_meta row; run `kb reembed --force` to initialize.",
+            }
+
+        stored = {
+            "format": row[0],
+            "url": row[1],
+            "model": row[2],
+            "dim": row[3],
+            "signature": row[4],
+            "updated_at": row[5],
+        }
+
+        if stored["signature"] == configured_sig:
+            verdict = "ok"
+            message = "Embedding config matches stored metadata."
+        elif stored["dim"] != configured["dim"]:
+            verdict = "mismatch-dim-change"
+            message = (
+                f"Embedding dim changed: stored={stored['dim']} configured={configured['dim']}. "
+                "All _vec tables must be recreated. Run: kb reembed --force"
+            )
+        else:
+            verdict = "mismatch-same-dim"
+            message = (
+                f"Embedding model/format changed (dim unchanged at {configured['dim']}). "
+                "Run: kb reembed --force"
+            )
+
+        return {
+            "configured": configured,
+            "stored": stored,
+            "verdict": verdict,
+            "message": message,
+        }
+
     def reembed_all(
         self,
         *,
         resume: bool = False,
         commit_every: int = 50,
+        force_dim: int | None = None,
     ) -> dict[str, Any]:
-        """Re-generate embeddings for all entities across all vec tables.
+        """Re-generate embeddings for all entities across all 7 vec tables.
 
-        Use this after switching embedding models. Covers:
-        - findings (content + evidence)
-        - scripts (purpose)
-        - lean_theorems (statement_pure fallback statement)
-        - concepts (claim)
-        Returns per-table stats. Progress meter is printed to stderr.
+        Covers ALL seven _vec tables:
+          findings_vec, scripts_vec, lean_theorems_vec, concepts_vec, issues_vec,
+          python_symbols_vec, tex_annotations_vec.
+
+        For python_symbols and tex_annotations, BOTH the base-table `embedding BLOB`
+        column AND the _vec row are regenerated (mirroring add_python_symbol /
+        add_tex_annotation dual-write).
+
+        Dim-change handling: if force_dim is provided (or stored dim != configured dim),
+        all 7 _vec tables are DROPPED and RECREATED at the new dim BEFORE the reembed
+        loop.  The drop is gated on coverage — we only drop tables we will repopulate.
+
+        POST-REEMBED ASSERTION: after each table, verifies that _vec rowcount matches
+        its base table's embedded-row count.  Raises RuntimeError if any table is short.
+
+        On completion, writes embedding_meta = configured signature.
 
         Args:
-            resume: If True, skip rows whose id is already present in the
-                vec table. Use after a crash/kill to continue without
-                re-embedding what's already done. WARNING: only safe if
-                the existing vec rows are from the CURRENT embedding model
-                — if you've switched embedding endpoints/dims, do NOT
-                resume; do a fresh full re-embed.
-            commit_every: COMMIT after every N successful rows. Default
-                50. Smaller values = less work lost on kill but more
-                fsync overhead.
+            resume: If True, skip rows already present in the vec table (safe only if
+                existing vec rows are from the CURRENT embedding model).
+            commit_every: COMMIT after every N successful rows (default 50).
+            force_dim: If given, treat as a dim-change regardless of stored meta.
         """
         import sys
         import time
+        from .core.schema import init_schema
 
         stats: dict[str, Any] = {}
 
-        # Up-front totals so the user sees the big picture before any embeds.
+        # Determine if a dim-change is needed.
+        configured_dim = self._embedding.embedding_dim
+        stored_dim: int | None = None
+        try:
+            row = self.conn.execute(
+                "SELECT dim FROM embedding_meta WHERE id = 1"
+            ).fetchone()
+            if row:
+                stored_dim = row[0]
+        except Exception:
+            pass
+
+        dim_changed = (force_dim is not None and force_dim != configured_dim) or (
+            stored_dim is not None and stored_dim != configured_dim
+        )
+
+        # The 7 vec tables we own and will repopulate.
+        ALL_VEC_TABLES = [
+            "findings_vec",
+            "scripts_vec",
+            "lean_theorems_vec",
+            "concepts_vec",
+            "issues_vec",
+            "python_symbols_vec",
+            "tex_annotations_vec",
+        ]
+
+        if dim_changed:
+            new_dim = force_dim if force_dim is not None else configured_dim
+            print(
+                f"reembed_all: DIM CHANGE detected "
+                f"stored={stored_dim} -> configured={new_dim}. "
+                f"Dropping and recreating all {len(ALL_VEC_TABLES)} _vec tables.",
+                file=sys.stderr,
+                flush=True,
+            )
+            # Drop all 7 (gated: we repopulate all of them in this loop)
+            for vtable in ALL_VEC_TABLES:
+                self.conn.execute(f"DROP TABLE IF EXISTS {vtable}")
+            self.conn.commit()
+            # Recreate at configured_dim
+            init_schema(self.conn, configured_dim)
+            # Force a full re-embed (resume would be meaningless after recreate)
+            resume = False
+
+        # Up-front totals.
         counts = {
             "findings": self.conn.execute("SELECT COUNT(*) FROM findings").fetchone()[0],
             "scripts": self.conn.execute("SELECT COUNT(*) FROM scripts").fetchone()[0],
             "lean_theorems": self.conn.execute("SELECT COUNT(*) FROM lean_theorems").fetchone()[0],
             "concepts": self.conn.execute("SELECT COUNT(*) FROM concepts").fetchone()[0],
             "issues": self.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0],
+            "python_symbols": self.conn.execute("SELECT COUNT(*) FROM python_symbols").fetchone()[0],
+            "tex_annotations": self.conn.execute("SELECT COUNT(*) FROM tex_annotations").fetchone()[0],
         }
         grand_total = sum(counts.values())
         print(
-            f"reembed_all: findings={counts['findings']} "
-            f"scripts={counts['scripts']} "
-            f"lean_theorems={counts['lean_theorems']} "
-            f"concepts={counts['concepts']} "
-            f"issues={counts['issues']} "
-            f"GRAND_TOTAL={grand_total}",
+            f"reembed_all: " + " ".join(f"{k}={v}" for k, v in counts.items())
+            + f" GRAND_TOTAL={grand_total}",
             file=sys.stderr,
             flush=True,
         )
 
-        def _do_table(table: str, select_sql: str, vec_table: str, text_fn) -> None:
+        def _do_table(table: str, select_sql: str, vec_table: str, text_fn,
+                      base_blob_update: Any = None) -> None:
+            """Re-embed one table.
+
+            base_blob_update: optional callable(conn, row_id, embedding_bytes) that
+            also writes the embedding back to the base table's BLOB column.
+            Used for python_symbols and tex_annotations.
+            """
             t0 = time.monotonic()
             all_rows = self.conn.execute(select_sql).fetchall()
             total_all = len(all_rows)
@@ -1435,7 +1613,6 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             total = len(rows)
             skipped = total_all - total
             updated = failed = since_commit = 0
-            # Pick a sensible print interval: ~every 1% but at least every 10 rows.
             interval = max(10, total // 100) if total else 1
             print(
                 f"  [{table}] starting: {total} to process"
@@ -1452,6 +1629,8 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
                         f"INSERT INTO {vec_table} (id, embedding) VALUES (?, ?)",
                         (row["id"], emb),
                     )
+                    if base_blob_update is not None:
+                        base_blob_update(self.conn, row["id"], emb)
                     updated += 1
                     since_commit += 1
                     if since_commit >= commit_every:
@@ -1477,17 +1656,18 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
                         flush=True,
                     )
             self.conn.commit()
+            elapsed_total = time.monotonic() - t0
             stats[table] = {
                 "updated": updated,
                 "failed": failed,
                 "total": total,
                 "total_all": total_all,
                 "skipped_already_done": skipped,
-                "elapsed_sec": time.monotonic() - t0,
+                "elapsed_sec": elapsed_total,
             }
             print(
                 f"{table}: {updated}/{total} re-embedded in "
-                f"{stats[table]['elapsed_sec']/60.0:.1f}m "
+                f"{elapsed_total/60.0:.1f}m "
                 f"({failed} failed, {skipped} skipped)",
                 file=sys.stderr,
                 flush=True,
@@ -1523,6 +1703,115 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             "issues_vec",
             lambda r: r["title"] + (" " + r["description"] if r["description"] else ""),
         )
+
+        # python_symbols: regenerate embed text as add_python_symbol does it,
+        # and write BOTH the _vec row AND the base-table embedding BLOB.
+        def _python_symbols_text(row: Any) -> str:
+            module = row["module"] or ""
+            name = row["name"] or ""
+            signature = row["signature"] or ""
+            docstring_summary = row["docstring_summary"] or ""
+            return f"{module}.{name}: {signature} {docstring_summary}"
+
+        def _update_python_symbol_blob(conn: Any, row_id: str, emb: bytes) -> None:
+            conn.execute(
+                "UPDATE python_symbols SET embedding = ? WHERE id = ?",
+                (emb, row_id),
+            )
+
+        _do_table(
+            "python_symbols",
+            "SELECT id, module, name, signature, docstring_summary FROM python_symbols",
+            "python_symbols_vec",
+            _python_symbols_text,
+            base_blob_update=_update_python_symbol_blob,
+        )
+
+        # tex_annotations: regenerate embed text as add_tex_annotation does it,
+        # and write BOTH the _vec row AND the base-table embedding BLOB.
+        def _tex_annotations_text(row: Any) -> str:
+            parts = []
+            if row["section_title"]:
+                parts.append(row["section_title"])
+            if row["section_label"]:
+                parts.append(row["section_label"])
+            if row["python_refs"]:
+                parts.append(f"python:{row['python_refs']}")
+            if row["lean_refs"]:
+                parts.append(f"lean:{row['lean_refs']}")
+            if row["context"]:
+                parts.append(row["context"])
+            return " ".join(filter(None, parts))
+
+        def _update_tex_annotation_blob(conn: Any, row_id: str, emb: bytes) -> None:
+            conn.execute(
+                "UPDATE tex_annotations SET embedding = ? WHERE id = ?",
+                (emb, row_id),
+            )
+
+        _do_table(
+            "tex_annotations",
+            "SELECT id, section_label, section_title, python_refs, lean_refs, context "
+            "FROM tex_annotations",
+            "tex_annotations_vec",
+            _tex_annotations_text,
+            base_blob_update=_update_tex_annotation_blob,
+        )
+
+        # POST-REEMBED ASSERTION: each _vec must have >= base embedded-row count.
+        # For findings/scripts/lean_theorems/concepts/issues: all rows should have a vec entry.
+        # For python_symbols/tex_annotations: rows with non-null embedding should match.
+        assertion_checks = [
+            ("findings_vec",        "SELECT COUNT(*) FROM findings"),
+            ("scripts_vec",         "SELECT COUNT(*) FROM scripts"),
+            ("lean_theorems_vec",   "SELECT COUNT(*) FROM lean_theorems"),
+            ("concepts_vec",        "SELECT COUNT(*) FROM concepts"),
+            ("issues_vec",          "SELECT COUNT(*) FROM issues"),
+            ("python_symbols_vec",  "SELECT COUNT(*) FROM python_symbols WHERE embedding IS NOT NULL"),
+            ("tex_annotations_vec", "SELECT COUNT(*) FROM tex_annotations WHERE embedding IS NOT NULL"),
+        ]
+        assertion_errors = []
+        for vec_table, base_sql in assertion_checks:
+            vec_count = self.conn.execute(f"SELECT COUNT(*) FROM {vec_table}").fetchone()[0]
+            base_count = self.conn.execute(base_sql).fetchone()[0]
+            if vec_count < base_count:
+                msg = (
+                    f"ASSERTION FAILED: {vec_table} has {vec_count} rows "
+                    f"but base has {base_count} embedded rows "
+                    f"(short by {base_count - vec_count})"
+                )
+                assertion_errors.append(msg)
+                print(f"ERROR: {msg}", file=sys.stderr, flush=True)
+            else:
+                print(
+                    f"  ASSERT OK: {vec_table} {vec_count} == {base_count}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+        if assertion_errors:
+            raise RuntimeError(
+                "reembed_all post-reembed assertion failed:\n"
+                + "\n".join(assertion_errors)
+            )
+
+        # Write embedding_meta = configured signature.
+        sig = self._embedding_signature()
+        now = datetime.now().isoformat()
+        self.conn.execute("""
+            INSERT OR REPLACE INTO embedding_meta (id, format, url, model, dim, signature, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?, ?)
+        """, (
+            self._embedding.embedding_format,
+            self._embedding.embedding_url,
+            self._embedding.embedding_model,
+            self._embedding.embedding_dim,
+            sig,
+            now,
+        ))
+        self.conn.commit()
+
+        print(f"reembed_all: complete; embedding_meta updated (sig={sig[:16]}...)", file=sys.stderr, flush=True)
 
         return stats
 

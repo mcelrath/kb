@@ -1132,6 +1132,36 @@ def main():
     lean_verify_parser.add_argument("--search-path", nargs="*", metavar="DIR",
         help="Additional directories to search for the .lean file")
 
+    # embed-status: show configured vs stored embedding metadata + verdict
+    embed_status_parser = _add_parser(
+        "embed-status",
+        "Show embedding model status (configured vs stored signature)",
+    )
+    del embed_status_parser  # no flags needed
+
+    # reembed: re-generate all embeddings (covers all 7 _vec tables)
+    reembed_parser = _add_parser(
+        "reembed",
+        "Re-generate embeddings for all 7 vec tables (use after model/dim change)",
+    )
+    reembed_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force full reembed; recreates all _vec tables if dim changed",
+    )
+    reembed_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip rows already present in vec tables (safe only with same model)",
+    )
+    reembed_parser.add_argument(
+        "--commit-every",
+        type=int,
+        default=50,
+        metavar="N",
+        help="Commit every N rows (default: 50)",
+    )
+
     # Flush-pending (user/debugging only — automatic via hooks and --async spawner)
     flush_parser = _add_parser(
         "flush-pending",
@@ -2105,6 +2135,46 @@ def main():
             _, cls, readiness, _ = existing
             print(f"queue-defer: deferred {row_id[:10]} ({readiness} {cls}) — reason: {reason}" + (f" ({detail})" if detail else ""))
             sys.exit(0)
+
+        elif args.command == "embed-status":
+            status = kb.embedding_status()
+            verdict = status["verdict"]
+            configured = status["configured"]
+            stored = status.get("stored")
+
+            print(f"Configured: format={configured['format']} url={configured['url']} "
+                  f"model={configured['model'] or '(none)'} dim={configured['dim']}")
+            if stored:
+                print(f"Stored:     format={stored['format']} url={stored['url']} "
+                      f"model={stored['model'] or '(none)'} dim={stored['dim']} "
+                      f"updated={stored.get('updated_at', '?')}")
+            else:
+                print("Stored:     (no embedding_meta row)")
+
+            print(f"Verdict:    {verdict}")
+            print(f"Message:    {status['message']}")
+
+            if verdict in ("mismatch-same-dim", "mismatch-dim-change", "no-meta"):
+                print("\nRun: kb reembed --force", file=sys.stderr)
+                sys.exit(1)
+
+        elif args.command == "reembed":
+            # Check status first; warn if not a mismatch (but don't block --force)
+            status = kb.embedding_status()
+            verdict = status["verdict"]
+            if verdict == "ok" and not args.force:
+                print(f"Embedding metadata OK (no change detected). Use --force to reembed anyway.")
+                sys.exit(0)
+
+            result = kb.reembed_all(
+                resume=args.resume,
+                commit_every=args.commit_every,
+            )
+            total_updated = sum(v.get("updated", 0) for v in result.values())
+            total_failed = sum(v.get("failed", 0) for v in result.values())
+            print(f"reembed: {total_updated} re-embedded, {total_failed} failed")
+            for table, s in result.items():
+                print(f"  {table}: updated={s['updated']} failed={s['failed']} total={s['total']}")
 
         elif args.command == "flush-pending":
             import fcntl

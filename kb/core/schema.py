@@ -396,6 +396,17 @@ SCHEMA_SQL = """
         counter INTEGER NOT NULL
     );
 
+    -- Embedding model metadata (single row; tracks configured model for reembed detection)
+    CREATE TABLE IF NOT EXISTS embedding_meta (
+        id INTEGER PRIMARY KEY CHECK(id=1),
+        format TEXT,
+        url TEXT,
+        model TEXT,
+        dim INTEGER,
+        signature TEXT,
+        updated_at TEXT
+    );
+
     -- Proof work queue: tracks unblocked Lean tasks so tip cannot stop silently.
     -- Rows inserted by: bd_close_reingest (cleared-contract), ingest_lean_work_queue.py
     -- (bulk bootstrap), compose_time_check (routing-deposit), and manually.
