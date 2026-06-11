@@ -8,7 +8,10 @@ import os
 from pathlib import Path
 
 # Default paths
-DEFAULT_DB_PATH = Path.home() / ".cache" / "kb" / "knowledge.db"
+# KB_DB env overrides the db location (whole kb system: findings, issues, and the
+# surfacing hooks that shell `kb`/`kbt`). Used for isolated pilot dbs so a test
+# project does not read/write the production ~/.cache/kb/knowledge.db.
+DEFAULT_DB_PATH = Path(os.environ.get("KB_DB") or (Path.home() / ".cache" / "kb" / "knowledge.db"))
 
 # Embedding configuration (REQUIRED - no local fallback)
 DEFAULT_EMBEDDING_URL = os.environ.get("KB_EMBEDDING_URL", "http://ash:8081/embedding")
