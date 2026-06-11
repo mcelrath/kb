@@ -151,7 +151,23 @@ class KnowledgeBase:
         return self._llm.extract_text_from_json(text, keys)
 
     def _generate_summary(self, content: str, evidence: str | None = None) -> str | None:
-        """Generate summary for finding."""
+        """Generate summary for finding.
+
+        Routing controlled by KB_SUMMARY_MODE env var (default: local-llm):
+          none             -> always return None (no summary generated)
+          local-llm        -> existing ContentAnalyzer via local LLM server (default)
+          subscription-sdk -> claude_agent_sdk.query (Haiku, subscription OAuth,
+                              ANTHROPIC_API_KEY scrubbed so stale key is bypassed)
+          api              -> same as local-llm for now (future: direct API path)
+        """
+        mode = os.environ.get("KB_SUMMARY_MODE", "local-llm")
+        if mode == "none":
+            return None
+        if mode == "subscription-sdk":
+            from .llm.summary_sdk import summarize_one
+            text = content + (" " + evidence if evidence else "")
+            return summarize_one(text)
+        # local-llm (default) and api both use the existing analyzer path
         return self._analyzer.generate_summary(content, evidence)
 
     def expand_query(self, query: str, project: str | None = None, verbose: bool = False) -> str:
