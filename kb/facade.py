@@ -1628,6 +1628,27 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
     def issue_search(self, query: str, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
         return self._issues.search(query, project=project, limit=limit)
 
+    def issue_add_dep(self, issue_id: str, depends_on_id: str, dep_type: str, created_by: str | None = None) -> dict[str, Any]:
+        return self._issues.add_dep(issue_id, depends_on_id, dep_type, created_by=created_by)
+
+    def issue_list_deps(self, issue_id: str) -> dict[str, Any]:
+        return self._issues.list_deps(issue_id)
+
+    def issue_add_comment(self, issue_id: str, body: str, author: str | None = None) -> dict[str, Any]:
+        return self._issues.add_comment(issue_id, body, author=author)
+
+    def issue_set_status(self, issue_id: str, status: str, close_reason: str | None = None, closed_by_session: str | None = None) -> dict[str, Any]:
+        return self._issues.set_status(issue_id, status, close_reason=close_reason, closed_by_session=closed_by_session)
+
+    def issue_ready(self, project: str | None = None) -> list[dict[str, Any]]:
+        return self._issues.ready(project=project)
+
+    def issue_blocked(self, project: str | None = None) -> list[dict[str, Any]]:
+        return self._issues.blocked(project=project)
+
+    def issue_claim(self, issue_id: str, assignee: str) -> dict[str, Any]:
+        return self._issues.claim(issue_id, assignee)
+
     # =========================================================================
     # Python symbol index methods
     # =========================================================================
