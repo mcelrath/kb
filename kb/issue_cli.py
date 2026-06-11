@@ -323,11 +323,17 @@ def _project_blocked_item(row: dict[str, Any], conn: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _build_kb(db_path: Path | None = None) -> Any:
-    """Build a KnowledgeBase instance, optionally overriding db_path."""
+    """Build a KnowledgeBase instance, optionally overriding db_path.
+
+    Resolution: explicit db_path arg (--db) > KBT_DB env > DEFAULT_DB_PATH.
+    The KBT_DB env enables an isolated tracker db (e.g. a pilot db distinct
+    from the production ~/.cache/kb/knowledge.db) without a code change.
+    """
     from kb.facade import KnowledgeBase
     from kb.constants import DEFAULT_DB_PATH
     if db_path is None:
-        db_path = DEFAULT_DB_PATH
+        env_db = os.environ.get("KBT_DB")
+        db_path = Path(env_db) if env_db else DEFAULT_DB_PATH
     return KnowledgeBase(db_path=db_path)
 
 
