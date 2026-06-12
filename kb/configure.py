@@ -358,6 +358,38 @@ def _choose(label: str, options: list[tuple[str, str]], default_key: str) -> str
 # ---------------------------------------------------------------------------
 
 
+def _check_ollama(url: str, model: str) -> None:
+    """If the embedding URL is an ollama endpoint, verify ollama is reachable on
+    its port and the model is pulled; advise the user otherwise. Advisory only —
+    never fails configure (the user may start ollama / pull the model later)."""
+    if "11434" not in url and "ollama" not in url.lower():
+        return
+    import urllib.request
+
+    base = url.split("/v1/")[0].split("/api/")[0].rstrip("/")
+    try:
+        with urllib.request.urlopen(base + "/api/tags", timeout=3) as r:
+            tags = json.loads(r.read())
+    except Exception:
+        print(
+            f"\n  ⚠ Ollama is NOT reachable at {base}.\n"
+            f"    Start it:  ollama serve   (or `systemctl --user start ollama`)\n"
+            f"    Then pull the embedding model:  ollama pull {model}"
+        )
+        return
+    have = {m.get("name", "") for m in tags.get("models", [])}
+    short = model.split(":")[0]
+    if model in have or any(n.split(":")[0] == short for n in have):
+        print(f"  ✓ Ollama running at {base}; embedding model '{model}' is available.")
+    else:
+        installed = ", ".join(sorted(have)) or "(none)"
+        print(
+            f"\n  ⚠ Ollama is running at {base} but model '{model}' is NOT pulled.\n"
+            f"    Installed: {installed}\n"
+            f"    Download it:  ollama pull {model}"
+        )
+
+
 def run_global_configure(
     provider: str | None,
     model: str | None,
@@ -410,6 +442,9 @@ def run_global_configure(
                 break
         if resolved_dim is None:
             resolved_dim = pdata["default_dim"]
+
+    # Ollama reachability + model-presence check (advisory; prompts to pull a model)
+    _check_ollama(resolved_url, resolved_model)
 
     # ------------------------------------------------------------------
     # 2. Summary mode
