@@ -1,0 +1,20 @@
+[Unit]
+Description=kb HTTP/SSE server (bridge transport + kb/issues read endpoints)
+Documentation=https://github.com/mcelrath/kb
+After=network.target
+
+[Service]
+Type=simple
+# Run from source via the repo venv (Python 3.14). --host 127.0.0.1 is the bind
+# convention; KB_SERVER_URL=http://localhost:8765 is what the harness adapters use.
+ExecStart=/home/mcelrath/Projects/ai/kb/.venv/bin/python /home/mcelrath/Projects/ai/kb/kb.py serve --port 8765 --host 127.0.0.1
+# Clean env: NO KB_EMBEDDING_URL override here, so kb falls back to its default
+# (ash:8081, the healthy qwen3/4096 server). The bridge endpoints don't need
+# embeddings at all; only /kb/search does, and that degrades to FTS if down.
+# Once the kb config-file lands (~/.config/kb/config.toml) the server reads that.
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=default.target

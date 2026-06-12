@@ -1289,6 +1289,15 @@ def main():
         "--project-dir", type=Path,
         help="(--project) Project root directory (default: cwd)"
     )
+    # Server service
+    configure_parser.add_argument(
+        "--install-server", action="store_true",
+        help="Install + enable the kb-server systemd --user service (persistent kb serve)"
+    )
+    configure_parser.add_argument(
+        "--server-port", type=int, default=8765,
+        help="(--install-server) port for the kb-server service (default: 8765)"
+    )
 
     # queue-defer: set a defer_reason on a lean_work_queue row
     queue_defer_parser = _add_parser(

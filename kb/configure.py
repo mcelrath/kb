@@ -610,9 +610,60 @@ def _merge_beads_config(beads_yaml: Path, updates: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _install_systemd_service(port: int = 8765) -> int:
+    """Install + enable the kb-server systemd --user service. Generates the unit
+    with paths resolved to THIS checkout's venv + kb.py (run-from-source), writes
+    ~/.config/systemd/user/kb-server.service, daemon-reloads, and enables --now.
+    A reference copy lives in the repo at deploy/kb-server.service."""
+    import shutil
+
+    kb_py = Path(__file__).resolve().parent.parent / "kb.py"
+    venv_py = kb_py.parent / ".venv" / "bin" / "python"
+    python = str(venv_py) if venv_py.exists() else sys.executable
+
+    unit_dir = Path.home() / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    unit_path = unit_dir / "kb-server.service"
+    unit_path.write_text(
+        "[Unit]\n"
+        "Description=kb HTTP/SSE server (bridge transport + kb/issues read endpoints)\n"
+        "After=network.target\n\n"
+        "[Service]\n"
+        "Type=simple\n"
+        f"ExecStart={python} {kb_py} serve --port {port} --host 127.0.0.1\n"
+        "Restart=on-failure\n"
+        "RestartSec=5\n"
+        "StartLimitIntervalSec=0\n\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+    print(f"Wrote {unit_path}")
+
+    if not shutil.which("systemctl"):
+        print("systemctl not found — unit written; enable manually:\n"
+              "  systemctl --user daemon-reload && systemctl --user enable --now kb-server")
+        return 0
+    for cmd in (
+        ["systemctl", "--user", "daemon-reload"],
+        ["systemctl", "--user", "enable", "--now", "kb-server.service"],
+    ):
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"  ! {' '.join(cmd)} failed: {r.stderr.strip()[:200]}")
+    active = subprocess.run(
+        ["systemctl", "--user", "is-active", "kb-server.service"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    print(f"kb-server service: {active}  (KB_SERVER_URL=http://localhost:{port})")
+    return 0
+
+
 def configure_main(args: Any) -> int:  # noqa: ANN401
     """Dispatch from kb.py argparse namespace. Returns exit code."""
     from kb.constants import DEFAULT_DB_PATH
+
+    if getattr(args, "install_server", False):
+        return _install_systemd_service(getattr(args, "server_port", 8765))
 
     config_dir = getattr(args, "config_dir", None)
     if config_dir is None:
