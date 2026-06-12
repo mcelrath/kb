@@ -84,4 +84,16 @@ if [[ -z "$KB_IDS" ]]; then
     fi
 fi
 
+# --- KB CONVENTIONS (injected every session so CLAUDE.md prose is not needed) ---
+cat <<'CONVENTIONS'
+
+=== KB Conventions (kb plugin) ===
+SEARCH FIRST then ADD. kb search "topic" (no -p first); then narrow by project.
+ALWAYS pass --summary "<one sentence>" to kb add — you wrote the finding, write the summary.
+  ~/.local/bin/kb add "content" -t TYPE -p PROJECT --tags T1,T2 --summary "dense one-liner"
+Types: success|failure|experiment|discovery|correction
+Tags (confidence): proven|heuristic|open-problem  (importance): core-result|technique|detail
+kb-down fallback: ~/.claude/pending-kb-adds/<UTC>.txt with # type/project/tags header; kb flush-pending drains it.
+CONVENTIONS
+
 exit 0

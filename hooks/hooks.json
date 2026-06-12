@@ -66,6 +66,11 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/dedupe-kb-get.sh\"",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/kb-add-summary-nudge.sh\"",
+            "timeout": 5
           }
         ]
       }
