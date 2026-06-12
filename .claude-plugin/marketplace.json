@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "kb-local",
+  "description": "Local marketplace for the kb (knowledge base) plugin",
+  "owner": {
+    "name": "Bob McElrath",
+    "email": "bob.mcelrath@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "kb",
+      "description": "Knowledge Base findings system — surface, record, and search project findings across sessions.",
+      "author": {
+        "name": "Bob McElrath",
+        "email": "bob.mcelrath@gmail.com"
+      },
+      "category": "productivity",
+      "source": "."
+    }
+  ]
+}
