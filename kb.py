@@ -930,7 +930,10 @@ _MAINT_CMDS = [
     ("delete",        "<kb-id> [--force]"),
     ("export",        "<file.json> [-p PROJECT]"),
     ("import",        "<file.json>"),
-    ("serve",         "[--port 8000]"),
+    ("serve",         "[--port 8000]   HTTP/SSE server (bridge watch/messages/agents + kb endpoints)"),
+    ("configure",     "set embedding provider/model/dim/url/format + summary mode  [--project TAG] [--url URL]"),
+    ("embed-status",  "show configured-vs-stored embedding model/dim + verdict"),
+    ("reembed",       "re-embed all findings  [--force]  (required after an embedding model/dim change)"),
 ]
 
 _LEGACY_CMDS = None  # no legacy commands remain
@@ -939,8 +942,11 @@ _LEGACY_CMDS = None  # no legacy commands remain
 def _print_main_help():
     W = 14  # column width for command names
     if AGENT_MODE:
-        print("kb add|search|list|get|correct|related\n")
+        print("kb <command>   (agent mode)\n")
         for cmd, desc in _AGENT_CMDS:
+            print(f"  {cmd:<{W}}{desc}")
+        print()
+        for cmd, desc in _MAINT_CMDS:
             print(f"  {cmd:<{W}}{desc}")
         print("\nRun any command with --help for full flag list.")
         print("Set KB_AGENT=0 for user mode.")
