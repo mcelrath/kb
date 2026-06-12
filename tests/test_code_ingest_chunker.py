@@ -265,6 +265,178 @@ def test_chunk_result_feeds_add_python_symbol():
         )
 
 
+# ---------------------------------------------------------------------------
+# TypeScript tests (kb-asf.4.2 — validated opencode #5402 spec)
+# ---------------------------------------------------------------------------
+
+# Representative TS sample covering all included node types + exclusion cases
+TS_SAMPLE = """\
+import { readFile } from 'fs';
+
+export function greet(name: string): string {
+    return 'hello ' + name;
+}
+
+export class Animal {
+    constructor(public name: string) {}
+    speak(): string {
+        return 'roar';
+    }
+}
+
+export interface Shape {
+    area(): number;
+    perimeter(): number;
+}
+
+export type Point = { x: number; y: number };
+
+export enum Color { Red, Green, Blue }
+
+export const layer = (x: number): number => x * 2;
+
+const notExported = 42;
+"""
+
+# Minimal TSX sample for parser-selection test
+TSX_SAMPLE = """\
+export function Button({ label }: { label: string }): string {
+    return label;
+}
+
+export const Widget = () => null;
+"""
+
+
+def _ts_names(chunks: list[ChunkResult]) -> set[str]:
+    return {c.name for c in chunks}
+
+
+def test_ts_function_and_named_declarations_extracted():
+    """TS: function_declaration, class_declaration, interface_declaration,
+    type_alias_declaration, enum_declaration are all extracted from TS_SAMPLE.
+
+    Reason: these are exactly the include_node_types in the validated TS config
+    (opencode #5402).  Each must be present in the result."""
+    chunks = chunk_source(TS_SAMPLE, "typescript", module="mymod")
+    names = _ts_names(chunks)
+    assert "greet" in names, f"function_declaration 'greet' not extracted; got {names}"
+    assert "Animal" in names, f"class_declaration 'Animal' not extracted; got {names}"
+    assert "Shape" in names, f"interface_declaration 'Shape' not extracted; got {names}"
+    assert "Point" in names, f"type_alias_declaration 'Point' not extracted; got {names}"
+    assert "Color" in names, f"enum_declaration 'Color' not extracted; got {names}"
+
+
+def test_ts_import_excluded():
+    """TS: import_statement is in exclude_node_types — must not appear as a chunk.
+
+    Reason: imports are structural, not semantic symbols for KB indexing."""
+    chunks = chunk_source(TS_SAMPLE, "typescript", module="mymod")
+    import_chunks = [c for c in chunks if c.extra.get("node_type") == "import_statement"]
+    assert not import_chunks, (
+        f"import_statement should be excluded; got {import_chunks}"
+    )
+
+
+def test_ts_exported_lexical_included_bare_excluded():
+    """TS: exported lexical_declaration (export const layer = ...) is included;
+    non-exported (const notExported = ...) is excluded.
+
+    Reason: the spec requires exported_only_node_types={lexical_declaration} —
+    only `export const` symbols are semantically significant for KB indexing;
+    bare module-level consts are implementation details."""
+    chunks = chunk_source(TS_SAMPLE, "typescript", module="mymod")
+    names = _ts_names(chunks)
+    assert "layer" in names, (
+        f"exported 'export const layer' must be included; got {names}"
+    )
+    assert "notExported" not in names, (
+        f"non-exported 'const notExported' must be excluded; got {names}"
+    )
+
+
+def test_ts_class_kept_whole():
+    """TS: class_declaration container_split='whole' — the class is one chunk
+    with its methods inside; no separate 'speak' chunk is emitted.
+
+    Reason: the validated spec (opencode #5402) sets container_split='whole' for TS
+    so that class body (methods + fields) is embedded as a unit, preserving context."""
+    chunks = chunk_source(TS_SAMPLE, "typescript", module="mymod")
+    # No chunk named 'speak' — speak is a method INSIDE Animal, not a top-level chunk
+    names = _ts_names(chunks)
+    assert "speak" not in names, (
+        f"'speak' method must NOT be its own chunk (class is kept whole); got {names}"
+    )
+    # Animal class body must contain 'speak' (proving the method is included in the class body)
+    animal_chunks = [c for c in chunks if c.name == "Animal"]
+    assert animal_chunks, "Animal class chunk missing"
+    animal = animal_chunks[0]
+    assert "speak" in animal.body, (
+        f"Animal.body should include the 'speak' method body; got {animal.body!r}"
+    )
+
+
+def test_ts_name_extraction_per_node_type():
+    """TS: name extraction uses the correct child node type per declaration kind.
+
+    Reason: TS grammar uses 'identifier' for function/enum names, 'type_identifier'
+    for class/interface/type_alias names — verified by inspecting the grammar tree."""
+    chunks = chunk_source(TS_SAMPLE, "typescript", module="mymod")
+    by_name = {c.name: c for c in chunks}
+    # function_declaration -> identifier child
+    assert "greet" in by_name and by_name["greet"].extra["node_type"] == "function_declaration", (
+        f"'greet' should come from function_declaration; got {by_name.get('greet')}"
+    )
+    # class_declaration -> type_identifier child
+    assert "Animal" in by_name and by_name["Animal"].extra["node_type"] == "class_declaration", (
+        f"'Animal' should come from class_declaration"
+    )
+    # interface_declaration -> type_identifier child
+    assert "Shape" in by_name and by_name["Shape"].extra["node_type"] == "interface_declaration"
+    # type_alias_declaration -> type_identifier child
+    assert "Point" in by_name and by_name["Point"].extra["node_type"] == "type_alias_declaration"
+    # enum_declaration -> identifier child
+    assert "Color" in by_name and by_name["Color"].extra["node_type"] == "enum_declaration"
+    # lexical_declaration -> variable_declarator -> identifier
+    assert "layer" in by_name and by_name["layer"].extra["node_type"] == "lexical_declaration"
+
+
+def test_ts_no_signature_pass():
+    """TS: signature_pass=False — no signature-only chunks are emitted.
+
+    Reason: TS config sets signature_pass=False (opencode #5402); sig-only chunks
+    are a Rust-specific optimization for large function bodies."""
+    chunks = chunk_source(TS_SAMPLE, "typescript", module="mymod")
+    sig_only = [c for c in chunks if c.extra.get("is_signature_only")]
+    # type_alias_declaration uses embed_mode='signature' but is NOT a sig_pass chunk —
+    # it's always emitted as signature (embed_mode), not a secondary pass chunk.
+    # The is_signature_only flag is set for type_alias chunks via embed_mode='signature'.
+    # True sig_pass chunks would have the same name duplicated; none should exist beyond Point.
+    names = [c.name for c in chunks]
+    # No name should appear twice (which would indicate a sig_pass duplicate)
+    from collections import Counter
+    counts = Counter(names)
+    duplicates = {n for n, cnt in counts.items() if cnt > 1}
+    assert not duplicates, (
+        f"signature_pass=False — no name should appear twice; duplicates: {duplicates}"
+    )
+
+
+def test_tsx_parser_selected_by_extension():
+    """TSX: chunk_source with language='tsx' uses the language_tsx() grammar.
+
+    Reason: .tsx files contain JSX syntax that requires the TSX grammar variant;
+    passing 'tsx' to chunk_source must produce results via the correct parser."""
+    chunks = chunk_source(TSX_SAMPLE, "tsx", module="mymod")
+    names = _ts_names(chunks)
+    assert "Button" in names, (
+        f"function_declaration 'Button' must be extracted from TSX_SAMPLE; got {names}"
+    )
+    assert "Widget" in names, (
+        f"export const 'Widget' must be extracted from TSX_SAMPLE; got {names}"
+    )
+
+
 if __name__ == "__main__":
     # Run all tests with simple reporting
     import traceback
@@ -282,6 +454,14 @@ if __name__ == "__main__":
         test_visibility_extracted,
         test_line_numbers_correct,
         test_chunk_result_feeds_add_python_symbol,
+        # TypeScript tests (kb-asf.4.2)
+        test_ts_function_and_named_declarations_extracted,
+        test_ts_import_excluded,
+        test_ts_exported_lexical_included_bare_excluded,
+        test_ts_class_kept_whole,
+        test_ts_name_extraction_per_node_type,
+        test_ts_no_signature_pass,
+        test_tsx_parser_selected_by_extension,
     ]
     passed = 0
     failed = 0

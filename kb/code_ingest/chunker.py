@@ -22,6 +22,23 @@ config supplies knobs that DIVERGE across languages:
       Node types whose top-level occurrences are SKIPPED (not recursed into).
       Children of excluded nodes are also not extracted.
 
+  - exported_only_node_types: set[str]
+      Node types that are only emitted when their immediate tree-sitter parent is
+      an export_statement.  Used for TypeScript lexical_declaration (export const).
+
+  - grammar_language_fn: str
+      Name of the function to call on the grammar module to get the Language
+      object.  Defaults to "language".  TypeScript uses "language_typescript";
+      TSX uses "language_tsx".
+
+  - name_fn: callable | None
+      Called as name_fn(node, src) to extract a symbol name.  If None, falls
+      back to _rust_name (first identifier/type_identifier child).
+
+  - sig_fn: callable | None
+      Called as sig_fn(node, src) to extract a signature string.  If None,
+      falls back to _rust_signature.
+
 ChunkResult mirrors the dict shape returned by parse_python_file() in
 ingest_python.py so chunks feed directly into KnowledgeBase.add_python_symbol().
 The 'kind' field maps: fn -> 'function', struct/enum/trait/type -> 'class',
@@ -49,18 +66,10 @@ parent_container TEXT, visibility TEXT, language TEXT) is the follow-up tracked
 in kb-asf.4.  Until then, extra metadata is available on the result dict for
 callers that query it directly.
 
-TS follow-up
-------------
-TypeScript config is left as a documented stub in LANG_CONFIGS below.  The
-goose agent verified the TS spec (opencode #5375) — the knobs are:
-  container_split="whole", signature_pass=False
-  include_node_types={function_declaration, class_declaration, interface_declaration,
-                      type_alias_declaration, enum_declaration, lexical_declaration}
-  exclude_node_types={import_statement, import_declaration}
-  exported-const filter: lexical_declaration children where `export` modifier present
-                         AND initializer is arrow_function or function_expression.
-Implement TS by adding its grammar ('tree_sitter_typescript') and filling in the
-TS entry in LANG_CONFIGS when kb-asf.4 TS slice is scheduled.
+chunk_file() auto-selects the TypeScript vs TSX grammar by file extension:
+  .ts  -> LANG_CONFIGS["typescript"] (language_typescript())
+  .tsx -> LANG_CONFIGS["tsx"]        (language_tsx())
+Both share identical chunk specs; only the grammar differs.
 """
 
 from __future__ import annotations
@@ -68,7 +77,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +125,16 @@ class LangConfig:
     exclude_node_types: set[str]         # top-level nodes to skip (not recurse into)
     signature_pass: bool                 # emit a signature-only chunk for each function
     doc_node_types: set[str]             # node types that carry doc comments
+    # Optional knobs (language-specific extensions)
+    exported_only_node_types: set[str] = field(default_factory=set)
+    # Node types only emitted when immediate parent is export_statement (TypeScript lexical_declaration)
+    grammar_language_fn: str = "language"
+    # Function name on grammar_module that returns the Language object.
+    # Defaults to "language"; TypeScript uses "language_typescript", TSX uses "language_tsx".
+    name_fn: Callable[[Any, bytes], str] | None = None
+    # Override for symbol name extraction.  None -> falls back to _rust_name.
+    sig_fn: Callable[[Any, bytes], str] | None = None
+    # Override for signature extraction.  None -> falls back to _rust_signature.
 
 
 # Rust language config (verified spec from goose #5372, bd kb-asf.4 notes)
@@ -152,34 +171,106 @@ RUST_CONFIG = LangConfig(
     doc_node_types={"line_comment"},   # /// line_comment nodes preceding the item
 )
 
-# TypeScript language config — STUB (kb-asf.4 TS slice follow-up)
-# Spec verified from opencode #5375.  Implement when tree_sitter_typescript
-# is added to requirements and the TS slice is scheduled.
-# Knobs:
-#   container_split="whole"  (class kept whole WITH all methods)
+# ---------------------------------------------------------------------------
+# TypeScript / TSX language config (kb-asf.4.2 — validated by opencode #5402,
+# 2503 files / 13221 symbols)
+# ---------------------------------------------------------------------------
+# Spec:
+#   container_split="whole"  — class kept whole with all methods
 #   signature_pass=False
-#   include_node_types: {function_declaration, class_declaration,
-#                        interface_declaration, type_alias_declaration,
-#                        enum_declaration, lexical_declaration}
-#   exclude_node_types: {import_statement, import_declaration}
-#   exported-const filter: lexical_declaration with export modifier
-#                          AND arrow_function/function_expression initializer
-TS_CONFIG_STUB: dict[str, Any] = {
-    "_note": "TypeScript config stub — implement when tree_sitter_typescript added",
-    "grammar_module": "tree_sitter_typescript",
-    "container_split": "whole",
-    "signature_pass": False,
-    "include_node_types": [
-        "function_declaration", "class_declaration", "interface_declaration",
-        "type_alias_declaration", "enum_declaration", "lexical_declaration",
-    ],
-    "exclude_node_types": ["import_statement", "import_declaration"],
+#   include_node_types: function_declaration, class_declaration,
+#                       interface_declaration, type_alias_declaration,
+#                       enum_declaration, lexical_declaration
+#   exported_only_node_types: {lexical_declaration}
+#       — lexical_declaration is only emitted when parent == export_statement
+#         (i.e. `export const layer = ...`; bare `const x = ...` is skipped)
+#   exclude_node_types: {import_statement}
+#   name extraction per node type:
+#       function_declaration / class_declaration / enum_declaration -> identifier
+#       interface_declaration / type_alias_declaration -> type_identifier
+#       lexical_declaration -> variable_declarator child -> identifier grandchild
+#   .ts  -> language_typescript()   .tsx -> language_tsx()
+# ---------------------------------------------------------------------------
+
+def _ts_name(node: Any, src: bytes) -> str:
+    """Extract symbol name from a TypeScript AST node.
+
+    Node-type-specific name extraction per validated opencode spec (#5402):
+      - function_declaration / class_declaration / enum_declaration:
+            first 'identifier' child
+      - interface_declaration / type_alias_declaration:
+            first 'type_identifier' child
+      - lexical_declaration (export const ...):
+            first 'variable_declarator' child, then its 'identifier' child
+    """
+    ntype = node.type
+    if ntype in ("function_declaration", "enum_declaration"):
+        # function and enum names are `identifier` nodes
+        for child in node.named_children:
+            if child.type == "identifier":
+                return src[child.start_byte:child.end_byte].decode(errors="replace")
+    elif ntype in ("class_declaration", "interface_declaration", "type_alias_declaration"):
+        for child in node.named_children:
+            if child.type == "type_identifier":
+                return src[child.start_byte:child.end_byte].decode(errors="replace")
+    elif ntype == "lexical_declaration":
+        # `export const layer = ...`
+        # lexical_declaration -> variable_declarator -> identifier (the name)
+        for child in node.named_children:
+            if child.type == "variable_declarator":
+                for gc in child.named_children:
+                    if gc.type == "identifier":
+                        return src[gc.start_byte:gc.end_byte].decode(errors="replace")
+    return f"<unnamed_{ntype}>"
+
+
+def _ts_signature(node: Any, src: bytes) -> str:
+    """Extract a TypeScript signature (first line of the node source)."""
+    full_text = src[node.start_byte:node.end_byte].decode(errors="replace")
+    return full_text.split("\n")[0]
+
+
+# Shared chunk_specs for both .ts and .tsx (container_split="whole" for all)
+_TS_SPECS: dict[str, ChunkSpec] = {
+    "function_declaration":    ChunkSpec(kind="function", embed_mode="full", container_split="whole"),
+    "class_declaration":       ChunkSpec(kind="class",    embed_mode="full", container_split="whole"),
+    "interface_declaration":   ChunkSpec(kind="class",    embed_mode="full", container_split="whole"),
+    "type_alias_declaration":  ChunkSpec(kind="class",    embed_mode="signature", container_split="whole"),
+    "enum_declaration":        ChunkSpec(kind="class",    embed_mode="full", container_split="whole"),
+    "lexical_declaration":     ChunkSpec(kind="constant", embed_mode="full", container_split="whole"),
 }
+
+TYPESCRIPT_CONFIG = LangConfig(
+    grammar_module="tree_sitter_typescript",
+    file_extensions=(".ts",),
+    chunk_specs=_TS_SPECS,
+    exclude_node_types={"import_statement"},
+    signature_pass=False,
+    doc_node_types={"comment"},          # // and /* */ comments in TS
+    exported_only_node_types={"lexical_declaration"},
+    grammar_language_fn="language_typescript",
+    name_fn=_ts_name,
+    sig_fn=_ts_signature,
+)
+
+TSX_CONFIG = LangConfig(
+    grammar_module="tree_sitter_typescript",
+    file_extensions=(".tsx",),
+    chunk_specs=_TS_SPECS,
+    exclude_node_types={"import_statement"},
+    signature_pass=False,
+    doc_node_types={"comment"},
+    exported_only_node_types={"lexical_declaration"},
+    grammar_language_fn="language_tsx",
+    name_fn=_ts_name,
+    sig_fn=_ts_signature,
+)
 
 # Registry: language name -> LangConfig
 LANG_CONFIGS: dict[str, LangConfig] = {
     "rust": RUST_CONFIG,
-    # "typescript": ... (implement TS slice)
+    "typescript": TYPESCRIPT_CONFIG,
+    "tsx": TSX_CONFIG,
 }
 
 
@@ -202,7 +293,8 @@ def _get_parser(lang_name: str) -> Any:
     from tree_sitter import Language, Parser
 
     grammar_mod = importlib.import_module(cfg.grammar_module)
-    lang = Language(grammar_mod.language())
+    lang_fn = getattr(grammar_mod, cfg.grammar_language_fn)
+    lang = Language(lang_fn())
     parser = Parser(lang)
     _parser_cache[lang_name] = parser
     return parser
@@ -339,6 +431,14 @@ def _extract_chunks(
                 results.extend(_extract_chunks(decl_list, src, cfg, file_path, module, parent_impl))
             continue
 
+        # Recurse into export_statement (TypeScript) — the declaration is a child
+        # e.g. `export function f() {}` -> export_statement -> function_declaration
+        # The declaration child will be processed in the recursive call with its
+        # parent correctly set to the export_statement node.
+        if ntype == "export_statement":
+            results.extend(_extract_chunks(child, src, cfg, file_path, module, parent_impl))
+            continue
+
         spec = cfg.chunk_specs.get(ntype)
         if spec is None:
             continue
@@ -357,8 +457,15 @@ def _extract_chunks(
                 results.extend(_extract_chunks(decl_list, src, cfg, file_path, module, impl_label))
             continue
 
+        # exported_only filter: skip this node unless its parent is export_statement
+        if ntype in cfg.exported_only_node_types:
+            if child.parent is None or child.parent.type != "export_statement":
+                continue
+
         # Normal chunk emission
-        name = _rust_name(child, src)
+        _name_fn = cfg.name_fn if cfg.name_fn is not None else _rust_name
+        _sig_fn = cfg.sig_fn if cfg.sig_fn is not None else _rust_signature
+        name = _name_fn(child, src)
         visibility = _rust_visibility(child, src)
         doc_summary = _collect_doc_before(child, src, cfg.doc_node_types)
         start_line = child.start_point[0] + 1  # 1-based
@@ -366,10 +473,10 @@ def _extract_chunks(
         body = src[child.start_byte:child.end_byte].decode(errors="replace")
 
         if spec.embed_mode == "signature":
-            sig = _rust_signature(child, src)
+            sig = _sig_fn(child, src)
             emit_body = sig
         else:
-            sig = _rust_signature(child, src)
+            sig = _sig_fn(child, src)
             emit_body = body
 
         chunk = ChunkResult(
@@ -393,7 +500,7 @@ def _extract_chunks(
 
         # Signature-only pass for functions (second pass, separate chunk)
         if cfg.signature_pass and spec.kind == "function" and spec.embed_mode != "signature":
-            sig_text = _rust_signature(child, src)
+            sig_text = _sig_fn(child, src)
             sig_chunk = ChunkResult(
                 name=name,
                 kind="function",
@@ -420,6 +527,17 @@ def _extract_chunks(
 # Public API
 # ---------------------------------------------------------------------------
 
+def _language_for_file(file_path: Path, language: str) -> str:
+    """Resolve the language key for *file_path*, honouring .tsx vs .ts disambiguation.
+
+    If *language* is 'typescript' and the file has a .tsx extension, returns
+    'tsx' so the TSX grammar is used.  Otherwise returns *language* unchanged.
+    """
+    if language == "typescript" and file_path.suffix == ".tsx":
+        return "tsx"
+    return language
+
+
 def chunk_file(
     file_path: Path | str,
     language: str,
@@ -429,7 +547,9 @@ def chunk_file(
 
     Args:
         file_path: Path to the source file.
-        language:  Language key, e.g. 'rust'.  Must be in LANG_CONFIGS.
+        language:  Language key, e.g. 'rust' or 'typescript'.
+                   For TypeScript, pass 'typescript'; .tsx files are auto-detected
+                   and switched to the TSX grammar.
         root:      Optional repo root for module path computation.
 
     Returns:
@@ -440,6 +560,7 @@ def chunk_file(
     file_path = Path(file_path)
     if root is not None:
         root = Path(root)
+    language = _language_for_file(file_path, language)
 
     cfg = LANG_CONFIGS[language]
     parser = _get_parser(language)

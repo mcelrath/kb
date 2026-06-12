@@ -15,7 +15,7 @@
 # Tree-sitter code chunker (kb/code_ingest/chunker.py, kb-asf.4)
 tree-sitter>=0.25.0
 tree-sitter-rust>=0.24.0
-# tree-sitter-typescript>=0.x  (add when TS slice scheduled, kb-asf.4)
+tree-sitter-typescript>=0.23
 
 lean-dojo-v2>=1.0.8
 loguru>=0.6.0

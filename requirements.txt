@@ -11,6 +11,7 @@ pyyaml>=6.0
 # Lazy-imported; kb works without these if you do not use `kb ingest python`
 tree-sitter>=0.25.0
 tree-sitter-rust>=0.24.0
+tree-sitter-typescript>=0.23
 
 # Optional: progress bars for `kb refresh` / `kb reembed`
 # Lazy-imported; silently degrades to no-bar if absent
