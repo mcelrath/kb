@@ -50,6 +50,52 @@ exec /home/mcelrath/Projects/ai/kb/.venv/bin/python /home/mcelrath/Projects/ai/k
 chmod +x ~/.local/bin/kb
 ```
 
+## Claude Code Plugin Install
+
+The recommended way to use kb with Claude Code is as a plugin. This requires no
+entries in your `~/.claude/CLAUDE.md` — the plugin auto-injects kb conventions
+and surfacing on every SessionStart.
+
+### Install
+
+```bash
+# 1. Add the kb marketplace (once per machine)
+claude plugin marketplace add /path/to/kb
+
+# 2. Install the plugin
+claude plugin install kb@kb-local
+```
+
+Replace `/path/to/kb` with the cloned repo root (the directory containing
+`.claude-plugin/`). To install from a URL, pass the GitHub repo URL to
+`marketplace add`.
+
+### What happens on SessionStart
+
+1. **setup-venv.sh** — builds a deps-only venv at `$CLAUDE_PLUGIN_DATA/venv`
+   (idempotent, hash-gated; requires internet access to pypi.org on first run).
+2. **env-probe.sh** — confirms `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA`
+   are exported and injects them as context.
+3. **kb-flush-pending.sh** — drains any queued `~/.claude/pending-kb-adds/` entries.
+4. **kb-context.sh** — injects kb conventions (search-first, --summary discipline,
+   types/tags taxonomy) into the session context. If the embedding server is
+   unreachable, it emits a `KB-INFRA DOWN` warning and falls back to FTS-only mode.
+5. **scaffold-check.sh** — detects missing `reviewers.yaml` / `agent-preamble.md`
+   and prompts to run the `project-setup` agent.
+
+### Using kb and kbt from the plugin
+
+After SessionStart, the plugin venv is at `$CLAUDE_PLUGIN_DATA/venv`. The hooks
+invoke kb as:
+
+```bash
+"${CLAUDE_PLUGIN_DATA}/venv/bin/python" "${CLAUDE_PLUGIN_ROOT}/kb.py" <command>
+```
+
+The `kbt` script in the plugin root is callable the same way. For interactive use,
+create a shell alias or wrapper pointing at those paths, or run `kb configure` to
+set up a `~/.local/bin/kb` wrapper.
+
 ## Configuration
 
 ### Environment Variables
