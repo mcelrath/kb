@@ -594,6 +594,12 @@ def render_html_page(title: str, content: str, sidebar: str = "") -> str:
             }};
 
             ws.onmessage = function(e) {{
+                // Any received frame means the socket is open — reflect that even
+                // if onopen was missed (the server sends a 'state' frame on connect).
+                if (indicator.className.indexOf('connected') === -1) {{
+                    indicator.className = 'live-indicator connected';
+                    indicator.innerHTML = '&#x25cf; Live';
+                }}
                 var msg = JSON.parse(e.data);
                 if (msg.type === 'update') {{
                     indicator.innerHTML = '&#x25cf; Updating...';
