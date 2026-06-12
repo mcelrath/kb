@@ -520,7 +520,9 @@ def cmd_dep_add(args: Any, kb: Any) -> int:
     """kbt dep add ISSUE DEPENDS-ON [--type TYPE]"""
     dep_type = getattr(args, "type", "blocks") or "blocks"
     result = kb.issue_add_dep(args.issue, args.depends_on, dep_type)
-    print(f"Dep added: {args.issue} --[{dep_type}]--> {args.depends_on} (new={result['is_new']})")
+    # Usage is `dep add ISSUE DEPENDS-ON`; print it in dependency direction (not a
+    # misleading blocker-arrow): for 'blocks', depends_on must finish before issue.
+    print(f"Dep added: {args.issue} depends-on {args.depends_on} [{dep_type}] (new={result['is_new']})")
     return 0
 
 
@@ -545,9 +547,9 @@ def cmd_dep_list(args: Any, kb: Any) -> int:
         print(json.dumps(out, indent=2))
     else:
         for d in deps.get("outgoing", []):
-            print(f"  outgoing [{d['type']}]: {d['id']} ({d['status']}) {d['title']}")
+            print(f"  depends-on [{d['type']}]: {d['id']} ({d['status']}) {d['title']}")
         for d in deps.get("incoming", []):
-            print(f"  incoming [{d['type']}]: {d['id']} ({d['status']}) {d['title']}")
+            print(f"  depended-on-by [{d['type']}]: {d['id']} ({d['status']}) {d['title']}")
     return 0
 
 
