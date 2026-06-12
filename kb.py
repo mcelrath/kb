@@ -1880,6 +1880,27 @@ def main():
                 except ValueError:
                     last_id = None
 
+                # Fresh subscriber (no Last-Event-ID): start at the CURRENT TAIL —
+                # deliver only NEW messages, never replay history. Otherwise a
+                # freshly-launched SSE client is flooded with every past 'all'
+                # broadcast on connect (caught while exercising kb-jij.4). UIs that
+                # want backfill use GET /bridge/messages?limit=N separately.
+                if last_id is None:
+                    _maxid = 0
+                    try:
+                        _mp = os.path.expanduser("~/.agent-bridge/messages.jsonl")
+                        with open(_mp) as _f:
+                            for _line in _f:
+                                try:
+                                    _mid = json.loads(_line).get("id")
+                                    if _mid is not None and int(_mid) > _maxid:
+                                        _maxid = int(_mid)
+                                except Exception:
+                                    pass
+                    except FileNotFoundError:
+                        pass
+                    last_id = _maxid
+
                 async def event_generator():
                     nonlocal last_id
                     last_heartbeat = asyncio.get_event_loop().time()
