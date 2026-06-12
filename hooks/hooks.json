@@ -6,6 +6,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/setup-venv.sh\"",
+            "timeout": 300
+          },
+          {
+            "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/env-probe.sh\"",
             "timeout": 10
           }
