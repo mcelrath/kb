@@ -44,8 +44,11 @@ BRIDGEDOC
 
 # Resolve agent id: persona pin (authoritative) -> whoami (theft-guarded).
 AGENT_ID=""
+# Pin dir = git-root/.claude/.persona — SAME location /persona and session-persona.sh
+# use (was $PWD before; git-root is correct when cwd is a subdir).
+PIN_DIR="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")/.claude/.persona"
 if [[ -n "${CLAUDE_SESSION_ID:-}" ]]; then
-    PIN_FILE="$PWD/.claude/.persona/session-$CLAUDE_SESSION_ID"
+    PIN_FILE="$PIN_DIR/session-$CLAUDE_SESSION_ID"
     [[ -f "$PIN_FILE" ]] && AGENT_ID=$(tr -d '[:space:]' < "$PIN_FILE" 2>/dev/null)
 fi
 if [[ -z "$AGENT_ID" ]]; then
@@ -66,6 +69,19 @@ except: pass" 2>/dev/null)
     fi
 fi
 [[ -z "$AGENT_ID" ]] && exit 0
+
+# kb-86r: persist the resolved identity as the AUTHORITATIVE session pin if none
+# exists yet. Reaching here means a CLEAN resolve — the whoami theft-guard above
+# already REFUSED (exit 0) any registry entry whose session_id isn't ours — so we
+# never pin a stolen identity. Without this, an agent that was announced but never
+# ran /persona has no pin, and resolution falls through to the last-writer-wins
+# registry: the identity-collision root cause (kb-86r). Writing the pin makes THIS
+# session's identity stable regardless of later registry stomps.
+if [[ -n "${CLAUDE_SESSION_ID:-}" && ! -f "$PIN_DIR/session-$CLAUDE_SESSION_ID" ]]; then
+    mkdir -p "$PIN_DIR" 2>/dev/null \
+        && printf '%s\n' "$AGENT_ID" > "$PIN_DIR/session-$CLAUDE_SESSION_ID" 2>/dev/null \
+        && echo "BRIDGE RESUME [$AGENT_ID]: wrote authoritative session pin (kb-86r — resolution no longer falls back to the last-writer registry)."
+fi
 
 # Re-announce (registry op) to refresh session_id after compaction.
 AGENTS_JSON="$HOME/.agent-bridge/agents.json"
