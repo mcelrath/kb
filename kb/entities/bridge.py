@@ -168,8 +168,21 @@ class BridgeMessagesRepository(EntityRepository):
         )
         return {"id": msg_id, "is_new": True, "is_substantive": bool(substantive), "embedded": False}
 
-    def embed_pending(self, limit: int = 500) -> int:
-        """Embed unembedded substantive messages. Returns count embedded."""
+    def embed_pending(self, limit: int = 500, commit_every: int = 1) -> int:
+        """Embed unembedded substantive messages. Returns count embedded.
+
+        Commits every `commit_every` rows (default 1 = per row) so the write
+        lock is held only for each row's 3 tiny writes, NOT for the whole run.
+        Critical detail: the slow `embedding_service.embed()` network call runs
+        BEFORE the row's first DML, so with per-row commit the embed happens
+        OUTSIDE any open transaction — the write lock is held microseconds, not
+        the ~0.2s/embed. A single end-of-run commit (or a large batch) instead
+        holds one write transaction for MINUTES across all the embed calls,
+        starving every other writer on the shared DB (concurrent `kbt create`,
+        `kb add`, ingest) past their busy_timeout — WAL lets readers through but
+        only one writer at a time. This mirrors update_finding_refresh's
+        deliberate per-row microsecond-lock pattern.
+        """
         rows = self.conn.execute(
             """SELECT id, subject, body FROM bridge_messages
                WHERE is_substantive = 1 AND embedded = 0
@@ -199,6 +212,9 @@ class BridgeMessagesRepository(EntityRepository):
                 "UPDATE bridge_messages SET embedded = 1 WHERE id = ?", (msg_id,)
             )
             count += 1
+            # Release the write lock frequently so other writers aren't starved.
+            if count % commit_every == 0:
+                self.conn.commit()
 
         if count:
             self.conn.commit()
