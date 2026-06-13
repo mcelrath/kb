@@ -242,3 +242,36 @@ class TheoremRepository(EntityRepository):
                 "SELECT COUNT(*) FROM lean_theorems WHERE project = ?", (project,)
             ).fetchone()[0]
         return self.conn.execute("SELECT COUNT(*) FROM lean_theorems").fetchone()[0]
+
+    def fetch_missing_statement_pure(
+        self, project: str | None = None, limit: int | None = None
+    ) -> list[Any]:
+        """Return (id, lean_name, statement) rows that lack a statement_pure."""
+        where = "WHERE statement_pure IS NULL OR statement_pure = ''"
+        params: list[Any] = []
+        if project:
+            where += " AND project = ?"
+            params.append(project)
+        sql = f"SELECT id, lean_name, statement FROM lean_theorems {where}"
+        if limit:
+            sql += f" LIMIT {limit}"
+        return self.conn.execute(sql, params).fetchall()
+
+    def set_statement_pure(self, theorem_id: str, pure: str) -> None:
+        """Write a statement_pure value (does NOT re-embed; call reembed_statement_pure after)."""
+        now = datetime.utcnow().isoformat()
+        self.conn.execute(
+            "UPDATE lean_theorems SET statement_pure = ?, updated_at = ? WHERE id = ?",
+            (pure, now, theorem_id),
+        )
+        # Caller is responsible for commit batching.
+
+    def reembed_statement_pure(self, theorem_id: str, pure: str) -> None:
+        """Delete+insert the vec row for a single theorem using statement_pure text."""
+        embedding = self.embedding_service.embed(pure)
+        self.conn.execute("DELETE FROM lean_theorems_vec WHERE id = ?", (theorem_id,))
+        self.conn.execute(
+            "INSERT INTO lean_theorems_vec (id, embedding) VALUES (?, ?)",
+            (theorem_id, embedding),
+        )
+        # Caller is responsible for commit batching.

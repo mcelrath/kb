@@ -2388,6 +2388,114 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
                 results.append(r)
         return results
 
+    # =========================================================================
+    # Findings refresh methods (encapsulate inline SQL from _run_refresh /
+    # _fetch_refresh_rows in kb.py so schema changes localize here)
+    # =========================================================================
+
+    def fetch_refresh_rows(
+        self,
+        ids: list[str] | None = None,
+        project: str | None = None,
+        all_rows: bool = False,
+        limit: int = 0,
+    ) -> list[Any]:
+        """Return (id, project, content, evidence) rows for the refresh loop.
+
+        Args:
+            ids: Explicit list of finding IDs to refresh (ignores other filters).
+            project: Restrict to this project when ids is None.
+            all_rows: If False (default), only rows with NULL/empty summary.
+            limit: Max rows (0 = no limit).
+        """
+        if ids:
+            placeholders = ",".join("?" * len(ids))
+            return self.conn.execute(
+                f"SELECT id, project, content, evidence FROM findings WHERE id IN ({placeholders})",
+                ids,
+            ).fetchall()
+        sql = "SELECT id, project, content, evidence FROM findings WHERE status = 'current'"
+        params: list[Any] = []
+        if not all_rows:
+            sql += " AND (summary IS NULL OR summary = '')"
+        if project:
+            sql += " AND project = ?"
+            params.append(project)
+        sql += " ORDER BY created_at DESC"
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        return self.conn.execute(sql, params).fetchall()
+
+    def update_finding_refresh(
+        self,
+        fid: str,
+        summary: str | None,
+        tags: list[str] | None,
+        embedding: bytes | None,
+    ) -> None:
+        """Write one refresh row: BEGIN IMMEDIATE / UPDATE / COMMIT.
+
+        Lock is held for microseconds — exactly one row per transaction,
+        matching the deliberate per-row commit cadence of the refresh loop.
+        """
+        import json as _json
+        self.conn.execute("BEGIN IMMEDIATE")
+        if summary:
+            self.conn.execute(
+                "UPDATE findings SET summary=?, updated_at=datetime('now') WHERE id=?",
+                (summary, fid),
+            )
+        if tags:
+            self.conn.execute(
+                "UPDATE findings SET tags=?, updated_at=datetime('now') WHERE id=?",
+                (_json.dumps(tags), fid),
+            )
+        if embedding is not None:
+            self.conn.execute("DELETE FROM findings_vec WHERE id=?", (fid,))
+            self.conn.execute(
+                "INSERT INTO findings_vec (id, embedding) VALUES (?,?)",
+                (fid, embedding),
+            )
+        self.conn.commit()
+
+    # =========================================================================
+    # lean_work_queue repository methods (encapsulate queue-defer SQL so the
+    # CLI handler no longer opens its own sqlite3 connection)
+    # =========================================================================
+
+    def list_deferred_queue_rows(self, limit: int = 50) -> list[Any]:
+        """Return deferred lean_work_queue rows (defer_reason IS NOT NULL)."""
+        return self.conn.execute("""
+            SELECT id, file, decl_name, class, readiness, defer_reason, defer_detail, updated_at
+            FROM lean_work_queue
+            WHERE defer_reason IS NOT NULL AND defer_reason != ''
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+
+    def get_queue_row(self, row_id: str) -> Any:
+        """Return a single lean_work_queue row by id, or None."""
+        return self.conn.execute(
+            "SELECT id, class, readiness, defer_reason FROM lean_work_queue WHERE id = ?",
+            (row_id,),
+        ).fetchone()
+
+    def set_defer_reason(self, row_id: str, reason: str, detail: str | None) -> None:
+        """Set defer_reason (and optional detail) on a lean_work_queue row."""
+        self.conn.execute(
+            "UPDATE lean_work_queue SET defer_reason = ?, defer_detail = ?, updated_at = datetime('now') WHERE id = ?",
+            (reason, detail or None, row_id),
+        )
+        self.conn.commit()
+
+    def clear_defer_reason(self, row_id: str) -> None:
+        """Clear defer_reason on a lean_work_queue row (re-activates it)."""
+        self.conn.execute(
+            "UPDATE lean_work_queue SET defer_reason = NULL, defer_detail = NULL, updated_at = datetime('now') WHERE id = ?",
+            (row_id,),
+        )
+        self.conn.commit()
+
     def close(self) -> None:
         """Close the database connection."""
         self.conn.close()

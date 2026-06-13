@@ -4,7 +4,6 @@ Also contains _validate_lean_tags() — extracted from main() per R4.
 """
 
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -275,29 +274,15 @@ def run_lean_verify(kb, args) -> None:
 # ---------------------------------------------------------------------------
 
 def run_queue_defer(kb, args) -> None:
-    import sqlite3 as _sqlite3
     import os.path as _op
 
     _VALID_DEFER_PREFIXES = (
         "data_blocked_on:", "design-pending:", "file-conflict:",
         "agent-cap", "user-gate:", "verify-first:",
     )
-    db_path = os.path.expanduser("~/.cache/kb/knowledge.db")
-    if not os.path.exists(db_path):
-        print(f"DB not found: {db_path}", file=sys.stderr)
-        sys.exit(1)
-
-    conn = _sqlite3.connect(db_path, timeout=5)
 
     if args.list or not args.row_id:
-        rows = conn.execute("""
-            SELECT id, file, decl_name, class, readiness, defer_reason, defer_detail, updated_at
-            FROM lean_work_queue
-            WHERE defer_reason IS NOT NULL AND defer_reason != ''
-            ORDER BY updated_at DESC
-            LIMIT 50
-        """).fetchall()
-        conn.close()
+        rows = kb.list_deferred_queue_rows(limit=50)
         if not rows:
             print("lean_work_queue: no deferred rows")
         else:
@@ -309,22 +294,13 @@ def run_queue_defer(kb, args) -> None:
         sys.exit(0)
 
     row_id = args.row_id
-    existing = conn.execute(
-        "SELECT id, class, readiness, defer_reason FROM lean_work_queue WHERE id = ?",
-        (row_id,),
-    ).fetchone()
+    existing = kb.get_queue_row(row_id)
     if not existing:
-        conn.close()
         print(f"queue-defer: row '{row_id}' not found in lean_work_queue", file=sys.stderr)
         sys.exit(1)
 
     if args.reason is None:
-        conn.execute(
-            "UPDATE lean_work_queue SET defer_reason = NULL, defer_detail = NULL, updated_at = datetime('now') WHERE id = ?",
-            (row_id,),
-        )
-        conn.commit()
-        conn.close()
+        kb.clear_defer_reason(row_id)
         print(f"queue-defer: cleared defer on {row_id[:10]} (row re-activated)")
         sys.exit(0)
 
@@ -333,7 +309,6 @@ def run_queue_defer(kb, args) -> None:
 
     valid = any(reason == p or reason.startswith(p) for p in _VALID_DEFER_PREFIXES)
     if not valid:
-        conn.close()
         valid_list = ", ".join(_VALID_DEFER_PREFIXES)
         print(
             f"queue-defer: invalid reason '{reason}'. Valid prefixes: {valid_list}",
@@ -341,12 +316,7 @@ def run_queue_defer(kb, args) -> None:
         )
         sys.exit(1)
 
-    conn.execute(
-        "UPDATE lean_work_queue SET defer_reason = ?, defer_detail = ?, updated_at = datetime('now') WHERE id = ?",
-        (reason, detail or None, row_id),
-    )
-    conn.commit()
-    conn.close()
+    kb.set_defer_reason(row_id, reason, detail or None)
     _, cls, readiness, _ = existing
     print(f"queue-defer: deferred {row_id[:10]} ({readiness} {cls}) — reason: {reason}" + (f" ({detail})" if detail else ""))
     sys.exit(0)

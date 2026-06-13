@@ -474,7 +474,8 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int = 1, label: str = "r
 
     Embedding (ash:8081) and LLM (tardis:9510) run concurrently per row.
     All I/O completes before any DB write opens. Each row is written with its
-    own BEGIN IMMEDIATE/COMMIT — lock held for microseconds, not seconds.
+    own BEGIN IMMEDIATE/COMMIT via kb.update_finding_refresh() — lock held for
+    microseconds, not seconds.
 
     rows: list of (id, project, content, evidence)
     Returns (ok, fail) counts.
@@ -496,27 +497,6 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int = 1, label: str = "r
                 dynamic_ncols=True) if _tqdm and not dry_run else None
     if bar:
         bar.set_postfix(ok=0, fail=0)
-
-    def _write_row(fid, summary, tags, embedding):
-        """One fast write transaction per row; lock held for microseconds."""
-        kb.conn.execute("BEGIN IMMEDIATE")
-        if summary:
-            kb.conn.execute(
-                "UPDATE findings SET summary=?, updated_at=datetime('now') WHERE id=?",
-                (summary, fid),
-            )
-        if tags:
-            kb.conn.execute(
-                "UPDATE findings SET tags=?, updated_at=datetime('now') WHERE id=?",
-                (json.dumps(tags), fid),
-            )
-        if embedding is not None:
-            kb.conn.execute("DELETE FROM findings_vec WHERE id=?", (fid,))
-            kb.conn.execute(
-                "INSERT INTO findings_vec (id, embedding) VALUES (?,?)",
-                (fid, embedding),
-            )
-        kb.conn.commit()
 
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -559,7 +539,7 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int = 1, label: str = "r
                     (bar.write if bar else print)(f"  LLM FAIL {fid}: {e}")
 
                 if summary and len(summary) >= 10:
-                    _write_row(fid, summary, tags, embedding)
+                    kb.update_finding_refresh(fid, summary, tags, embedding)
                     ok += 1
                 else:
                     fail += 1
@@ -590,23 +570,7 @@ def _run_refresh(kb, rows, dry_run: bool, commit_every: int = 1, label: str = "r
 
 def _fetch_refresh_rows(kb, ids=None, project=None, all_rows=False, limit=0):
     """Build the findings row list for refresh/retag/resummarize."""
-    if ids:
-        placeholders = ",".join("?" * len(ids))
-        return kb.conn.execute(
-            f"SELECT id, project, content, evidence FROM findings WHERE id IN ({placeholders})",
-            ids,
-        ).fetchall()
-    sql = "SELECT id, project, content, evidence FROM findings WHERE status = 'current'"
-    params: list = []
-    if not all_rows:
-        sql += " AND (summary IS NULL OR summary = '')"
-    if project:
-        sql += " AND project = ?"
-        params.append(project)
-    sql += " ORDER BY created_at DESC"
-    if limit:
-        sql += f" LIMIT {int(limit)}"
-    return kb.conn.execute(sql, params).fetchall()
+    return kb.fetch_refresh_rows(ids=ids, project=project, all_rows=all_rows, limit=limit)
 
 
 def _backfill_statement_pure(kb, project=None, limit=None, workers=8, dry_run=False):
@@ -614,18 +578,7 @@ def _backfill_statement_pure(kb, project=None, limit=None, workers=8, dry_run=Fa
     import time as _time
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    conn = kb._theorems.conn
-    where = "WHERE statement_pure IS NULL OR statement_pure = ''"
-    params: list = []
-    if project:
-        where += " AND project = ?"
-        params.append(project)
-    if limit:
-        where += f" LIMIT {limit}"
-
-    rows = conn.execute(
-        f"SELECT id, lean_name, statement FROM lean_theorems {where}", params
-    ).fetchall()
+    rows = kb._theorems.fetch_missing_statement_pure(project=project, limit=limit)
     print(f"  theorem backfill: {len(rows)} without statement_pure")
     if not rows:
         return {"updated": 0, "failed": 0}
@@ -653,13 +606,14 @@ def _backfill_statement_pure(kb, project=None, limit=None, workers=8, dry_run=Fa
 
     updated = failed = 0
     t0 = _time.time()
+    conn = kb._theorems.conn
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(restate_one, row): row for row in rows}
         for i, fut in enumerate(as_completed(futures), 1):
             tid, lean_name, pure = fut.result()
             if pure:
-                conn.execute("UPDATE lean_theorems SET statement_pure=? WHERE id=?", (pure, tid))
+                kb._theorems.set_statement_pure(tid, pure)
                 updated += 1
             else:
                 failed += 1
@@ -679,9 +633,7 @@ def _backfill_statement_pure(kb, project=None, limit=None, workers=8, dry_run=Fa
             "WHERE statement_pure IS NOT NULL AND statement_pure != ''"
         ).fetchall()
         for j, (tid, pure) in enumerate(updated_rows):
-            emb = kb._theorems.embedding_service.embed(pure)
-            conn.execute("DELETE FROM lean_theorems_vec WHERE id=?", (tid,))
-            conn.execute("INSERT INTO lean_theorems_vec (id, embedding) VALUES (?,?)", (tid, emb))
+            kb._theorems.reembed_statement_pure(tid, pure)
             if j % 100 == 0:
                 conn.commit()
         conn.commit()
