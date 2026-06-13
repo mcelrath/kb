@@ -25,6 +25,9 @@ rich>=13.0.0
 # Lazy-imported; `kb serve` prints an error and exits if absent
 starlette>=0.27.0
 uvicorn>=0.22.0
+# jinja2 renders the serve page shell (kb/server/renderers.py); lazy-imported
+# inside render_html_page so the core `kb get` markdown path needs no jinja2
+jinja2>=3.0
 
 # NOT included (dev / ingest-only / personal-physics):
 #   lean-dojo-v2, loguru, PyGithub  — scripts/requirements.txt, ingest_lean.py only

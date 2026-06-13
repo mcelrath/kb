@@ -1,11 +1,10 @@
 """Web page route handlers for kb serve.
 
-Extracted verbatim from kb.py:1675-1801.
+Extracted verbatim from kb.py:1675-1801 (R1), then migrated to the
+kb.server.renderers template layer (R2 / kb-ez9.3).
 
 render_html_page, render_sidebar, markdown_to_html, and format_finding_markdown
-are imported from kb.py (they remain there so the existing imports from tests
-and other callers in kb.py keep working).  This module re-exports them for
-callers that import from kb.server.routes.
+now live in kb.server.renderers — no kb.py import or importlib hack required.
 """
 
 import html as _html
@@ -13,37 +12,8 @@ import html as _html
 from starlette.requests import Request
 from starlette.responses import HTMLResponse
 
-# Import the HTML renderers and markdown formatter from the top-level kb.py.
-# These are module-level functions defined there and are safe to import.
-# kb.py is the CLI entry-point script; it is importable because it has no
-# if __name__ == "__main__" guard around the function definitions.
-import importlib.util, sys
-from pathlib import Path as _Path
-
-
-def _import_kbpy():
-    """Return the kb.py module object (top-level CLI script, not the kb/ package)."""
-    mod_name = "_kb_cli_script"
-    if mod_name in sys.modules:
-        return sys.modules[mod_name]
-    spec = importlib.util.spec_from_file_location(
-        mod_name,
-        _Path(__file__).parent.parent.parent / "kb.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    # Don't run main() — the module defines only functions at module scope; the
-    # if __name__ == "__main__" guard at the bottom keeps main() from firing.
-    sys.modules[mod_name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_kbpy = _import_kbpy()
-
-render_html_page = _kbpy.render_html_page
-render_sidebar = _kbpy.render_sidebar
-markdown_to_html = _kbpy.markdown_to_html
-format_finding_markdown = _kbpy.format_finding_markdown
+from ..markdown import format_finding_markdown, markdown_to_html
+from .renderers import render_html_page, render_sidebar
 
 
 def make_web_handlers(kb):
