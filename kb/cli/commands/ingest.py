@@ -5,93 +5,66 @@ from pathlib import Path
 
 
 def run_ingest(kb, args, ingest_parser) -> None:
-    import subprocess as _sp
-    # scripts/ lives at the project root: kb/cli/commands/ -> cli/ -> kb/ -> project root
-    scripts_dir = Path(__file__).parent.parent.parent.parent / "scripts"
-
     if args.ingest_cmd == "lean":
-        script_path = scripts_dir / "ingest_lean_direct.py"
-        if not script_path.exists():
-            print(f"Error: {script_path} not found")
-            sys.exit(1)
-        cmd = [sys.executable, str(script_path)]
-        if args.dry_run:
-            cmd += ["--dry-run"]
-        if args.limit:
-            cmd += ["--limit", str(args.limit)]
-        if getattr(args, "no_summarize", False):
-            cmd += ["--no-summarize"]
-        if getattr(args, "summarize_only", False):
-            cmd += ["--summarize-only"]
-        if getattr(args, "files", None):
-            cmd += ["--files"] + args.files
-        result = _sp.run(cmd)
-        if result.returncode != 0:
-            sys.exit(result.returncode)
+        from kb.ingest.lean import run
+        rc = run(
+            dry_run=args.dry_run,
+            limit=args.limit,
+            no_summarize=getattr(args, "no_summarize", False),
+            summarize_only=getattr(args, "summarize_only", False),
+            files=getattr(args, "files", None),
+        )
+        if rc:
+            sys.exit(rc)
 
     elif args.ingest_cmd == "scripts":
-        # auto_register_scripts.py lives at the project root
-        script_path = Path(__file__).parent.parent.parent.parent / "auto_register_scripts.py"
-        if not script_path.exists():
-            print(f"Error: {script_path} not found")
-            sys.exit(1)
-        cmd = [sys.executable, str(script_path), str(args.directory),
-               "-p", args.project, "-n", str(args.limit)]
-        if args.dry_run:
-            cmd += ["--dry-run"]
-        _sp.run(cmd)
+        from kb.ingest.scripts import run
+        rc = run(
+            directory=Path(args.directory),
+            project=args.project,
+            dry_run=args.dry_run,
+            limit=args.limit,
+        )
+        if rc:
+            sys.exit(rc)
 
     elif args.ingest_cmd == "python":
-        script_path = scripts_dir / "ingest_python.py"
-        if not script_path.exists():
-            print(f"Error: {script_path} not found")
-            sys.exit(1)
-        cmd = [sys.executable, str(script_path), "--root", args.root,
-               "--project", args.project]
-        if getattr(args, "files", None):
-            cmd += ["--files"] + args.files
-        if args.dry_run:
-            cmd += ["--dry-run"]
-        if getattr(args, "no_notations", False):
-            cmd += ["--no-notations"]
-        cmd += ["--db", str(args.db)]
-        result = _sp.run(cmd)
-        if result.returncode != 0:
-            sys.exit(result.returncode)
+        from kb.ingest.python import run
+        rc = run(
+            root=Path(args.root) if args.root else None,
+            files=getattr(args, "files", None),
+            project=args.project,
+            dry_run=args.dry_run,
+            db_path=args.db,
+            no_notations=getattr(args, "no_notations", False),
+        )
+        if rc:
+            sys.exit(rc)
 
     elif args.ingest_cmd == "typescript":
-        script_path = scripts_dir / "ingest_typescript.py"
-        if not script_path.exists():
-            print(f"Error: {script_path} not found")
-            sys.exit(1)
-        cmd = [sys.executable, str(script_path), "--root", args.root,
-               "--project", args.project]
-        if getattr(args, "files", None):
-            cmd += ["--files"] + args.files
-        if getattr(args, "deleted", None):
-            cmd += ["--deleted"] + args.deleted
-        if args.dry_run:
-            cmd += ["--dry-run"]
-        cmd += ["--db", str(args.db)]
-        result = _sp.run(cmd)
-        if result.returncode != 0:
-            sys.exit(result.returncode)
+        from kb.ingest.typescript import run
+        rc = run(
+            root=Path(args.root) if args.root else None,
+            files=getattr(args, "files", None),
+            deleted=getattr(args, "deleted", None),
+            project=args.project,
+            dry_run=args.dry_run,
+            db_path=args.db,
+        )
+        if rc:
+            sys.exit(rc)
 
     elif args.ingest_cmd == "tex":
-        script_path = scripts_dir / "ingest_tex.py"
-        if not script_path.exists():
-            print(f"Error: {script_path} not found")
-            sys.exit(1)
-        cmd = [sys.executable, str(script_path), "--root", args.root,
-               "--project", args.project]
-        if getattr(args, "files", None):
-            cmd += ["--files"] + args.files
-        if args.dry_run:
-            cmd += ["--dry-run"]
-        cmd += ["--db", str(args.db)]
-        result = _sp.run(cmd)
-        if result.returncode != 0:
-            sys.exit(result.returncode)
+        from kb.ingest.tex import run
+        rc = run(
+            root=Path(args.root) if args.root else None,
+            files=getattr(args, "files", None),
+            project=args.project,
+            dry_run=args.dry_run,
+            db_path=args.db,
+        )
+        if rc:
+            sys.exit(rc)
 
     else:
         ingest_parser.print_help()
