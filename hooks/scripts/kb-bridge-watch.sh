@@ -33,7 +33,15 @@ BASE="${BASE//\/\/localhost:/\/\/ash:}"
 BASE="${BASE//\/\/127.0.0.1:/\/\/ash:}"
 URL="$BASE/bridge/watch?id=$ID"
 
-curl -sN --no-buffer --max-time 86400 "$URL" 2>/dev/null | while IFS= read -r line; do
+# --max-time 180 (3 min), NOT an infinite hold: a run_in_background task has an
+# upper lifetime cap; an unbounded 24h hold gets KILLED at the cap (signal -> exit
+# 144, reported "failed"), which silently drops the agent off the bridge. A bounded
+# 180s hold instead TIMES OUT CLEANLY (curl exit 28 -> this script exits 0 ->
+# "completed") and the agent relaunches — so an idle agent stays reachable on a
+# ~3-min cycle and never throws a 144. 180s is verified-safe (a 200s background SSE
+# curl completed cleanly with the DEFAULT launch, so no special timeout: param is
+# needed — just run_in_background:true). A real message still wakes it instantly.
+curl -sN --no-buffer --max-time 180 "$URL" 2>/dev/null | while IFS= read -r line; do
     case "$line" in
         data:*)
             # SSE data frame = the message JSON.

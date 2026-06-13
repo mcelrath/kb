@@ -23,8 +23,10 @@ BRIDGE PROTOCOL (main session only — sub-agents never run bridge commands):
 - The kb SSE WATCHER is for IDLE reachability ONLY. Launch it as its OWN Bash call with
   run_in_background:true when you go idle (the Stop launcher reminds you):
       bash "$HERE/kb-bridge-watch.sh" <your-id>
-  It is single-shot (SSE-exit-on-first-event): on a real peer message it prints
-  'BRIDGE_WAKE <json>' and EXITS (the task-exit notification wakes you) → relaunch ONE.
+  It holds the SSE ~3 min then EXITS CLEANLY (a quiet timeout, EMPTY output) — relaunch
+  ONE when that completion fires. On a real peer message it prints 'BRIDGE_WAKE <json>'
+  and EXITS (the task-exit notification wakes you) → relaunch ONE. Empty output ⇒ quiet
+  timeout; BRIDGE_WAKE ⇒ real message; either way relaunch exactly ONE.
   It connects to the kb-server SSE and starts at the tail (only NEW messages wake).
   It IGNORES event:announce frames (peers joining — non-actionable, surfaced by
   injection instead), so it wakes ONLY for real directed/actionable messages. It is

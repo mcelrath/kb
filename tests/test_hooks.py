@@ -233,6 +233,18 @@ def test_watch_script_has_announce_skip():
     assert 'event' in src and 'announce' in src and 'continue' in src
 
 
+def test_watch_hold_is_bounded():
+    # A run_in_background task has a ~10-min lifetime cap; an unbounded
+    # --max-time 86400 hold is KILLED at the cap (exit 144, "failed"). The hold
+    # must be bounded under the cap so curl times out cleanly (exit 0). Guards
+    # against regressing to the infinite hold.
+    src = open(os.path.join(SCRIPTS, "kb-bridge-watch.sh")).read()
+    assert "--max-time 86400" not in src, "watcher must not use an infinite hold"
+    import re
+    m = re.search(r"--max-time\s+(\d+)", src)
+    assert m and int(m.group(1)) <= 570, f"watcher --max-time must be < 10-min cap, got {m and m.group(1)}"
+
+
 def test_inject_kills_watcher_on_userprompt():
     # Drift guard: bridge-inject tears the watcher down on UserPromptSubmit so it
     # is alive only at idle (relaunched at the next Stop).
