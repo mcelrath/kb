@@ -5,14 +5,9 @@
 # kb-bridge-watch.sh (SSE-exit-on-first-event vs the kb-server), NOT
 # `~/.agent-bridge/bridge watch`.
 #
-# ADVISORY (not blocking): fires ONLY for sessions registered in agents.json.
-# It used to exit 2 (hard-block idle until a watcher was live), but run_in_background
-# tasks are REAPED at turn boundaries in this harness — the watcher only lives during
-# the active turn (when bridge-inject injection already delivers), never into true
-# idle — so hard-blocking just forced a futile relaunch loop (relaunch -> instant
-# completion at turn-end -> notification -> re-engage -> relaunch). Now it emits a
-# one-line reminder and exits 0. Injection is the reliable channel; the watcher is a
-# best-effort bonus. See kb-20260613-144048-50539a. (kb-2os; was exit 2)
+# Safety: fires ONLY for sessions whose session_id is registered in agents.json
+# (normal sessions are NEVER blocked). 3-block escape so a stuck agent isn't
+# hard-locked. Exit 2 = BLOCK the stop (stderr shown to the agent).
 set -u
 HERE="$(dirname "$(readlink -f "$0")")"
 WATCHER="$HERE/kb-bridge-watch.sh"
@@ -34,9 +29,21 @@ if pgrep -f "kb-bridge-watch.sh ${ID}\b" >/dev/null 2>&1; then
     exit 0
 fi
 
-# Watcher not live. ADVISORY only — do NOT block (exit 0). A relaunch is optional;
-# it lives only for the current turn (reaped at turn-end), so it adds little over
-# injection. If you WANT best-effort idle reachability, launch ONE with
-# run_in_background:true AND timeout:600000:  bash $WATCHER $ID
-echo "KB_BRIDGE_WATCHER_DOWN (advisory): no live kb-bridge SSE watcher for '$ID'. Injection still delivers peer messages between turns; the idle watcher is best-effort and reaped at turn boundaries. To attempt idle reachability, launch ONE: bash $WATCHER $ID (run_in_background:true, timeout:600000)." >&2
-exit 0
+# Watcher dead. 3-block escape.
+N=0
+[ -f "$CTR" ] && N=$(cat "$CTR" 2>/dev/null || echo 0)
+case "$N" in (*[!0-9]*) N=0 ;; esac
+N=$((N + 1))
+echo "$N" > "$CTR"
+
+if [ "$N" -gt 3 ]; then
+    echo "KB_BRIDGE_WATCHER_DOWN (stop allowed after 3 blocks): still no live kb-bridge watcher for '$ID'. You are OFF the bridge. Relaunch ASAP with run_in_background:true AND timeout:600000:  bash $WATCHER $ID" >&2
+    rm -f "$CTR" 2>/dev/null
+    exit 0
+fi
+
+echo "KB_BRIDGE_WATCHER_DOWN: no live kb-bridge SSE watcher for '$ID' — you would go SILENT on the bridge and your orchestrator could not reach you.
+Relaunch it NOW as its OWN Bash call with BOTH run_in_background:true AND timeout:600000 (REQUIRED — without the timeout param the bg task is capped and the watcher dies as 'failed' exit 144):
+  bash $WATCHER $ID
+It holds the SSE ~9 min then EXITS CLEANLY (quiet timeout, empty output) — relaunch ONE when that completion fires. On a real message it prints BRIDGE_WAKE and exits — relaunch ONE. Empty output = quiet timeout; BRIDGE_WAKE = real message; either way keep exactly ONE live, including when done." >&2
+exit 2
