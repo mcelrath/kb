@@ -907,6 +907,16 @@ def main():
     ingest_python_parser.add_argument("--no-notations", action="store_true",
         help="Skip populating notations table")
 
+    ingest_ts_parser = ingest_sub.add_parser("typescript", help="Index TypeScript/TSX symbols (.ts/.tsx) into python_symbols")
+    ingest_ts_parser.add_argument("--root", default=str(Path.cwd()),
+        help="Root directory to walk for .ts/.tsx files (default: cwd)")
+    ingest_ts_parser.add_argument("--files", nargs="+", metavar="FILE",
+        help="Incremental mode: process only these files")
+    ingest_ts_parser.add_argument("--deleted", nargs="+", metavar="FILE",
+        help="Remove all python_symbols rows for these deleted/renamed files")
+    ingest_ts_parser.add_argument("--project", default="kb")
+    ingest_ts_parser.add_argument("--dry-run", action="store_true")
+
     ingest_tex_parser = ingest_sub.add_parser("tex", help="Index Python/Lean/Epic annotation comment blocks from TeX files")
     ingest_tex_parser.add_argument("--root", default=str(Path.home() / "Physics/claude"),
         help="Root of tex corpus (default: ~/Physics/claude)")

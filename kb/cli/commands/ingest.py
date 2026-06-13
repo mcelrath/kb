@@ -59,6 +59,24 @@ def run_ingest(kb, args, ingest_parser) -> None:
         if result.returncode != 0:
             sys.exit(result.returncode)
 
+    elif args.ingest_cmd == "typescript":
+        script_path = scripts_dir / "ingest_typescript.py"
+        if not script_path.exists():
+            print(f"Error: {script_path} not found")
+            sys.exit(1)
+        cmd = [sys.executable, str(script_path), "--root", args.root,
+               "--project", args.project]
+        if getattr(args, "files", None):
+            cmd += ["--files"] + args.files
+        if getattr(args, "deleted", None):
+            cmd += ["--deleted"] + args.deleted
+        if args.dry_run:
+            cmd += ["--dry-run"]
+        cmd += ["--db", str(args.db)]
+        result = _sp.run(cmd)
+        if result.returncode != 0:
+            sys.exit(result.returncode)
+
     elif args.ingest_cmd == "tex":
         script_path = scripts_dir / "ingest_tex.py"
         if not script_path.exists():
