@@ -4,6 +4,8 @@ Scripts Repository
 Manages script registration and retrieval.
 """
 
+from __future__ import annotations
+
 import hashlib
 import os
 import sqlite3

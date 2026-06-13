@@ -4,6 +4,8 @@ Concept Register Repository
 Manages active conclusions for thinking-block prefill.
 """
 
+from __future__ import annotations
+
 import json
 import sqlite3
 import uuid

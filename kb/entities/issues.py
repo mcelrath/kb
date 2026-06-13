@@ -18,6 +18,8 @@ ready/blocked blocking criteria:
   - 'discovered-from', 'related', 'supersedes' dep types do NOT affect readiness.
 """
 
+from __future__ import annotations
+
 import json
 import sqlite3
 import uuid
