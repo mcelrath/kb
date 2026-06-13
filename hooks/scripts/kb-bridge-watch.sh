@@ -33,15 +33,17 @@ BASE="${BASE//\/\/localhost:/\/\/ash:}"
 BASE="${BASE//\/\/127.0.0.1:/\/\/ash:}"
 URL="$BASE/bridge/watch?id=$ID"
 
-# --max-time 180 (3 min), NOT an infinite hold: a run_in_background task has an
-# upper lifetime cap; an unbounded 24h hold gets KILLED at the cap (signal -> exit
-# 144, reported "failed"), which silently drops the agent off the bridge. A bounded
-# 180s hold instead TIMES OUT CLEANLY (curl exit 28 -> this script exits 0 ->
-# "completed") and the agent relaunches — so an idle agent stays reachable on a
-# ~3-min cycle and never throws a 144. 180s is verified-safe (a 200s background SSE
-# curl completed cleanly with the DEFAULT launch, so no special timeout: param is
-# needed — just run_in_background:true). A real message still wakes it instantly.
-curl -sN --no-buffer --max-time 180 "$URL" 2>/dev/null | while IFS= read -r line; do
+# --max-time 540 (9 min), NOT an infinite hold. Two facts about run_in_background:
+#   1. Without an explicit harness timeout: param, a bg task gets a default timeout
+#      and is KILLED when it runs past it (signal -> exit 144, "failed") — which
+#      silently drops the agent off the bridge. So this MUST be launched with
+#      timeout:600000 (the 10-min max). Every 144 we saw was a no-param launch;
+#      the timeout:600000 launch held cleanly.
+#   2. Even with timeout:600000 there is a ~10-min hard cap, so --max-time 540 keeps
+#      the hold UNDER it: curl times out CLEANLY at 540s (exit 28 -> this script
+#      exits 0 -> "completed"), and the agent relaunches. Idle agent stays reachable
+#      on a ~9-min cycle and never throws a 144. A real message wakes it instantly.
+curl -sN --no-buffer --max-time 540 "$URL" 2>/dev/null | while IFS= read -r line; do
     case "$line" in
         data:*)
             # SSE data frame = the message JSON.

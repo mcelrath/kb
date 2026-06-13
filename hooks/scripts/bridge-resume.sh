@@ -21,9 +21,10 @@ BRIDGE PROTOCOL (main session only — sub-agents never run bridge commands):
 - Peer messages are AUTO-INJECTED at every tool call + user prompt via the kb-SERVER
   (GET /bridge/messages, cursor-tracked) — you do NOT need the watcher while WORKING.
 - The kb SSE WATCHER is for IDLE reachability ONLY. Launch it as its OWN Bash call with
-  run_in_background:true when you go idle (the Stop launcher reminds you):
+  BOTH run_in_background:true AND timeout:600000 (REQUIRED — without the timeout param the
+  bg task is capped and the watcher dies as 'failed' exit 144):
       bash "$HERE/kb-bridge-watch.sh" <your-id>
-  It holds the SSE ~3 min then EXITS CLEANLY (a quiet timeout, EMPTY output) — relaunch
+  It holds the SSE ~9 min then EXITS CLEANLY (a quiet timeout, EMPTY output) — relaunch
   ONE when that completion fires. On a real peer message it prints 'BRIDGE_WAKE <json>'
   and EXITS (the task-exit notification wakes you) → relaunch ONE. Empty output ⇒ quiet
   timeout; BRIDGE_WAKE ⇒ real message; either way relaunch exactly ONE.

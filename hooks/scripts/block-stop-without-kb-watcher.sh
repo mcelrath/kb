@@ -37,13 +37,13 @@ N=$((N + 1))
 echo "$N" > "$CTR"
 
 if [ "$N" -gt 3 ]; then
-    echo "KB_BRIDGE_WATCHER_DOWN (stop allowed after 3 blocks): still no live kb-bridge watcher for '$ID'. You are OFF the bridge. Relaunch ASAP, run_in_background:true:  bash $WATCHER $ID" >&2
+    echo "KB_BRIDGE_WATCHER_DOWN (stop allowed after 3 blocks): still no live kb-bridge watcher for '$ID'. You are OFF the bridge. Relaunch ASAP with run_in_background:true AND timeout:600000:  bash $WATCHER $ID" >&2
     rm -f "$CTR" 2>/dev/null
     exit 0
 fi
 
 echo "KB_BRIDGE_WATCHER_DOWN: no live kb-bridge SSE watcher for '$ID' — you would go SILENT on the bridge and your orchestrator could not reach you.
-Relaunch it NOW as its OWN Bash call with the harness run_in_background:true parameter (this is your async wake):
+Relaunch it NOW as its OWN Bash call with BOTH run_in_background:true AND timeout:600000 (REQUIRED — without the timeout param the bg task is capped and the watcher dies as 'failed' exit 144):
   bash $WATCHER $ID
-It holds the SSE ~3 min then EXITS CLEANLY (quiet timeout, empty output) — relaunch ONE when that completion fires. On a real message it prints BRIDGE_WAKE and exits — relaunch ONE. Empty output = quiet timeout; BRIDGE_WAKE = real message; either way keep exactly ONE live, including when done." >&2
+It holds the SSE ~9 min then EXITS CLEANLY (quiet timeout, empty output) — relaunch ONE when that completion fires. On a real message it prints BRIDGE_WAKE and exits — relaunch ONE. Empty output = quiet timeout; BRIDGE_WAKE = real message; either way keep exactly ONE live, including when done." >&2
 exit 2
