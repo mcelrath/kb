@@ -730,6 +730,7 @@ def main():
     from kb.cli.commands import lean as _cmd_lean
     from kb.cli.commands import serve as _cmd_serve
     from kb.cli.commands import misc as _cmd_misc
+    from kb.cli.commands import surface as _cmd_surface
 
     parser = argparse.ArgumentParser(
         description="Knowledge Base",
@@ -1102,6 +1103,25 @@ def main():
         help="List all deferred rows (read-only)",
     )
 
+    # surface: unified multi-source semantic surfacing (code symbols + findings + bridge)
+    surface_parser = _add_parser(
+        "surface",
+        "Unified semantic surface: code symbols + findings + bridge memory",
+        agent_visible=True,
+    )
+    surface_parser.add_argument("query", help="Search query")
+    surface_parser.add_argument("-n", "--limit", type=int, default=5,
+        help="Max results per source (default: 5)")
+    surface_parser.add_argument("-p", "--project", help="Filter findings + symbols by project")
+    surface_parser.add_argument("--sources", default="code,findings,bridge",
+        metavar="SOURCES",
+        help="Comma-separated sources to query: code,findings,bridge (default: all three)")
+    surface_parser.add_argument("--min-sim", type=float, default=0.45, dest="min_sim",
+        help="Minimum cosine similarity floor (default: 0.45)")
+    surface_parser.add_argument("--json", action="store_true",
+        help="Output as structured JSON {symbols:[...], findings:[...], bridge:[...]} "
+             "for hook/script consumption")
+
     args = parser.parse_args()
 
     if args.help or not args.command:
@@ -1182,6 +1202,7 @@ def main():
         "lean-verify": _cmd_lean.run_lean_verify,
         "queue-defer": _cmd_lean.run_queue_defer,
         "serve": _cmd_serve.run_serve,
+        "surface": _cmd_surface.run_surface,
     }
 
     handler = _dispatch.get(args.command)
