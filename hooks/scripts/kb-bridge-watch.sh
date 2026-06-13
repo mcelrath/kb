@@ -23,6 +23,13 @@
 # http://ash:8765 is reachable from inside the sandbox. (Harness-side hooks run
 # OUTSIDE the sandbox and still use the 127.0.0.1 default — kb-2os.3 sandbox fix.)
 set -u
+# Exit CLEANLY on any teardown signal. A run_in_background watcher gets signalled
+# when the harness tears it down (e.g. when the session goes active again, or at a
+# bg-lifetime boundary) — observed as SIGSTKFLT(16)/SIGTERM/SIGPIPE, which bash
+# reports as exit 143/144/141 ("failed"), triggering a spurious Stop-hook nag even
+# though the wake (or quiet timeout) already succeeded. Trapping -> exit 0 makes
+# every teardown a clean "completed", so the watcher never reports "failed".
+trap 'exit 0' TERM PIPE HUP INT 16
 ID="${1:?usage: kb-bridge-watch.sh <agent-id>}"
 BASE="${KB_SERVER_URL:-http://ash:8765}"
 # This watcher runs inside the Bash-tool sandbox, whose loopback is namespaced —
