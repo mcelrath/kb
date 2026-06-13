@@ -732,6 +732,60 @@ def configure_main(args: Any) -> int:  # noqa: ANN401
 
     # Layer A: global configure
     interactive = sys.stdout.isatty() and not getattr(args, "provider", None)
+
+    # ------------------------------------------------------------------
+    # Non-interactive safety guard: refuse to write the real ~/.claude
+    # when --config-dir was NOT explicitly supplied and the session is
+    # non-interactive (agent / pipe / CI).
+    #
+    # Rationale: kb-2c3 retro — running `kb configure` inside an agent
+    # without --config-dir silently clobbered the live settings.json.
+    # This guard makes the caller OPT IN (explicit --config-dir, even if
+    # it points at ~/.claude) rather than defaulting into a destructive
+    # write.
+    #
+    # Conditions that trigger the block (ALL must hold):
+    #   1. --config-dir was NOT passed (args.config_dir is None)
+    #   2. The resolved config_dir IS the real ~/.claude
+    #   3. The session is non-interactive (not a tty)
+    #
+    # Explicit --config-dir ALWAYS bypasses the guard (caller opted in).
+    # Interactive (tty) sessions are allowed (normal human path).
+    # Per-project mode (args.project) is already handled above — not reached.
+    # ------------------------------------------------------------------
+    config_dir_was_explicit = getattr(args, "config_dir", None) is not None
+    real_claude = Path.home() / ".claude"
+    # Resolve both to catch symlinks (real ~/.claude is itself a symlink on some setups)
+    try:
+        resolved_cfg = config_dir.resolve()
+        resolved_real = real_claude.resolve()
+        is_real_claude = resolved_cfg == resolved_real
+    except OSError:
+        # Path.resolve() can fail on non-existent paths; fall back to string compare
+        is_real_claude = config_dir == real_claude
+
+    non_interactive = not (sys.stdin.isatty() and sys.stdout.isatty())
+    # Also treat CLAUDECODE env as a signal that we're running inside Claude Code
+    # (even if somehow attached to a pty by the harness).
+    in_agent = bool(os.environ.get("CLAUDECODE"))
+
+    if (not config_dir_was_explicit) and is_real_claude and (non_interactive or in_agent):
+        print(
+            "Error: refusing to write the real ~/.claude/settings.json from a non-interactive "
+            "session without an explicit --config-dir.\n"
+            "\n"
+            "This guard prevents agents and CI scripts from accidentally clobbering the live "
+            "Claude Code config.\n"
+            "\n"
+            "To proceed, either:\n"
+            "  • Run interactively (in a terminal) — the normal human path\n"
+            "  • Pass --config-dir explicitly, e.g.:\n"
+            "      kb configure --config-dir ~/.claude --provider ollama-local ...\n"
+            "  • Pass --config-dir <tempdir> for tests/smoke runs",
+            file=sys.stderr,
+        )
+        return 2
+
     return run_global_configure(
         provider=getattr(args, "provider", None),
         model=getattr(args, "model", None),
