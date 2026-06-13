@@ -14,10 +14,23 @@
 # immediately), so the wake is prompt.
 #
 # Usage:  kb-bridge-watch.sh <agent-id>
-# Env:    KB_SERVER_URL (default http://127.0.0.1:8765)
+# Env:    KB_SERVER_URL (default http://ash:8765)
+#
+# Default host is `ash`, NOT 127.0.0.1: this watcher is launched via the Bash
+# tool with run_in_background, so it runs inside the command SANDBOX, whose
+# loopback is namespaced (cannot reach the host's 127.0.0.1:8765). The sandbox
+# DOES proxy the allowlisted host `ash`, and the kb-server binds 0.0.0.0, so
+# http://ash:8765 is reachable from inside the sandbox. (Harness-side hooks run
+# OUTSIDE the sandbox and still use the 127.0.0.1 default — kb-2os.3 sandbox fix.)
 set -u
 ID="${1:?usage: kb-bridge-watch.sh <agent-id>}"
-BASE="${KB_SERVER_URL:-http://127.0.0.1:8765}"
+BASE="${KB_SERVER_URL:-http://ash:8765}"
+# This watcher runs inside the Bash-tool sandbox, whose loopback is namespaced —
+# host 127.0.0.1/localhost is UNREACHABLE here even though hooks (harness-side)
+# reach it fine. The kb-server binds 0.0.0.0, so rewrite a loopback base to the
+# `ash` host alias (sandbox-proxied + allowlisted). Non-loopback bases pass through.
+BASE="${BASE//\/\/localhost:/\/\/ash:}"
+BASE="${BASE//\/\/127.0.0.1:/\/\/ash:}"
 URL="$BASE/bridge/watch?id=$ID"
 
 curl -sN --no-buffer --max-time 86400 "$URL" 2>/dev/null | while IFS= read -r line; do
