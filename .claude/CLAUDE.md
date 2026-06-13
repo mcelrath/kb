@@ -5,10 +5,21 @@ project: knowledge-base
 ## Architecture
 
 ```
-kb.py          # Core library: KnowledgeBase class, CLI
-kb_mcp.py      # MCP server: exposes kb.py as MCP tools
-curate_kb.py   # Automated curation: tagging, consolidation, entry points
+kb.py              # CLI entry: argparse + dispatch table -> kb/cli/commands/
+kb/cli/commands/   # one module per command group (findings/admin/maintenance/ingest/lean/serve/misc)
+kb/facade.py       # KnowledgeBase facade (the library API)
+kb/core/           # connection, schema, embedding
+kb/entities/       # repositories (scripts/documents/theorems/concepts/issues/bridge)
+kb/search/         # hybrid (vector + FTS, RRF)
+kb/server/         # kb serve: create_app factory + routes/bridge/live/renderers + templates
+kb/config.py       # KbConfig + load_config (env -> ~/.config/kb/config.toml -> defaults)
+kb/ingest/         # ingest entry points (imported as library by kb ingest)
+kb/markdown.py     # dependency-free markdown helpers (CLI + web)
+curate_kb.py       # Automated curation: tagging, consolidation, entry points
 ```
+
+(There is NO MCP server: the dual kb_mcp_core.py/kb_mcp_advanced.py were dead
+duplication, deleted in kb-ez9.7. All kb ops go through the `kb` CLI.)
 
 ## Database
 
@@ -23,9 +34,6 @@ curate_kb.py   # Automated curation: tagging, consolidation, entry points
 # CLI
 KB_EMBEDDING_URL=http://ash:8081/embedding KB_EMBEDDING_DIM=4096 \
   .venv/bin/python kb.py <command>
-
-# MCP server (started automatically by Claude Code)
-# Config in ~/.claude/settings.json under mcpServers
 ```
 
 ## Key Patterns
@@ -100,7 +108,6 @@ CAUTION: `kb configure` WITHOUT `--config-dir` defaults to the real `~/.claude` 
 
 ## Adding New Features
 
-1. Add method to `KnowledgeBase` class in kb.py
-2. Add CLI subcommand in `main()`
-3. Add MCP tool in kb_mcp.py with `@mcp.tool()` decorator
-4. Add to settings.json permissions if needed
+1. Add method to the `KnowledgeBase` facade in `kb/facade.py` (delegating to a `kb/entities/` repository if it owns SQL)
+2. Add an argparse subcommand in `kb.py main()` + a `run(kb, args)` handler in `kb/cli/commands/<group>.py`, and register it in the `main()` dispatch table
+3. If it needs config, source it via `kb/config.py` `load_config()` (never read env at import)
