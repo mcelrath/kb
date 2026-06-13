@@ -203,3 +203,38 @@ def test_watch_script_has_rewrite():
     # The script escapes the slashes in the bash expansion (\/\/localhost:), so
     # match the host tokens that must appear in the rewrite, not literal slashes.
     assert "localhost:" in src and "127.0.0.1:" in src and "ash:" in src
+
+
+# --------------------------------------------------------------------------
+# kb-bridge-watch.sh  (announce frames must NOT wake; everything else does)
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("payload,should_wake", [
+    ('{"id":1,"event":"announce","subject":"x joined"}', False),
+    ('{"id":2,"event":null,"subject":"directed"}', True),
+    ('{"id":3,"subject":"no-event-field"}', True),
+    ('{"id":4,"event":"hold","subject":"HOLD gpu"}', True),
+])
+def test_watch_announce_skip(payload, should_wake):
+    # Replicate the script's event-extraction + skip decision on one SSE frame.
+    snippet = (
+        'payload=$1; '
+        'event=$(printf "%s" "$payload" | python3 -c '
+        '"import sys,json; print((json.load(sys.stdin).get(\'event\') or \'\').strip())" 2>/dev/null); '
+        '[ "$event" = "announce" ] && echo SKIP || echo WAKE'
+    )
+    p = _run(["bash", "-c", snippet, "_", payload])
+    got = p.stdout.strip()
+    assert got == ("WAKE" if should_wake else "SKIP"), f"{payload} -> {got}"
+
+
+def test_watch_script_has_announce_skip():
+    # Drift guard: the real script must still carry the announce skip.
+    src = open(os.path.join(SCRIPTS, "kb-bridge-watch.sh")).read()
+    assert 'event' in src and 'announce' in src and 'continue' in src
+
+
+def test_inject_kills_watcher_on_userprompt():
+    # Drift guard: bridge-inject tears the watcher down on UserPromptSubmit so it
+    # is alive only at idle (relaunched at the next Stop).
+    src = open(os.path.join(SCRIPTS, "bridge-inject.sh")).read()
+    assert 'UserPromptSubmit' in src and 'pkill' in src and 'kb-bridge-watch.sh' in src

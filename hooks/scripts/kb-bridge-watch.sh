@@ -36,9 +36,17 @@ URL="$BASE/bridge/watch?id=$ID"
 curl -sN --no-buffer --max-time 86400 "$URL" 2>/dev/null | while IFS= read -r line; do
     case "$line" in
         data:*)
-            # SSE data frame = the message JSON; surface it + exit (closes the
-            # pipe -> SIGPIPE kills curl -> this subshell + the script end).
-            echo "BRIDGE_WAKE ${line#data: }"
+            # SSE data frame = the message JSON.
+            payload="${line#data: }"
+            # Skip event:announce — announces are non-actionable and are already
+            # surfaced between turns by bridge-inject (GET /bridge/messages includes
+            # to:all). The watcher wakes ONLY for real directed/actionable messages,
+            # so an idle agent isn't re-engaged just to read a peer joining.
+            event=$(printf '%s' "$payload" | python3 -c "import sys,json; print((json.load(sys.stdin).get('event') or '').strip())" 2>/dev/null)
+            [ "$event" = "announce" ] && continue
+            # Real message: surface it + exit (closes the pipe -> SIGPIPE kills
+            # curl -> this subshell + the script end). The exit IS the wake.
+            echo "BRIDGE_WAKE $payload"
             exit 0
             ;;
     esac

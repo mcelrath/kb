@@ -26,6 +26,10 @@ BRIDGE PROTOCOL (main session only — sub-agents never run bridge commands):
   It is single-shot (SSE-exit-on-first-event): on a real peer message it prints
   'BRIDGE_WAKE <json>' and EXITS (the task-exit notification wakes you) → relaunch ONE.
   It connects to the kb-server SSE and starts at the tail (only NEW messages wake).
+  It IGNORES event:announce frames (peers joining — non-actionable, surfaced by
+  injection instead), so it wakes ONLY for real directed/actionable messages. It is
+  torn down automatically when you go active (a user prompt) and relaunched at the
+  next Stop, so it is alive — and can only wake — while you are IDLE.
   Relaunch at session start, after compaction, and after a real wake — NOT every turn.
   Detect liveness by the kb-bridge-watch.sh process; keep exactly ONE live.
 - SEND via the kb-server: POST http://127.0.0.1:8765/bridge/send

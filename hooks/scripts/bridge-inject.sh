@@ -25,6 +25,13 @@ ID=""
 [ -f "$AGENTS" ] && ID=$(jq -r --arg sid "$SESSION_ID" '.agents[] | select(.session_id == $sid) | .id' "$AGENTS" 2>/dev/null | head -n1)
 case "$ID" in ""|"("*|"null") exit 0 ;; esac
 
+# A user prompt = Claude is ACTIVE again. The idle SSE watcher's only job is to
+# re-engage an IDLE agent; while working, THIS injection is the delivery path. So
+# tear the watcher down now — it stays dead through the work turn and is relaunched
+# at the next Stop (block-stop-without-kb-watcher nags), so it is alive ONLY at idle
+# and can only ever wake at a Stop condition. (kb-2os: watcher-idle-only.)
+[ "$EVENT" = "UserPromptSubmit" ] && pkill -f "kb-bridge-watch.sh ${ID}\b" 2>/dev/null
+
 # Fetch unread via the kb-server (cursor-tracked, injects once).
 UNREAD=$(KB_SERVER_URL="$BASE" python3 "$HERE/_bridge_inject_fetch.py" "$ID" "$SESSION_ID" 2>/dev/null)
 [ -z "$UNREAD" ] && exit 0
