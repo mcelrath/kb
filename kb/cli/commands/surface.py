@@ -1,17 +1,18 @@
 """CLI handler for `kb surface` — unified multi-source semantic surfacing.
 
-Composes three existing search methods into a single function-first view:
+Original --query mode composes three existing search methods:
   1. kb.search_python_symbols(query, limit, project)  -> code symbols
   2. kb.search(query, limit, project)                 -> findings (hybrid vector+FTS)
   3. kb._bridge.search(query, limit)                  -> bridge memory messages
 
-ORDER: code symbols first (most actionable for "am I about to reimplement this"),
-then findings, then bridge memory.  Each source is queried independently; a source
-that errors or returns nothing is skipped gracefully.
+New producer modes (kb-xob.1):
+  --prompt   TEXT     what kb-prompt-surface would inject (SIM_FLOOR 0.42, top-3)
+  --analysis TEXT     what kb-analysis-surface would inject (INTENT_RX + SIM_FLOOR 0.62)
+  --file     PATH     what symbol_surface would inject on Read
+  --issues   TEXT     what open_issues_surface would inject (vector+FTS over issues)
+  --bridge   ID|-     what bridge inject would surface on a bridge message (by id or text)
 
-Agent hooks (kb-prompt-surface, symbol_surface, kb-analysis-surface) can migrate
-to call `kb surface --json` instead of their own queries — that rewiring is a
-SEPARATE follow-up; this module only adds the command itself.
+All producer modes support --json for structured output.
 """
 
 from __future__ import annotations
@@ -21,11 +22,10 @@ from typing import Any
 
 
 # ---------------------------------------------------------------------------
-# Source queries — each wrapped to return [] on any error (embed-down tolerant)
+# Source queries for --query mode — each wrapped to return [] on error
 # ---------------------------------------------------------------------------
 
 def _query_symbols(kb: Any, query: str, limit: int, project: str | None, min_sim: float) -> list[dict[str, Any]]:
-    """Search python_symbols_vec; returns [] if table empty or embed down."""
     try:
         raw = kb.search_python_symbols(query, limit=limit, project=project)
         return [r for r in (raw or []) if r.get("similarity", 0) >= min_sim]
@@ -34,7 +34,6 @@ def _query_symbols(kb: Any, query: str, limit: int, project: str | None, min_sim
 
 
 def _query_findings(kb: Any, query: str, limit: int, project: str | None, min_sim: float) -> list[dict[str, Any]]:
-    """Hybrid vector+FTS findings search; returns [] on any error."""
     try:
         raw = kb.search(query, limit=limit, project=project)
         return [r for r in (raw or []) if r.get("similarity", 0) >= min_sim]
@@ -43,7 +42,6 @@ def _query_findings(kb: Any, query: str, limit: int, project: str | None, min_si
 
 
 def _query_bridge(kb: Any, query: str, limit: int, min_sim: float) -> list[dict[str, Any]]:
-    """Bridge message search; returns [] if table empty, embed down, or any error."""
     try:
         raw = kb._bridge.search(query, limit=limit)
         return [r for r in (raw or []) if r.get("similarity", 0) >= min_sim]
@@ -52,11 +50,10 @@ def _query_bridge(kb: Any, query: str, limit: int, min_sim: float) -> list[dict[
 
 
 # ---------------------------------------------------------------------------
-# Formatting helpers
+# Formatting helpers for --query mode
 # ---------------------------------------------------------------------------
 
 def _fmt_symbol(r: dict[str, Any]) -> str:
-    """One-line [CODE] entry."""
     sim = r.get("similarity", 0.0)
     name = r.get("name", "?")
     module = r.get("module", "")
@@ -69,7 +66,6 @@ def _fmt_symbol(r: dict[str, Any]) -> str:
 
 
 def _fmt_finding(r: dict[str, Any]) -> str:
-    """One-line [FIND] entry."""
     sim = r.get("similarity", 0.0)
     fid = r.get("id", "?")
     proj = r.get("project", "")
@@ -79,7 +75,6 @@ def _fmt_finding(r: dict[str, Any]) -> str:
 
 
 def _fmt_bridge(r: dict[str, Any]) -> str:
-    """One-line [BRIDGE] entry."""
     sim = r.get("similarity", 0.0)
     mid = r.get("id", "?")
     sender = r.get("sender", "?")
@@ -88,17 +83,89 @@ def _fmt_bridge(r: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Producer mode helpers
+# ---------------------------------------------------------------------------
+
+def _run_producer_mode(kb: Any, args: Any, mode: str) -> None:
+    """Dispatch to the appropriate produce_* function and render output."""
+    from kb.surface.producers import (
+        produce_prompt, produce_analysis, produce_symbols,
+        produce_open_issues, produce_bridge,
+    )
+
+    as_json: bool = getattr(args, "json", False)
+    project: str | None = getattr(args, "project", None)
+    limit: int = getattr(args, "limit", 8)
+
+    if mode == "prompt":
+        text = args.prompt
+        inj = produce_prompt(text, kb=kb, limit=limit)
+    elif mode == "analysis":
+        text = args.analysis
+        inj = produce_analysis(text, kb=kb, limit=limit)
+    elif mode == "file":
+        inj = produce_symbols(file_path=args.file, project=project, kb=kb)
+    elif mode == "issues":
+        inj = produce_open_issues(args.issues, kb=kb, project=project)
+    elif mode == "bridge":
+        raw = args.bridge
+        # Accept numeric id or raw text (- means read from args.bridge_text or just text)
+        try:
+            msg_id = int(raw)
+            inj = produce_bridge(msg_id=msg_id, kb=kb)
+        except (ValueError, TypeError):
+            inj = produce_bridge(msg_text=raw, kb=kb)
+    else:
+        print(f"Unknown producer mode: {mode}")
+        return
+
+    if as_json:
+        import dataclasses
+        print(json.dumps({
+            "producer": inj.producer,
+            "fired": inj.fired,
+            "context": inj.context,
+            "hits": inj.hits,
+        }, indent=2, default=str))
+        return
+
+    # Human-readable
+    if not inj.fired:
+        print(f"[{mode}] No results fired (no match above threshold)")
+        return
+
+    print(f"--- {mode} producer ---")
+    print(inj.context)
+
+
+# ---------------------------------------------------------------------------
 # Main handler
 # ---------------------------------------------------------------------------
 
 def run_surface(kb: Any, args: Any) -> None:
-    """Handle `kb surface <query>`.
+    """Handle `kb surface`.
 
-    Queries the selected sources (default: all three), merges results in
-    function-first order, and prints a compact tagged list.  --json emits a
-    structured object {symbols:[...], findings:[...], bridge:[...]} for
-    hook/script consumption.
+    Routes to producer mode if any of --prompt/--analysis/--file/--issues/--bridge
+    are set. Falls back to legacy --query mode otherwise.
     """
+    # Detect producer mode
+    if getattr(args, "prompt", None) is not None:
+        _run_producer_mode(kb, args, "prompt")
+        return
+    if getattr(args, "analysis", None) is not None:
+        _run_producer_mode(kb, args, "analysis")
+        return
+    if getattr(args, "file", None) is not None:
+        _run_producer_mode(kb, args, "file")
+        return
+    if getattr(args, "issues", None) is not None:
+        _run_producer_mode(kb, args, "issues")
+        return
+    if getattr(args, "bridge", None) is not None:
+        _run_producer_mode(kb, args, "bridge")
+        return
+
+    # Legacy --query mode
     query: str = args.query
     n: int = args.limit
     project: str | None = getattr(args, "project", None)
@@ -113,10 +180,8 @@ def run_surface(kb: Any, args: Any) -> None:
 
     if "code" in sources:
         symbols = _query_symbols(kb, query, n, project, min_sim)
-
     if "findings" in sources:
         findings = _query_findings(kb, query, n, project, min_sim)
-
     if "bridge" in sources:
         bridge = _query_bridge(kb, query, n, min_sim)
 
@@ -133,11 +198,9 @@ def run_surface(kb: Any, args: Any) -> None:
     if symbols:
         for r in symbols:
             print(_fmt_symbol(r))
-
     if findings:
         for r in findings:
             print(_fmt_finding(r))
-
     if bridge:
         for r in bridge:
             print(_fmt_bridge(r))

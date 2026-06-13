@@ -1109,18 +1109,28 @@ def main():
         "Unified semantic surface: code symbols + findings + bridge memory",
         agent_visible=True,
     )
-    surface_parser.add_argument("query", help="Search query")
-    surface_parser.add_argument("-n", "--limit", type=int, default=5,
-        help="Max results per source (default: 5)")
-    surface_parser.add_argument("-p", "--project", help="Filter findings + symbols by project")
+    # Producer modes (kb-xob.1) — mutually exclusive with legacy --query positional
+    surface_parser.add_argument("query", nargs="?", default=None, help="Search query (legacy --query mode)")
+    surface_parser.add_argument("--prompt", metavar="TEXT",
+        help="What kb-prompt-surface would inject for this user prompt (sim>=0.42, top-3)")
+    surface_parser.add_argument("--analysis", metavar="TEXT",
+        help="What kb-analysis-surface would inject for this assistant text (INTENT_RX + sim>=0.62)")
+    surface_parser.add_argument("--file", metavar="PATH",
+        help="What symbol_surface would inject after Read of this file (RETIRED/NOTATION)")
+    surface_parser.add_argument("--issues", metavar="TEXT",
+        help="What open_issues_surface would inject for this dispatch/bridge prompt text")
+    surface_parser.add_argument("--bridge", metavar="ID_OR_TEXT",
+        help="What bridge-inject would surface for a bridge message id (int) or raw text")
+    surface_parser.add_argument("-n", "--limit", type=int, default=8,
+        help="Max results per source (default: 8)")
+    surface_parser.add_argument("-p", "--project", help="Filter findings + symbols + issues by project")
     surface_parser.add_argument("--sources", default="code,findings,bridge",
         metavar="SOURCES",
-        help="Comma-separated sources to query: code,findings,bridge (default: all three)")
+        help="Comma-separated sources for --query mode: code,findings,bridge (default: all three)")
     surface_parser.add_argument("--min-sim", type=float, default=0.45, dest="min_sim",
-        help="Minimum cosine similarity floor (default: 0.45)")
+        help="Minimum cosine similarity floor for --query mode (default: 0.45)")
     surface_parser.add_argument("--json", action="store_true",
-        help="Output as structured JSON {symbols:[...], findings:[...], bridge:[...]} "
-             "for hook/script consumption")
+        help="Output as structured JSON for hook/script consumption")
 
     args = parser.parse_args()
 
