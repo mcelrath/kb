@@ -9,7 +9,7 @@ SQLite + sqlite-vec powered findings database for tracking successes, failures, 
 - **LLM query expansion** for improved recall (optional)
 - **Supersession chains** for correcting outdated findings
 - **Project/sprint tagging** for organization
-- **MCP server** for Claude Code integration
+- **Claude Code plugin** for findings surfacing + conventions injection (see below)
 - **Notation tracking** for project-specific terminology
 - **Error pattern database** for build error solutions
 
@@ -17,9 +17,9 @@ SQLite + sqlite-vec powered findings database for tracking successes, failures, 
 
 ### Prerequisites
 
-- Python 3.13+
+- Python 3.14+ (3.11–3.13 may fail to import due to builtin-shadowing in class bodies; portability fix tracked)
 - sqlite-vec Python package
-- Access to embedding server (or local sentence-transformers)
+- Access to an embedding server (`kb configure` to point at yours; default expects a local/remote endpoint)
 
 ### Setup
 
@@ -124,58 +124,9 @@ export KB_LLM_URL="http://localhost:9510/completion"
 
 ## Claude Code Integration
 
-### MCP Server Setup
+kb integrates with Claude Code as a **plugin** (see [Claude Code Plugin Install](#claude-code-plugin-install) above) — the hooks auto-inject kb conventions and surface relevant findings on every SessionStart, with no `~/.claude/CLAUDE.md` entries and no permission all-listing required.
 
-Add to `~/.claude.json`:
-
-```json
-{
-  "mcpServers": {
-    "knowledge-base": {
-      "command": "/home/mcelrath/Projects/ai/kb/.venv/bin/python",
-      "args": ["/home/mcelrath/Projects/ai/kb/kb_mcp.py"],
-      "env": {
-        "KB_EMBEDDING_URL": "http://ash:8080/embedding",
-        "KB_EMBEDDING_DIM": "4096",
-        "KB_LLM_URL": "http://tardis:9510/completion"
-      }
-    }
-  }
-}
-```
-
-### Permissions
-
-Add to `~/.claude/settings.json` in the `permissions.allow` array:
-
-```json
-"mcp__knowledge-base__kb_add",
-"mcp__knowledge-base__kb_search",
-"mcp__knowledge-base__kb_correct",
-"mcp__knowledge-base__kb_list",
-"mcp__knowledge-base__kb_get",
-"mcp__knowledge-base__kb_stats",
-"mcp__knowledge-base__kb_doc_add",
-"mcp__knowledge-base__kb_doc_citations",
-"mcp__knowledge-base__kb_doc_cite",
-"mcp__knowledge-base__kb_doc_finding_docs",
-"mcp__knowledge-base__kb_doc_get",
-"mcp__knowledge-base__kb_doc_list",
-"mcp__knowledge-base__kb_doc_search",
-"mcp__knowledge-base__kb_doc_supersede",
-"mcp__knowledge-base__kb_error_add",
-"mcp__knowledge-base__kb_error_get",
-"mcp__knowledge-base__kb_error_link",
-"mcp__knowledge-base__kb_error_list",
-"mcp__knowledge-base__kb_error_search",
-"mcp__knowledge-base__kb_error_solutions",
-"mcp__knowledge-base__kb_error_verify",
-"mcp__knowledge-base__kb_notation_add",
-"mcp__knowledge-base__kb_notation_history",
-"mcp__knowledge-base__kb_notation_list",
-"mcp__knowledge-base__kb_notation_search",
-"mcp__knowledge-base__kb_notation_update"
-```
+> There is **no MCP server**. The earlier `kb_mcp.py` dual-server was removed; all kb operations go through the `kb` CLI (and, inside Claude Code, the plugin hooks). If you find a reference to `kb_mcp.py` or `mcp__knowledge-base__*` tools anywhere, it is stale.
 
 ## CLI Usage
 

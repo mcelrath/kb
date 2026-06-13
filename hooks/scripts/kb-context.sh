@@ -39,7 +39,7 @@ if [[ -z "$PROJECT" ]]; then
 fi
 
 export KB_EMBEDDING_URL="${KB_EMBEDDING_URL:-http://ash:8081/embedding}"
-export KB_EMBEDDING_DIM=4096
+export KB_EMBEDDING_DIM="${KB_EMBEDDING_DIM:-4096}"
 
 # Show last work context if available and recent (within last hour)
 if [[ -f "$CONTEXT_FILE" ]]; then

@@ -657,13 +657,21 @@ def _merge_beads_config(beads_yaml: Path, updates: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _install_systemd_service(port: int = 8765) -> int:
+def _install_systemd_service(port: int = 8765, host: str | None = None) -> int:
     """Install + enable the kb-server systemd --user service. Generates the unit
     with paths resolved to THIS checkout's venv + kb.py (run-from-source), writes
     ~/.config/systemd/user/kb-server.service, daemon-reloads, and enables --now.
-    A reference copy lives in the repo at deploy/kb-server.service."""
+    A reference copy lives in the repo at deploy/kb-server.service.
+
+    Host defaults to 127.0.0.1 (loopback-only — safe: the server is UNAUTHENTICATED).
+    Override with KB_SERVER_HOST (e.g. 0.0.0.0, or a specific LAN IP) ONLY behind a
+    trusted network — that also makes it reachable for the sandboxed SSE bridge
+    watcher (which can't hit host loopback). Until bearer auth lands, a non-loopback
+    bind exposes the bridge read/send + kb read endpoints with no auth."""
+    import os
     import shutil
 
+    host = host or os.environ.get("KB_SERVER_HOST", "127.0.0.1")
     kb_py = Path(__file__).resolve().parent.parent / "kb.py"
     venv_py = kb_py.parent / ".venv" / "bin" / "python"
     python = str(venv_py) if venv_py.exists() else sys.executable
@@ -677,10 +685,7 @@ def _install_systemd_service(port: int = 8765) -> int:
         "After=network.target\n\n"
         "[Service]\n"
         "Type=simple\n"
-        # --host 0.0.0.0 (not 127.0.0.1): the kb SSE bridge watcher runs in the
-        # Bash-tool sandbox, whose namespaced loopback can't reach host 127.0.0.1;
-        # 0.0.0.0 lets it answer on the host interface (ash:8765). (kb-2os.3)
-        f"ExecStart={python} {kb_py} serve --port {port} --host 0.0.0.0\n"
+        f"ExecStart={python} {kb_py} serve --port {port} --host {host}\n"
         "Restart=on-failure\n"
         "RestartSec=5\n"
         "StartLimitIntervalSec=0\n\n"

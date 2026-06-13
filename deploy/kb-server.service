@@ -5,12 +5,14 @@ After=network.target
 
 [Service]
 Type=simple
-# Run from source via the repo venv (Python 3.14). --host 0.0.0.0 (NOT 127.0.0.1):
-# the kb SSE bridge watcher is launched via the Bash tool's run_in_background, so it
-# runs in the command SANDBOX, whose namespaced loopback can't reach the host's
-# 127.0.0.1. Binding 0.0.0.0 lets it answer on the host interface (e.g. ash:8765,
-# sandbox-allowlisted) while harness-side hooks keep using 127.0.0.1. (kb-2os.3)
-ExecStart=/home/mcelrath/Projects/ai/kb/.venv/bin/python /home/mcelrath/Projects/ai/kb/kb.py serve --port 8765 --host 0.0.0.0
+# Run from source via the repo venv (Python 3.14+). --host 127.0.0.1 = loopback-only,
+# the SAFE default: the server is UNAUTHENTICATED, so a non-loopback bind exposes the
+# bridge read/send + kb read endpoints to the LAN with no auth (bearer auth is a
+# planned epic). Override to 0.0.0.0 (or a specific LAN IP) ONLY behind a trusted
+# network — e.g. `kb configure` with KB_SERVER_HOST=0.0.0.0, or edit this line.
+# A non-loopback bind is ALSO what lets the sandboxed kb SSE bridge watcher reach
+# the server (its namespaced loopback can't hit the host's 127.0.0.1). (kb-2os.3)
+ExecStart=/home/mcelrath/Projects/ai/kb/.venv/bin/python /home/mcelrath/Projects/ai/kb/kb.py serve --port 8765 --host 127.0.0.1
 # Clean env: NO KB_EMBEDDING_URL override here, so kb falls back to its default
 # (ash:8081, the healthy qwen3/4096 server). The bridge endpoints don't need
 # embeddings at all; only /kb/search does, and that degrades to FTS if down.

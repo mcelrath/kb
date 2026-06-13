@@ -39,8 +39,17 @@ except Exception:
     def state_path(_name):
         return None
 
-KB_SCRIPT = os.environ.get('KB_SCRIPT', os.path.expanduser('~/Projects/ai/kb/kb.py'))
-KB_VENV = os.environ.get('KB_VENV', os.path.expanduser('~/Projects/ai/kb/.venv/bin/python'))
+# Resolve kb.py + the venv python from the plugin root (portable across machines);
+# fall back to the dev checkout only if CLAUDE_PLUGIN_ROOT isn't set. The plugin
+# venv lives under CLAUDE_PLUGIN_DATA (built by setup-venv.sh); prefer it.
+_PR = os.environ.get('CLAUDE_PLUGIN_ROOT', os.path.expanduser('~/Projects/ai/kb'))
+_PDATA = os.environ.get('CLAUDE_PLUGIN_DATA', '')
+KB_SCRIPT = os.environ.get('KB_SCRIPT', os.path.join(_PR, 'kb.py'))
+KB_VENV = os.environ.get(
+    'KB_VENV',
+    os.path.join(_PDATA, 'venv', 'bin', 'python') if _PDATA
+    else os.path.join(_PR, '.venv', 'bin', 'python'),
+)
 SIM_FLOOR = 0.62          # near-duplicate floor; blocking is intrusive, so be strict
 MAX_SURFACE = 2
 MIN_ASSISTANT_LEN = 200   # need a substantive analysis to match against
