@@ -40,17 +40,18 @@ BASE="${BASE//\/\/localhost:/\/\/ash:}"
 BASE="${BASE//\/\/127.0.0.1:/\/\/ash:}"
 URL="$BASE/bridge/watch?id=$ID"
 
-# --max-time 540 (9 min), NOT an infinite hold. Two facts about run_in_background:
-#   1. Without an explicit harness timeout: param, a bg task gets a default timeout
-#      and is KILLED when it runs past it (signal -> exit 144, "failed") — which
-#      silently drops the agent off the bridge. So this MUST be launched with
-#      timeout:600000 (the 10-min max). Every 144 we saw was a no-param launch;
-#      the timeout:600000 launch held cleanly.
-#   2. Even with timeout:600000 there is a ~10-min hard cap, so --max-time 540 keeps
-#      the hold UNDER it: curl times out CLEANLY at 540s (exit 28 -> this script
-#      exits 0 -> "completed"), and the agent relaunches. Idle agent stays reachable
-#      on a ~9-min cycle and never throws a 144. A real message wakes it instantly.
-curl -sN --no-buffer --max-time 540 "$URL" 2>/dev/null | while IFS= read -r line; do
+# LAUNCH THIS WITH run_in_background:true AND THE timeout PARAMETER OMITTED.
+#   - An OMITTED timeout runs the bg task UNBOUNDED, so the watcher holds for DAYS
+#     (verified: a no-timeout bg task ran well past the 600000ms param-max with no
+#     kill). This is the correct way to run the watcher.
+#   - PASSING timeout:N CAPS the task at N (<=600000ms) and the harness KILLS it at
+#     the cap (exit 144, "failed") — that cap-kill, not the SSE, was the old "144".
+#     So: do NOT pass timeout.
+# --max-time 604800 (1 week) is only a connection-freshness backstop; in practice the
+# watcher exits earlier — on a real message (prints BRIDGE_WAKE, exit 0) or when the
+# server closes the SSE (e.g. kb-server restart; curl exits 0) -> agent relaunches.
+# No trap + no harness cap -> only clean exits, never a 144.
+curl -sN --no-buffer --max-time 604800 "$URL" 2>/dev/null | while IFS= read -r line; do
     case "$line" in
         data:*)
             # SSE data frame = the message JSON.

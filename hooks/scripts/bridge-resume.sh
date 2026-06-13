@@ -21,13 +21,15 @@ BRIDGE PROTOCOL (main session only — sub-agents never run bridge commands):
 - Peer messages are AUTO-INJECTED at every tool call + user prompt via the kb-SERVER
   (GET /bridge/messages, cursor-tracked) — you do NOT need the watcher while WORKING.
 - The kb SSE WATCHER is for IDLE reachability ONLY. Launch it as its OWN Bash call with
-  BOTH run_in_background:true AND timeout:600000 (REQUIRED — without the timeout param the
-  bg task is capped and the watcher dies as 'failed' exit 144):
+  run_in_background:true and NO timeout parameter — OMIT timeout entirely. An omitted
+  timeout runs it UNBOUNDED, so it holds for DAYS. Do NOT pass timeout:N — that caps the
+  bg task at N (<=10min) and the harness kills it ('failed' exit 144); that cap-kill was
+  the old 144 bug, NOT the SSE.
       bash "$HERE/kb-bridge-watch.sh" <your-id>
-  It holds the SSE ~9 min then EXITS CLEANLY (a quiet timeout, EMPTY output) — relaunch
-  ONE when that completion fires. On a real peer message it prints 'BRIDGE_WAKE <json>'
-  and EXITS (the task-exit notification wakes you) → relaunch ONE. Empty output ⇒ quiet
-  timeout; BRIDGE_WAKE ⇒ real message; either way relaunch exactly ONE.
+  It holds the SSE for days until a REAL peer message — then it prints 'BRIDGE_WAKE <json>'
+  and EXITS (the task-exit notification wakes you) → relaunch ONE. It also exits (empty) if
+  the kb-server closes the connection (e.g. a server restart) → relaunch ONE. Relaunch is
+  rare (only on a wake or a server restart), NOT a ~9-min cycle.
   It connects to the kb-server SSE and starts at the tail (only NEW messages wake).
   It IGNORES event:announce frames (peers joining — non-actionable, surfaced by
   injection instead), so it wakes ONLY for real directed/actionable messages. It is
