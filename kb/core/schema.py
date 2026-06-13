@@ -400,6 +400,50 @@ SCHEMA_SQL = """
         counter INTEGER NOT NULL
     );
 
+    -- Bridge message memory (agent-to-agent communication archive)
+    -- All messages stored for thread reconstruction; substantive subset embedded.
+    CREATE TABLE IF NOT EXISTS bridge_messages (
+        id INTEGER PRIMARY KEY,       -- jsonl msg id (natural key)
+        ts TEXT NOT NULL,             -- ISO timestamp from jsonl
+        sender TEXT NOT NULL,
+        recipients TEXT,              -- JSON array (from 'to' field if present)
+        subject TEXT,
+        body TEXT,
+        event_type TEXT,              -- announce/message/reply/ack/recv-noop/watch-noop/etc
+        reply_to INTEGER,             -- thread link (FK to bridge_messages.id, nullable)
+        is_substantive INTEGER NOT NULL DEFAULT 0,  -- 1 if worth embedding/surfacing
+        embedded INTEGER NOT NULL DEFAULT 0,        -- 1 once written to bridge_messages_vec
+        created_at TEXT NOT NULL      -- ingest timestamp
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_bridge_ts ON bridge_messages(ts DESC);
+    CREATE INDEX IF NOT EXISTS idx_bridge_sender ON bridge_messages(sender);
+    CREATE INDEX IF NOT EXISTS idx_bridge_reply_to ON bridge_messages(reply_to);
+    CREATE INDEX IF NOT EXISTS idx_bridge_substantive ON bridge_messages(is_substantive);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS bridge_messages_fts USING fts5(
+        subject, body,
+        content='bridge_messages',
+        content_rowid='id'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS bridge_messages_ai AFTER INSERT ON bridge_messages BEGIN
+        INSERT INTO bridge_messages_fts(rowid, subject, body)
+        VALUES (new.id, new.subject, new.body);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS bridge_messages_ad AFTER DELETE ON bridge_messages BEGIN
+        INSERT INTO bridge_messages_fts(bridge_messages_fts, rowid, subject, body)
+        VALUES ('delete', old.id, old.subject, old.body);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS bridge_messages_au AFTER UPDATE ON bridge_messages BEGIN
+        INSERT INTO bridge_messages_fts(bridge_messages_fts, rowid, subject, body)
+        VALUES ('delete', old.id, old.subject, old.body);
+        INSERT INTO bridge_messages_fts(rowid, subject, body)
+        VALUES (new.id, new.subject, new.body);
+    END;
+
     -- Embedding model metadata (single row; tracks configured model for reembed detection)
     CREATE TABLE IF NOT EXISTS embedding_meta (
         id INTEGER PRIMARY KEY CHECK(id=1),
@@ -506,6 +550,22 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
             embedding float[{embedding_dim}]
         )
     """)
+
+    # Create vector table for bridge messages (substantive subset only)
+    _ = conn.execute(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS bridge_messages_vec USING vec0(
+            id INTEGER PRIMARY KEY,
+            embedding float[{embedding_dim}]
+        )
+    """)
+
+    # Schema migration: bridge_messages table (added 2026-06-13)
+    _bm_cols = {row[1] for row in conn.execute("PRAGMA table_info(bridge_messages)").fetchall()}
+    if not _bm_cols:
+        # Table doesn't exist yet — SCHEMA_SQL above handles creation via CREATE TABLE IF NOT EXISTS;
+        # this branch fires only if the table somehow exists without columns (shouldn't happen).
+        pass
+    # Idempotent: table already created by SCHEMA_SQL executescript above.
 
     # Schema migration: add finding_id column to lean_theorems if not exists
     try:
