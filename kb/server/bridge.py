@@ -17,6 +17,71 @@ from starlette.responses import JSONResponse, StreamingResponse
 # Module-level bridge paths (mirrors kb.py:66-67)
 BRIDGE_MESSAGES_PATH = Path.home() / ".agent-bridge" / "messages.jsonl"
 BRIDGE_AGENTS_PATH = Path.home() / ".agent-bridge" / "agents.json"
+BRIDGE_BIN = Path.home() / ".agent-bridge" / "bridge"
+
+
+async def bridge_send(request: Request) -> JSONResponse:
+    """POST /bridge/send — send a bridge message AS the requesting agent (kb-jij.6).
+
+    JSON body: {"from": <sender-id>, "to": <id|comma-list|[ids]>, "subject": str,
+                "body": str, "reply_to"?: int, "needs_reply"?: bool,
+                "verified_by"?: str, "unverified"?: str}
+
+    Delegates to `~/.agent-bridge/bridge send` (AGENT_ID=<from>) so the jsonl
+    format, id assignment, and cursor stay byte-identical to the CLI sender —
+    the kb-server is the API; the proven binary does the write.
+    """
+    import subprocess
+    from starlette.concurrency import run_in_threadpool
+
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    sender = (data.get("from") or data.get("sender") or "").strip()
+    to = data.get("to")
+    subject = data.get("subject", "")
+    body = data.get("body", "")
+    if not sender or not to or not body:
+        return JSONResponse({"error": "from, to, and body are required"}, status_code=400)
+    to_arg = to if isinstance(to, str) else ",".join(str(t) for t in to)
+    if not BRIDGE_BIN.exists():
+        return JSONResponse({"error": "bridge binary not found"}, status_code=500)
+
+    argv = [str(BRIDGE_BIN), "send", to_arg, str(subject)]
+    if data.get("reply_to"):
+        argv += ["--reply", str(data["reply_to"])]
+    if data.get("needs_reply"):
+        argv += ["--needs-reply"]
+    if data.get("verified_by"):
+        argv += ["--verified-by", str(data["verified_by"])]
+    if data.get("unverified"):
+        argv += ["--unverified", str(data["unverified"])]
+
+    env = dict(os.environ)
+    env["AGENT_ID"] = sender
+    try:
+        proc = await run_in_threadpool(
+            lambda: subprocess.run(
+                argv, input=body, capture_output=True, text=True, timeout=15, env=env
+            )
+        )
+    except Exception as e:
+        return JSONResponse({"error": f"send failed: {e}"}, status_code=500)
+    if proc.returncode != 0:
+        return JSONResponse(
+            {"error": proc.stderr.strip() or "send failed", "stdout": proc.stdout.strip()},
+            status_code=500,
+        )
+    sent_id = None
+    for tok in proc.stdout.split():
+        if tok.startswith("id="):
+            try:
+                sent_id = int(tok[3:])
+            except ValueError:
+                pass
+            break
+    return JSONResponse({"ok": True, "id": sent_id, "stdout": proc.stdout.strip()})
 
 
 def _bridge_msg_for_recipient(msg: dict, recipient: str) -> bool:

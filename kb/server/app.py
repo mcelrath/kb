@@ -10,7 +10,7 @@ from starlette.applications import Starlette
 from starlette.routing import Route, WebSocketRoute
 
 from .api import make_api_handlers
-from .bridge import bridge_messages, bridge_agents, bridge_watch
+from .bridge import bridge_messages, bridge_agents, bridge_watch, bridge_send
 from .live import make_live_handlers
 from .routes import make_web_handlers
 
@@ -33,6 +33,7 @@ def create_app(kb) -> Starlette:
         Route("/bridge/messages", bridge_messages),
         Route("/bridge/agents", bridge_agents),
         Route("/bridge/watch", bridge_watch),
+        Route("/bridge/send", bridge_send, methods=["POST"]),
         Route("/kb/search", kb_search),
         Route("/kb/recent", kb_recent),
         Route("/kb/finding/{id:path}", finding_get),
