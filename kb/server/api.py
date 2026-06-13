@@ -63,6 +63,18 @@ def make_api_handlers(kb):
         results = kb.list_findings(limit=limit)
         return _json(results)
 
+    async def finding_get(request: Request) -> JSONResponse:
+        """GET /kb/finding/{id}
+
+        Returns the FULL finding (incl. evidence) — the list/search endpoints
+        omit evidence (it can be large); fetch the full record by id here.
+        """
+        finding_id = request.path_params["id"]
+        result = kb.get(finding_id)
+        if result is None:
+            return JSONResponse({"error": f"Finding not found: {finding_id}"}, status_code=404)
+        return _json(result)
+
     async def issues_list(request: Request) -> JSONResponse:
         """GET /issues?project=&status=&parent=&limit=N
 
@@ -96,4 +108,4 @@ def make_api_handlers(kb):
             return JSONResponse({"error": f"Issue not found: {issue_id}"}, status_code=404)
         return _json(result)
 
-    return kb_search, kb_recent, issues_list, issue_get
+    return kb_search, kb_recent, finding_get, issues_list, issue_get

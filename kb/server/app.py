@@ -23,7 +23,7 @@ def create_app(kb) -> Starlette:
     """
     index, search_page, finding_page = make_web_handlers(kb)
     ws_updates, on_startup = make_live_handlers(kb)
-    kb_search, kb_recent, issues_list, issue_get = make_api_handlers(kb)
+    kb_search, kb_recent, finding_get, issues_list, issue_get = make_api_handlers(kb)
 
     routes = [
         Route("/", index),
@@ -35,6 +35,7 @@ def create_app(kb) -> Starlette:
         Route("/bridge/watch", bridge_watch),
         Route("/kb/search", kb_search),
         Route("/kb/recent", kb_recent),
+        Route("/kb/finding/{id:path}", finding_get),
         Route("/issues", issues_list),
         Route("/issues/{id:path}", issue_get),
     ]
