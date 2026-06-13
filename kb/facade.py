@@ -32,6 +32,7 @@ from .entities.documents import DocumentsRepository
 from .entities.theorems import TheoremRepository
 from .entities.concepts import ConceptRepository
 from .entities.issues import IssuesRepository
+from .entities.bridge import BridgeMessagesRepository
 
 
 class KnowledgeBase:
@@ -93,6 +94,7 @@ class KnowledgeBase:
     _theorems: TheoremRepository
     _concepts: ConceptRepository
     _issues: IssuesRepository
+    _bridge: BridgeMessagesRepository
 
     def __init__(
         self,
@@ -141,6 +143,7 @@ class KnowledgeBase:
         self._theorems = TheoremRepository(self.conn, self._embedding)
         self._concepts = ConceptRepository(self.conn, self._embedding)
         self._issues = IssuesRepository(self.conn, self._embedding)
+        self._bridge = BridgeMessagesRepository(self.conn, self._embedding)
 
     # =========================================================================
     # Backward-compatible methods delegating to subsystems

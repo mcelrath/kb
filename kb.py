@@ -726,6 +726,7 @@ def main():
     from kb.cli.commands import admin as _cmd_admin
     from kb.cli.commands import maintenance as _cmd_maintenance
     from kb.cli.commands import ingest as _cmd_ingest
+    from kb.cli.commands import bridge as _cmd_bridge
     from kb.cli.commands import lean as _cmd_lean
     from kb.cli.commands import serve as _cmd_serve
     from kb.cli.commands import misc as _cmd_misc
@@ -924,6 +925,31 @@ def main():
         help="Specific files to process (overrides --root glob)")
     ingest_tex_parser.add_argument("--project", default="algebraic-genesis")
     ingest_tex_parser.add_argument("--dry-run", action="store_true")
+
+    # Bridge command group: ingest/search/promote agent bridge messages
+    bridge_parser = _add_parser("bridge", "Ingest/search/promote agent bridge messages",
+                                agent_visible=True)
+    bridge_sub = bridge_parser.add_subparsers(dest="bridge_cmd")
+
+    bridge_ingest_parser = bridge_sub.add_parser("ingest",
+        help="Ingest ~/.agent-bridge/messages.jsonl into bridge_messages + embed substantive subset")
+    bridge_ingest_parser.add_argument("--jsonl", help="Bridge messages jsonl (default: ~/.agent-bridge/messages.jsonl)")
+    bridge_ingest_parser.add_argument("--since-id", type=int, default=0, metavar="N",
+        help="Only process messages with id > N (incremental; default 0 = all)")
+    bridge_ingest_parser.add_argument("--embed-batch", type=int, default=200, metavar="N",
+        help="Embed up to N pending substantive messages this run (default 200)")
+
+    bridge_search_parser = bridge_sub.add_parser("search",
+        help="Hybrid vector+FTS search over substantive bridge messages")
+    bridge_search_parser.add_argument("query", help="Search query")
+    bridge_search_parser.add_argument("-n", "--limit", type=int, default=10, help="Max results")
+    bridge_search_parser.add_argument("--semantic", action="store_true",
+        help="(accepted for compatibility; search is already hybrid vector+FTS)")
+
+    bridge_promote_parser = bridge_sub.add_parser("promote",
+        help="Promote a bridge message into a first-class kb finding")
+    bridge_promote_parser.add_argument("id", help="bridge_messages id to promote")
+    bridge_promote_parser.add_argument("-p", "--project", help="Project tag for the new finding")
 
     # Reconcile command
     reconcile_parser = _add_parser("reconcile", "Reconcile KB with source document", user_visible=False)
@@ -1150,6 +1176,7 @@ def main():
         "related": lambda kb, args: _cmd_maintenance.run_related(
             kb, args, _fmt_one_line, format_finding),
         "ingest": lambda kb, args: _cmd_ingest.run_ingest(kb, args, ingest_parser),
+        "bridge": lambda kb, args: _cmd_bridge.run_bridge(kb, args, bridge_parser),
         "reconcile": _cmd_misc.run_reconcile,
         "notation-audit": _cmd_misc.run_notation_audit,
         "lean-verify": _cmd_lean.run_lean_verify,
