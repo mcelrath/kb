@@ -677,7 +677,10 @@ def _install_systemd_service(port: int = 8765) -> int:
         "After=network.target\n\n"
         "[Service]\n"
         "Type=simple\n"
-        f"ExecStart={python} {kb_py} serve --port {port} --host 127.0.0.1\n"
+        # --host 0.0.0.0 (not 127.0.0.1): the kb SSE bridge watcher runs in the
+        # Bash-tool sandbox, whose namespaced loopback can't reach host 127.0.0.1;
+        # 0.0.0.0 lets it answer on the host interface (ash:8765). (kb-2os.3)
+        f"ExecStart={python} {kb_py} serve --port {port} --host 0.0.0.0\n"
         "Restart=on-failure\n"
         "RestartSec=5\n"
         "StartLimitIntervalSec=0\n\n"
