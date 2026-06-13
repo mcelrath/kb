@@ -108,4 +108,55 @@ def make_api_handlers(kb):
             return JSONResponse({"error": f"Issue not found: {issue_id}"}, status_code=404)
         return _json(result)
 
-    return kb_search, kb_recent, finding_get, issues_list, issue_get
+    async def moim(request: Request):
+        """GET /moim?query=<text>&recipient=<id>&since=<cursor>&limit=N
+
+        Returns plain-text context for injection into agent MOIM.
+        Combines unread bridge messages and kb findings.
+        Designed as a ContextProvider target for goose.
+        """
+        from starlette.responses import PlainTextResponse
+        from .bridge import _parse_bridge_messages
+
+        recipient = request.query_params.get("recipient", "goose").strip()
+        query = request.query_params.get("query", "").strip()
+        raw_since = request.query_params.get("since", "").strip()
+        try:
+            since: int | None = int(raw_since) if raw_since else None
+        except ValueError:
+            since = None
+        try:
+            limit = int(request.query_params.get("limit", "5"))
+        except ValueError:
+            limit = 5
+        limit = max(1, min(limit, 50))
+
+        parts = []
+
+        msgs = _parse_bridge_messages(recipient, limit=50, last_event_id=since)
+        if msgs:
+            lines = []
+            for m in msgs:
+                reply = f" (reply to #{m['reply_to']})" if m.get("reply_to") else ""
+                lines.append(
+                    f"[bridge #{m['id']}{reply}] from {m['sender']} at {m.get('ts','')}: "
+                    f"{m['subject']}\n{m['body']}"
+                )
+            parts.append("Unread peer messages via agent-bridge:\n" + "\n\n".join(lines))
+
+        if query:
+            findings = kb.search(query, limit=limit)
+        else:
+            findings = kb.list_findings(limit=limit)
+        if findings:
+            lines = []
+            for f in findings:
+                proj = f" [{f['project']}]" if f.get("project") else ""
+                lines.append(f"[kb {f['id']}{proj}] {f.get('summary', '')}\n{f.get('content', '')}")
+            parts.append("Relevant knowledge base findings:\n" + "\n\n".join(lines))
+
+        if not parts:
+            return PlainTextResponse("")
+        return PlainTextResponse("\n\n".join(parts))
+
+    return kb_search, kb_recent, finding_get, issues_list, issue_get, moim

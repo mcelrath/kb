@@ -131,10 +131,11 @@ def _parse_bridge_messages(
 
 
 async def bridge_messages(request: Request) -> JSONResponse:
-    """GET /bridge/messages?recipient=<id>&limit=N
+    """GET /bridge/messages?recipient=<id>&limit=N&since=<cursor>
 
     Returns a JSON array of bridge messages addressed to <recipient>
     (or 'all' broadcasts), newest-last. Default limit=50.
+    Optional ?since=N returns only messages with id > N.
     """
     recipient = request.query_params.get("recipient", "").strip() or None
     try:
@@ -142,7 +143,12 @@ async def bridge_messages(request: Request) -> JSONResponse:
     except ValueError:
         limit = 50
     limit = max(1, min(limit, 500))
-    msgs = _parse_bridge_messages(recipient, limit)
+    raw_since = request.query_params.get("since", "").strip()
+    try:
+        since: int | None = int(raw_since) if raw_since else None
+    except ValueError:
+        since = None
+    msgs = _parse_bridge_messages(recipient, limit, last_event_id=since)
     return JSONResponse(msgs)
 
 
