@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -84,14 +85,26 @@ from typing import Any
 # Backend resolution
 # ---------------------------------------------------------------------------
 
+
+def _default_backend() -> str:
+    """The backend to use when nothing explicit is configured.
+
+    bd-AWARE: 'dolt' when the `bd` binary is on PATH (this is an existing
+    bd/dolt host — keep its projects on dolt, zero disruption), else 'kb'
+    (a fresh host with no bd/dolt — use the self-contained kb-native backend
+    so tracking works with no external dependency). An explicit `backend:` in
+    .beads/config.yaml ALWAYS wins over this. Override with KBT_BACKEND.
+    """
+    return "dolt" if shutil.which("bd") else "kb"
+
 def resolve_backend(cwd: Path | None = None) -> str:
     """Walk up from cwd to find .beads/config.yaml; return backend ('kb' or 'dolt').
 
     Priority (highest first):
     1. KBT_BACKEND env var (intended for tests; logged to stderr when it fires)
     2. .beads/config.yaml `backend:` key found by walking up from cwd
-    3. Default: 'dolt' (no .beads/ found — matches current behaviour for
-       not-yet-migrated projects)
+    3. Default (no .beads/ found): _default_backend() — 'dolt' if `bd` is on
+       PATH (existing bd host), else 'kb' (fresh host, no external dep).
 
     Returns 'kb' or 'dolt'.
     """
@@ -116,8 +129,8 @@ def resolve_backend(cwd: Path | None = None) -> str:
             return backend
         parent = candidate.parent
         if parent == candidate:
-            # Reached filesystem root, no .beads/ found → default dolt
-            return "dolt"
+            # Reached filesystem root, no .beads/ found → bd-aware default.
+            return _default_backend()
         candidate = parent
 
 
@@ -128,7 +141,8 @@ def _read_backend_from_config(config_path: Path) -> str:
         with open(config_path) as f:
             data = yaml.safe_load(f)
         if isinstance(data, dict):
-            return str(data.get("backend", "dolt")).lower()
+            val = data.get("backend")
+            return str(val).lower() if val else _default_backend()
     except Exception:
         # yaml unavailable or parse error → try simple line scan
         try:
@@ -137,10 +151,10 @@ def _read_backend_from_config(config_path: Path) -> str:
                 line = line.strip()
                 if line.startswith("backend:"):
                     val = line[len("backend:"):].strip().strip("\"'")
-                    return val.lower() if val else "dolt"
+                    return val.lower() if val else _default_backend()
         except Exception:
             pass
-    return "dolt"
+    return _default_backend()
 
 
 # ---------------------------------------------------------------------------
