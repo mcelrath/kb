@@ -9,6 +9,7 @@ Usage:
 from starlette.applications import Starlette
 from starlette.routing import Route, WebSocketRoute
 
+from .api import make_api_handlers
 from .bridge import bridge_messages, bridge_agents, bridge_watch
 from .live import make_live_handlers
 from .routes import make_web_handlers
@@ -22,6 +23,7 @@ def create_app(kb) -> Starlette:
     """
     index, search_page, finding_page = make_web_handlers(kb)
     ws_updates, on_startup = make_live_handlers(kb)
+    kb_search, kb_recent, issues_list, issue_get = make_api_handlers(kb)
 
     routes = [
         Route("/", index),
@@ -31,5 +33,9 @@ def create_app(kb) -> Starlette:
         Route("/bridge/messages", bridge_messages),
         Route("/bridge/agents", bridge_agents),
         Route("/bridge/watch", bridge_watch),
+        Route("/kb/search", kb_search),
+        Route("/kb/recent", kb_recent),
+        Route("/issues", issues_list),
+        Route("/issues/{id:path}", issue_get),
     ]
     return Starlette(routes=routes, on_startup=[on_startup])
