@@ -2060,6 +2060,10 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         kb_refs: list[str] | None = None,
         also_in_modules: list[dict[str, Any]] | None = None,
         project: str | None = None,
+        parent_impl: str | None = None,
+        visibility: str | None = None,
+        is_signature_only: bool = False,
+        node_type: str | None = None,
     ) -> dict[str, Any]:
         """Add or update a Python symbol in the index.
 
@@ -2098,11 +2102,14 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
                 UPDATE python_symbols SET kind=?, signature=?, status=?, is_lru_cached=?,
                     frame_hint=?, redirect_to=?, docstring_summary=?, lean_citations=?,
                     kb_refs=?, also_in_modules=?, file=?, line=?, project=?,
-                    updated_at=?, embedding=?, content_hash=?, symbol_id=?
+                    updated_at=?, embedding=?, content_hash=?, symbol_id=?,
+                    parent_impl=?, visibility=?, is_signature_only=?, node_type=?
                 WHERE id=?
             """, (kind, signature, status, int(is_lru_cached), frame_hint, redirect_to,
                   docstring_summary, lean_json, kb_json, also_json, file, line, project,
-                  now, embedding, content_hash, symbol_id, sym_id))
+                  now, embedding, content_hash, symbol_id,
+                  parent_impl, visibility, int(is_signature_only), node_type,
+                  sym_id))
             self.conn.execute("DELETE FROM python_symbols_vec WHERE id = ?", (sym_id,))
             self.conn.execute(
                 "INSERT INTO python_symbols_vec (id, embedding) VALUES (?, ?)",
@@ -2117,17 +2124,27 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
                 (id, name, kind, module, signature, status, is_lru_cached,
                  frame_hint, redirect_to, docstring_summary, lean_citations,
                  kb_refs, also_in_modules, file, line, project, created_at, updated_at,
-                 embedding, content_hash, symbol_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 embedding, content_hash, symbol_id,
+                 parent_impl, visibility, is_signature_only, node_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?)
         """, (sym_id, name, kind, module, signature, status, int(is_lru_cached),
               frame_hint, redirect_to, docstring_summary, lean_json, kb_json, also_json,
-              file, line, project, now, now, embedding, content_hash, symbol_id))
+              file, line, project, now, now, embedding, content_hash, symbol_id,
+              parent_impl, visibility, int(is_signature_only), node_type))
         self.conn.execute(
             "INSERT INTO python_symbols_vec (id, embedding) VALUES (?, ?)",
             (sym_id, embedding),
         )
         self.conn.commit()
-        return {"id": sym_id, "is_new": True}
+        return {
+            "id": sym_id,
+            "is_new": True,
+            "parent_impl": parent_impl,
+            "visibility": visibility,
+            "is_signature_only": is_signature_only,
+            "node_type": node_type,
+        }
 
     def prune_python_symbols_for_file(
         self,
