@@ -4,24 +4,24 @@ Knowledge Base Constants
 Centralized definitions for finding types, notation domains, and content validation patterns.
 """
 
-import os
 from pathlib import Path
 
-# Default paths
-# KB_DB env overrides the db location (whole kb system: findings, issues, and the
-# surfacing hooks that shell `kb`/`kbt`). Used for isolated pilot dbs so a test
-# project does not read/write the production ~/.cache/kb/knowledge.db.
-DEFAULT_DB_PATH = Path(os.environ.get("KB_DB") or (Path.home() / ".cache" / "kb" / "knowledge.db"))
+# Default paths and embedding/LLM configuration sourced from the single config
+# resolver (kb.config). Using force_reload=True so that when this module is
+# reloaded (e.g. in tests that patch os.environ), the resolver re-reads env vars
+# rather than returning a stale singleton.
+from .config import load_config as _load_config
 
-# Embedding configuration (REQUIRED - no local fallback)
-DEFAULT_EMBEDDING_URL = os.environ.get("KB_EMBEDDING_URL", "http://ash:8081/embedding")
-DEFAULT_EMBEDDING_DIM = int(os.environ.get("KB_EMBEDDING_DIM", "4096"))
-DEFAULT_EMBEDDING_FORMAT = os.environ.get("KB_EMBEDDING_FORMAT", "llamacpp")
-DEFAULT_EMBEDDING_MODEL = os.environ.get("KB_EMBEDDING_MODEL", "")
-DEFAULT_EMBEDDING_KEY = os.environ.get("KB_EMBEDDING_KEY", "")
+_cfg = _load_config(force_reload=True)
 
-# LLM configuration for query expansion
-DEFAULT_LLM_URL = os.environ.get("KB_LLM_URL", "http://tardis:9510/completion")
+# Keep the same names so all existing importers continue to work unchanged.
+DEFAULT_DB_PATH: Path = _cfg.db_path
+DEFAULT_EMBEDDING_URL: str = _cfg.embedding_url
+DEFAULT_EMBEDDING_DIM: int = _cfg.embedding_dim
+DEFAULT_EMBEDDING_FORMAT: str = _cfg.embedding_format
+DEFAULT_EMBEDDING_MODEL: str = _cfg.embedding_model
+DEFAULT_EMBEDDING_KEY: str = _cfg.embedding_key
+DEFAULT_LLM_URL: str = _cfg.llm_url
 
 # Finding types
 FINDING_TYPES = ["success", "failure", "experiment", "discovery", "correction"]

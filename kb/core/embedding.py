@@ -13,11 +13,12 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from ..constants import (
-    DEFAULT_EMBEDDING_URL, DEFAULT_EMBEDDING_DIM,
-    DEFAULT_EMBEDDING_FORMAT, DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_KEY,
-)
+from ..config import load_config as _load_config
 from ..validation import serialize_f32, l2_normalize
+
+# Force-reload on module (re-)import so that tests patching os.environ and then
+# reloading kb.core.embedding get fresh config values rather than a stale singleton.
+_load_config(force_reload=True)
 
 
 class EmbeddingService:
@@ -45,21 +46,22 @@ class EmbeddingService:
 
     def __init__(
         self,
-        embedding_url: str = DEFAULT_EMBEDDING_URL,
-        embedding_dim: int = DEFAULT_EMBEDDING_DIM,
+        embedding_url: str | None = None,
+        embedding_dim: int | None = None,
         cache_max: int = 500,
-        embedding_format: str = DEFAULT_EMBEDDING_FORMAT,
-        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
-        embedding_key: str = DEFAULT_EMBEDDING_KEY,
+        embedding_format: str | None = None,
+        embedding_model: str | None = None,
+        embedding_key: str | None = None,
     ):
-        self.embedding_url = embedding_url
-        self.embedding_dim = embedding_dim
+        cfg = _load_config()
+        self.embedding_url = embedding_url if embedding_url is not None else cfg.embedding_url
+        self.embedding_dim = embedding_dim if embedding_dim is not None else cfg.embedding_dim
         self._cache_max = cache_max
         self._cache = {}
         self._cache_order = []
-        self.embedding_format = embedding_format
-        self.embedding_model = embedding_model
-        self.embedding_key = embedding_key
+        self.embedding_format = embedding_format if embedding_format is not None else cfg.embedding_format
+        self.embedding_model = embedding_model if embedding_model is not None else cfg.embedding_model
+        self.embedding_key = embedding_key if embedding_key is not None else cfg.embedding_key
 
     def _cache_get(self, text_hash: str) -> list[float] | None:
         """Get embedding from cache, updating LRU order."""

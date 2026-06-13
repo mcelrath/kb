@@ -241,6 +241,46 @@ def _write_secret_key(
 
 
 # ---------------------------------------------------------------------------
+# config.toml writer (source of truth for non-secret embedding config)
+# ---------------------------------------------------------------------------
+
+
+def _write_config_toml(
+    fmt: str,
+    url: str,
+    model: str,
+    dim: int,
+    summary_mode: str,
+    toml_path: Path | None = None,
+) -> None:
+    """Write non-secret embedding + LLM config to ~/.config/kb/config.toml.
+
+    Secret KB_EMBEDDING_KEY is intentionally excluded — it stays in
+    settings.local.json (gitignore-guarded).
+
+    The toml is the authoritative persistent config read by kb.config.load_config().
+    settings.json env stays in sync so the Claude Code harness also sees the values.
+    """
+    if toml_path is None:
+        toml_path = Path.home() / ".config" / "kb" / "config.toml"
+    toml_path.parent.mkdir(parents=True, exist_ok=True)
+
+    content = (
+        "# kb configuration — written by `kb configure`.\n"
+        "# Non-secret values only; KB_EMBEDDING_KEY lives in settings.local.json.\n\n"
+        "[embedding]\n"
+        f'url    = "{url}"\n'
+        f"dim    = {dim}\n"
+        f'format = "{fmt}"\n'
+        f'model  = "{model}"\n\n'
+        "[llm]\n"
+        f'summary_mode = "{summary_mode}"\n'
+    )
+    toml_path.write_text(content)
+    print(f"Written config.toml to {toml_path}")
+
+
+# ---------------------------------------------------------------------------
 # embedding_meta seed / reembed-prompt helper
 # ---------------------------------------------------------------------------
 
@@ -466,7 +506,14 @@ def run_global_configure(
             resolved_key = raw
 
     # ------------------------------------------------------------------
-    # 4. Write non-secret env to settings.json (MERGE)
+    # 4a. Write non-secret config to ~/.config/kb/config.toml (source of truth)
+    # ------------------------------------------------------------------
+    _write_config_toml(resolved_fmt, resolved_url, resolved_model, resolved_dim, resolved_summary)
+
+    # ------------------------------------------------------------------
+    # 4b. Write non-secret env to settings.json (MERGE) — kept so the
+    #     harness env block stays in sync for processes that don't load
+    #     the toml directly.
     # ------------------------------------------------------------------
     settings_path = config_dir / "settings.json"
     env_updates: dict[str, str] = {

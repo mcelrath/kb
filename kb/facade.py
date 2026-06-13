@@ -14,11 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from .config import load_config as _load_config
 from .constants import (
-    DEFAULT_DB_PATH,
-    DEFAULT_EMBEDDING_URL,
-    DEFAULT_EMBEDDING_DIM,
-    DEFAULT_LLM_URL,
     FINDING_TYPES,
     NOTATION_DOMAINS,
     GREEK_MEANINGS,
@@ -99,23 +96,28 @@ class KnowledgeBase:
 
     def __init__(
         self,
-        db_path: Path = DEFAULT_DB_PATH,
-        embedding_url: str = DEFAULT_EMBEDDING_URL,
-        embedding_dim: int = DEFAULT_EMBEDDING_DIM,
+        db_path: Path | None = None,
+        embedding_url: str | None = None,
+        embedding_dim: int | None = None,
     ):
-        self.db_path = Path(db_path)
+        cfg = _load_config()
+        resolved_db_path = Path(db_path) if db_path is not None else cfg.db_path
+        resolved_embedding_url = embedding_url if embedding_url is not None else cfg.embedding_url
+        resolved_embedding_dim = embedding_dim if embedding_dim is not None else cfg.embedding_dim
+
+        self.db_path = resolved_db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.embedding_url = embedding_url
-        self.embedding_dim = embedding_dim
+        self.embedding_url = resolved_embedding_url
+        self.embedding_dim = resolved_embedding_dim
 
         # Initialize database connection
-        db_conn = DatabaseConnection(db_path, embedding_dim)
+        db_conn = DatabaseConnection(resolved_db_path, resolved_embedding_dim)
         self.conn = db_conn.conn
-        init_schema(self.conn, embedding_dim)
+        init_schema(self.conn, resolved_embedding_dim)
 
         # Initialize subsystems
-        self._embedding = EmbeddingService(embedding_url, embedding_dim)
-        self._llm = LLMClient(DEFAULT_LLM_URL)
+        self._embedding = EmbeddingService(resolved_embedding_url, resolved_embedding_dim)
+        self._llm = LLMClient(cfg.llm_url)
         self._analyzer = ContentAnalyzer(self._llm)
         self._search = HybridSearch(
             self.conn,
@@ -1403,33 +1405,55 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         return hashlib.sha256(raw.encode()).hexdigest()
 
     def _ensure_embedding_meta(self) -> None:
-        """Seed embedding_meta on first run; no-op if row already exists.
+        """Seed embedding_meta on first run; warn on signature drift if row exists.
 
-        If no row exists, this means either a brand-new DB or an existing DB
-        that predates embedding_meta. In both cases we assume the current config
-        matches whatever was used (safe: existing vectors were made with the same
-        server).  We silently seed and commit; no STOP, no mismatch.
+        If no row exists (brand-new DB or pre-migration DB), seed silently —
+        we assume the current config matches whatever was used.
+
+        If a row already exists but the configured signature differs, emit a
+        one-line stderr warning so the drift is never silent (outage prevention).
+        Does NOT block init: the warning points the operator to `kb reembed`.
         """
+        import sys as _sys
         row = self.conn.execute(
-            "SELECT id FROM embedding_meta WHERE id = 1"
+            "SELECT id, signature, dim FROM embedding_meta WHERE id = 1"
         ).fetchone()
-        if row is not None:
-            return  # already seeded
 
         sig = self._embedding_signature()
         now = datetime.now().isoformat()
-        self.conn.execute("""
-            INSERT INTO embedding_meta (id, format, url, model, dim, signature, updated_at)
-            VALUES (1, ?, ?, ?, ?, ?, ?)
-        """, (
-            self._embedding.embedding_format,
-            self._embedding.embedding_url,
-            self._embedding.embedding_model,
-            self._embedding.embedding_dim,
-            sig,
-            now,
-        ))
-        self.conn.commit()
+
+        if row is None:
+            # First-time seed: no prior vectors, no drift possible.
+            self.conn.execute("""
+                INSERT INTO embedding_meta (id, format, url, model, dim, signature, updated_at)
+                VALUES (1, ?, ?, ?, ?, ?, ?)
+            """, (
+                self._embedding.embedding_format,
+                self._embedding.embedding_url,
+                self._embedding.embedding_model,
+                self._embedding.embedding_dim,
+                sig,
+                now,
+            ))
+            self.conn.commit()
+            return
+
+        stored_sig = row["signature"] if isinstance(row, dict) else row[1]
+        stored_dim = row["dim"] if isinstance(row, dict) else row[2]
+        if stored_sig != sig:
+            if stored_dim != self._embedding.embedding_dim:
+                print(
+                    f"kb WARNING: embedding dim changed "
+                    f"stored={stored_dim} configured={self._embedding.embedding_dim}. "
+                    "Run: kb reembed --force",
+                    file=_sys.stderr,
+                )
+            else:
+                print(
+                    f"kb WARNING: embedding model/format changed (dim={self._embedding.embedding_dim} unchanged). "
+                    "Run: kb reembed --force",
+                    file=_sys.stderr,
+                )
 
     def embedding_status(self) -> dict[str, Any]:
         """Return embedding config status: stored vs configured + verdict.
