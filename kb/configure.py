@@ -815,12 +815,47 @@ def _install_systemd_service(port: int = 8765, host: str | None = None) -> int:
     return 0
 
 
+def _install_wrappers(target_dir: Path | None = None) -> int:
+    """Install `kb` and `kbt` wrapper scripts on PATH, pointing at THIS checkout's
+    venv python + kb.py/kbt (run-from-source). Mirrors the README install step 4.
+
+    Both are needed on a fresh host: agents and the git/lifecycle hooks invoke
+    `kbt` BY NAME, so without it on PATH a host that also lacks `bd` has no
+    tracker entry point. Idempotent (overwrites), chmod +x, warns if target_dir
+    is not on PATH."""
+    import os
+
+    repo = Path(__file__).resolve().parent.parent
+    venv_py = repo / ".venv" / "bin" / "python"
+    python = str(venv_py) if venv_py.exists() else sys.executable
+    target = target_dir or (Path.home() / ".local" / "bin")
+    target.mkdir(parents=True, exist_ok=True)
+
+    for name, entry in (("kb", repo / "kb.py"), ("kbt", repo / "kbt")):
+        path = target / name
+        path.write_text(f'#!/bin/bash\nexec {python} {entry} "$@"\n')
+        path.chmod(0o755)
+        print(f"Wrote {path}")
+
+    path_env = os.environ.get("PATH", "")
+    if str(target) not in path_env.split(os.pathsep):
+        print(f"NOTE: {target} is not on PATH — add it so `kb`/`kbt` resolve by name.")
+    return 0
+
+
 def configure_main(args: Any) -> int:  # noqa: ANN401
     """Dispatch from kb.py argparse namespace. Returns exit code."""
     from kb.constants import DEFAULT_DB_PATH
 
+    if getattr(args, "install_wrappers", False):
+        return _install_wrappers()
+
     if getattr(args, "install_server", False):
-        return _install_systemd_service(getattr(args, "server_port", 8765))
+        rc = _install_systemd_service(getattr(args, "server_port", 8765))
+        # The server install is the "finish setup" step; ship the wrappers too so
+        # `kbt` (agents/hooks call it by name) lands on PATH in the same motion.
+        _install_wrappers()
+        return rc
 
     config_dir = getattr(args, "config_dir", None)
     if config_dir is None:

@@ -1096,6 +1096,10 @@ def main():
         "--server-port", type=int, default=8765,
         help="(--install-server) port for the kb-server service (default: 8765)"
     )
+    configure_parser.add_argument(
+        "--install-wrappers", action="store_true",
+        help="Install kb + kbt wrapper scripts on PATH (~/.local/bin); agents/hooks call kbt by name"
+    )
 
     # queue-defer: set a defer_reason on a lean_work_queue row
     queue_defer_parser = _add_parser(
