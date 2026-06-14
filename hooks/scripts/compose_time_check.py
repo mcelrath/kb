@@ -488,7 +488,7 @@ def query_route_to_tip(tool_name: str, ti: dict, prompt_text: str) -> list[str]:
         return []
     return ['[ROUTE-TO-TIP: dispatch contains proof-writing vocabulary; tip owns proof work. '
             'File a routing-deposit in lean_work_queue instead of implementing inline. '
-            'If tip is offline, file a bd task with class=proof-work.]']
+            'If tip is offline, file a kbt task with class=proof-work.]']
 
 
 
