@@ -25,7 +25,7 @@ async def bridge_send(request: Request) -> JSONResponse:
 
     JSON body: {"from": <sender-id>, "to": <id|comma-list|[ids]>, "subject": str,
                 "body": str, "reply_to"?: int, "needs_reply"?: bool,
-                "verified_by"?: str, "unverified"?: str}
+                "supersedes"?: int, "verified_by"?: str, "unverified"?: str}
 
     Delegates to `~/.agent-bridge/bridge send` (AGENT_ID=<from>) so the jsonl
     format, id assignment, and cursor stay byte-identical to the CLI sender —
@@ -51,6 +51,12 @@ async def bridge_send(request: Request) -> JSONResponse:
     argv = [str(BRIDGE_BIN), "send", to_arg, str(subject)]
     if data.get("reply_to"):
         argv += ["--reply", str(data["reply_to"])]
+    if data.get("supersedes"):
+        # Retract/obsolete an earlier message (e.g. clear your own outbound
+        # needs-reply). The read-side hooks already honor `supersedes`; this
+        # stops /bridge/send from silently dropping it on write (kb-2os bug,
+        # reported by mes-researcher #5695).
+        argv += ["--supersedes", str(data["supersedes"])]
     if data.get("needs_reply"):
         argv += ["--needs-reply"]
     if data.get("verified_by"):
