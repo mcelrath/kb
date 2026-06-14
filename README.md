@@ -1,172 +1,187 @@
 # Knowledge Base (kb)
 
-SQLite + sqlite-vec powered findings database for tracking successes, failures, experiments, and discoveries across projects.
+SQLite + sqlite-vec powered findings database for tracking successes, failures,
+experiments, and discoveries across projects — with a Claude Code plugin that
+surfaces relevant findings and injects kb conventions automatically, plus `kbt`,
+a kb-native issue tracker, and a small HTTP/SSE server (`kb-server`) used by the
+plugin and an agent message bridge.
 
 ## Features
 
-- **Vector similarity search** using sqlite-vec for semantic retrieval
-- **Full-text search** fallback via SQLite FTS5
-- **LLM query expansion** for improved recall (optional)
-- **Supersession chains** for correcting outdated findings
-- **Project/sprint tagging** for organization
-- **Claude Code plugin** for findings surfacing + conventions injection (see below)
-- **Notation tracking** for project-specific terminology
-- **Error pattern database** for build error solutions
+- **Vector similarity search** via sqlite-vec (semantic retrieval), with **FTS5**
+  full-text fallback when the embedding server is unreachable.
+- **LLM query expansion** (`--expand`) for improved recall (optional).
+- **Supersession chains** for correcting outdated findings.
+- **Claude Code plugin** — findings surfacing + conventions injection on every
+  SessionStart, no `CLAUDE.md` edits or permission all-listing required.
+- **`kbt` issue tracker** — kb-native, bd-compatible CLI; no external DB on a
+  fresh host.
+- **`kb-server`** — HTTP/SSE endpoints (kb/issue reads + an agent message bridge).
 
-## Installation
+There is **no MCP server** — all kb operations go through the `kb` CLI (and, inside
+Claude Code, the plugin hooks). References to `kb_mcp.py` or `mcp__knowledge-base__*`
+tools are stale.
 
-### Prerequisites
+## Prerequisites
 
-- Python 3.14+ (3.11–3.13 may fail to import due to builtin-shadowing in class bodies; portability fix tracked)
-- sqlite-vec Python package
-- Access to an embedding server (`kb configure` to point at yours; default expects a local/remote endpoint)
+- **Python 3.14+** (3.11–3.13 may fail to import due to builtin-shadowing in class
+  bodies; portability fix tracked).
+- **An embedding endpoint.** kb does not run a local embedding model — it calls a
+  remote endpoint (llama.cpp `/embedding`, or any OpenAI-compatible `/v1/embeddings`
+  such as **Ollama**). For a CPU box: `ollama pull qwen3-embedding:0.6b` (1024-dim).
+- Optional: an **LLM completion endpoint** for `--expand` query expansion and
+  `local-llm` summaries (kb degrades gracefully without it).
+- [`uv`](https://github.com/astral-sh/uv) recommended for the venv.
 
-### Setup
-
-```bash
-cd ~/Projects/ai/kb
-
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
-pip install sqlite-vec
-
-# Optional: for local embeddings without remote server
-pip install sentence-transformers
-```
-
-### CLI Wrapper
-
-Create `~/.local/bin/kb`:
+## Install
 
 ```bash
-#!/bin/bash
-exec /home/mcelrath/Projects/ai/kb/.venv/bin/python /home/mcelrath/Projects/ai/kb/kb.py "$@"
-```
+# 1. Clone, build the venv, install deps
+git clone <kb-repo-url> kb && cd kb
+uv venv --python python3.14 --seed
+.venv/bin/pip install -r requirements.txt
 
-```bash
+# 2. Configure embedding + LLM endpoints (interactive: health-checks both, and
+#    offers to install + start the kb-server systemd unit at the end)
+.venv/bin/python kb.py configure
+#   …or non-interactive, e.g. Ollama on a CPU box:
+.venv/bin/python kb.py configure \
+  --provider ollama --model qwen3-embedding:0.6b --dim 1024 \
+  --format openai --url http://localhost:11434/v1/embeddings \
+  --llm-url ""                       # blank/unreachable LLM is fine
+
+# 3. (non-interactive only) install + start the kb-server systemd --user unit
+.venv/bin/python kb.py configure --install-server [--server-port 8765]
+
+# 4. Optional: a `kb` wrapper on PATH
+printf '#!/bin/bash\nexec %s %s "$@"\n' "$PWD/.venv/bin/python" "$PWD/kb.py" > ~/.local/bin/kb
 chmod +x ~/.local/bin/kb
 ```
 
-## Claude Code Plugin Install
+`kb configure` writes `~/.config/kb/config.toml` (the source of truth) and mirrors
+the non-secret values into the config dir's `settings.json`; any API key goes to
+`settings.local.json` (only after `git check-ignore` confirms it's ignored).
 
-The recommended way to use kb with Claude Code is as a plugin. This requires no
-entries in your `~/.claude/CLAUDE.md` — the plugin auto-injects kb conventions
-and surfacing on every SessionStart.
+## Claude Code plugin
 
-### Install
+The recommended way to use kb with Claude Code. The plugin's hooks inject kb
+conventions and surface findings on every SessionStart — no `CLAUDE.md` entries.
 
 ```bash
-# 1. Add the kb marketplace (once per machine)
+# Add the local marketplace (the repo root, containing .claude-plugin/) + install
 claude plugin marketplace add /path/to/kb
-
-# 2. Install the plugin
 claude plugin install kb@kb-local
 ```
 
-Replace `/path/to/kb` with the cloned repo root (the directory containing
-`.claude-plugin/`). To install from a URL, pass the GitHub repo URL to
-`marketplace add`.
+### Isolating a test/fresh config from your real `~/.claude`
+
+Set **`CLAUDE_CONFIG_DIR`** to a separate directory before launching Claude Code —
+your global `~/.claude` (CLAUDE.md, hooks, personas, settings) is then **not**
+loaded, and the marketplace + installed plugins live under the isolated dir:
+
+```bash
+export CLAUDE_CONFIG_DIR="$HOME/kb-sandbox/.claude"
+mkdir -p "$CLAUDE_CONFIG_DIR"
+claude plugin marketplace add /path/to/kb
+claude plugin install kb@kb-local
+# configure into the SAME isolated dir (configure defaults to the real ~/.claude otherwise):
+.venv/bin/python kb.py configure --config-dir "$CLAUDE_CONFIG_DIR" --provider ollama …
+cd <your-repo> && claude        # CLAUDE_CONFIG_DIR is honored
+```
 
 ### What happens on SessionStart
 
 1. **setup-venv.sh** — builds a deps-only venv at `$CLAUDE_PLUGIN_DATA/venv`
-   (idempotent, hash-gated; requires internet access to pypi.org on first run).
-2. **env-probe.sh** — confirms `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA`
-   are exported and injects them as context.
-3. **kb-flush-pending.sh** — drains any queued `~/.claude/pending-kb-adds/` entries.
-4. **kb-context.sh** — injects kb conventions (search-first, --summary discipline,
-   types/tags taxonomy) into the session context. If the embedding server is
-   unreachable, it emits a `KB-INFRA DOWN` warning and falls back to FTS-only mode.
-5. **scaffold-check.sh** — detects missing `reviewers.yaml` / `agent-preamble.md`
-   and prompts to run the `project-setup` agent.
+   (idempotent, hash-gated; needs pypi.org access on first run).
+2. **env-probe.sh** — confirms/injects `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA`.
+3. **kb-flush-pending.sh** — drains any queued offline kb-adds.
+4. **kb-context.sh** — injects kb conventions; emits a `KB-INFRA DOWN` warning and
+   falls back to FTS-only if the embedding server is unreachable.
+5. **scaffold-check.sh** — flags a missing `reviewers.yaml` and offers project setup.
 
-### Using kb and kbt from the plugin
+Inside Claude Code the hooks invoke kb as
+`"${CLAUDE_PLUGIN_DATA}/venv/bin/python" "${CLAUDE_PLUGIN_ROOT}/kb.py" <command>`.
 
-After SessionStart, the plugin venv is at `$CLAUDE_PLUGIN_DATA/venv`. The hooks
-invoke kb as:
-
-```bash
-"${CLAUDE_PLUGIN_DATA}/venv/bin/python" "${CLAUDE_PLUGIN_ROOT}/kb.py" <command>
-```
-
-The `kbt` script in the plugin root is callable the same way. For interactive use,
-create a shell alias or wrapper pointing at those paths, or run `kb configure` to
-set up a `~/.local/bin/kb` wrapper.
+> The agent **message bridge** (cross-agent messaging) needs the external
+> `~/.agent-bridge/bridge` binary, which is **not shipped** in this repo. Without
+> it the bridge hooks degrade gracefully — you still get findings surfacing and
+> kbt; you just don't get cross-agent messaging.
 
 ## Configuration
 
-### Environment Variables
+`kb configure` is the supported path. The resolver precedence is **env vars →
+`~/.config/kb/config.toml` → defaults**.
+
+`config.toml`:
+
+```toml
+[embedding]
+url    = "http://localhost:11434/v1/embeddings"
+dim    = 1024
+format = "openai"          # or "llamacpp"
+model  = "qwen3-embedding:0.6b"
+
+[llm]
+url          = "http://localhost:8080/completion"   # for --expand + local-llm summaries; unreachable is OK
+summary_mode = "extractive"                         # none | extractive | local-llm | subscription-sdk | api
+```
+
+Environment overrides (each overrides the toml; a one-line note is logged when it does):
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `KB_EMBEDDING_URL` | Remote embedding endpoint | (empty, uses local model) |
-| `KB_EMBEDDING_DIM` | Embedding dimension | 4096 |
-| `KB_LLM_URL` | LLM completion endpoint for query expansion | http://tardis:9510/completion |
+| `KB_EMBEDDING_URL` | Embedding endpoint | `http://ash:8081/embedding` |
+| `KB_EMBEDDING_DIM` | Embedding dimension | `4096` |
+| `KB_EMBEDDING_FORMAT` | `llamacpp` or `openai` | `llamacpp` |
+| `KB_EMBEDDING_MODEL` | Model name (for OpenAI-format providers) | (empty) |
+| `KB_EMBEDDING_KEY` | API key (secret → `settings.local.json`) | (empty) |
+| `KB_LLM_URL` | LLM completion endpoint | `http://tardis:9510/completion` |
+| `KB_SUMMARY_MODE` | Summary generation mode | `extractive` |
+| `KB_DB` | Database path | `~/.cache/kb/knowledge.db` |
+| `KB_SERVER_HOST` | kb-server bind host (configure/unit) | `127.0.0.1` |
 
-### Machine-Specific Configuration
+Changing the embedding model or dim requires a re-index: `kb reembed --force`
+(`kb embed-status` shows configured-vs-stored). `kb configure` health-checks the
+embedding endpoint (embeds a probe + verifies the dim) and the LLM endpoint.
 
-**tardis** (local development):
-```bash
-export KB_EMBEDDING_URL="http://ash:8080/embedding"
-export KB_EMBEDDING_DIM=4096
-export KB_LLM_URL="http://tardis:9510/completion"
-```
-
-**ash** (GPU server):
-```bash
-export KB_EMBEDDING_URL="http://localhost:8080/embedding"
-export KB_EMBEDDING_DIM=4096
-export KB_LLM_URL="http://localhost:9510/completion"
-```
-
-## Claude Code Integration
-
-kb integrates with Claude Code as a **plugin** (see [Claude Code Plugin Install](#claude-code-plugin-install) above) — the hooks auto-inject kb conventions and surface relevant findings on every SessionStart, with no `~/.claude/CLAUDE.md` entries and no permission all-listing required.
-
-> There is **no MCP server**. The earlier `kb_mcp.py` dual-server was removed; all kb operations go through the `kb` CLI (and, inside Claude Code, the plugin hooks). If you find a reference to `kb_mcp.py` or `mcp__knowledge-base__*` tools anywhere, it is stale.
-
-## CLI Usage
+## CLI usage
 
 ```bash
-# Add a finding
-kb add --type success --project myproject "Fixed the bug by doing X"
-
-# Search findings
-kb search "build error"
-
-# Search with query expansion (uses LLM)
-kb search --expand "FMHA kernel"
-
-# Search with verbose output (shows expanded query)
-kb -v search --expand "quaternion"
-
-# List recent findings
-kb list --limit 10
-
-# Correct a finding
-kb correct <finding-id> --reason "Previous approach was wrong" "New correct approach"
-
-# Show statistics
-kb stats
+kb add -t success -p myproject "Fixed the bug by doing X"   # record a finding
+kb search "build error"                                     # semantic search (FTS fallback)
+kb search --expand "FMHA kernel"                            # LLM query expansion
+kb list -n 10 -p myproject                                  # recent findings
+kb get <kb-id>                                              # full entry
+kb correct <kb-id> "new content" -r "old approach was wrong"
+kb stats                                                    # counts by type/project
+kb embed-status                                             # embedding config vs stored
+kb --db /path/to/other.db <command>                         # override the database
 ```
 
-## Database Location
+Run `kb` with no args (or `kb --help`) for the full command list. Set `KB_AGENT=0`
+for the colorized human-mode help.
 
-- Default: `~/.cache/kb/knowledge.db`
-- Override with `--db-path` flag
+## Issue tracking — `kbt`
 
-## Query Expansion
+`kbt` is a kb-native, bd-compatible issue tracker. On a host **without** `bd` it
+defaults to the self-contained **kb backend** (no external DB); where `bd` is
+present it defers to dolt, and an explicit `.beads/config.yaml` `backend:` always
+wins. Enable the kb backend for a project with
+`kb configure --project <tag> --enable-tracker`.
 
-When `--expand` is used, the query is sent to an LLM to add related terms:
-
+```bash
+kbt ready | list | create | show <id> | update <id> | close <id> | dep | blocked
 ```
-Original: "FMHA kernel"
-Expanded: "FMHA kernel FlashMultiAttention FP8 Transformer inference self-attention..."
-```
 
-This improves recall by including synonyms, acronym expansions, and related concepts.
+## kb-server
 
-Expansions are cached in-memory for the duration of the process.
+A small HTTP/SSE server (`kb serve`, or the systemd `--user` unit from
+`kb configure --install-server`) exposing kb/issue read endpoints and an agent
+message bridge (`/bridge/messages`, `/bridge/watch` SSE, `/bridge/send`). It binds
+**`127.0.0.1` by default** — the endpoints are unauthenticated, so only bind a
+non-loopback host (`KB_SERVER_HOST=0.0.0.0`) behind a trusted network.
+
+## Database
+
+- Default: `~/.cache/kb/knowledge.db` (override with `--db` or `KB_DB`).
+- The DB is gitignored — no findings ship with the repo.
