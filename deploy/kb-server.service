@@ -1,3 +1,7 @@
+# REFERENCE TEMPLATE. Do NOT install this file verbatim — `kb configure
+# --install-server` generates a unit with the paths resolved to YOUR checkout and
+# writes it to ~/.config/systemd/user/kb-server.service. Replace <KB_REPO> below if
+# you install by hand.
 [Unit]
 Description=kb HTTP/SSE server (bridge transport + kb/issues read endpoints)
 Documentation=https://github.com/mcelrath/kb
@@ -5,18 +9,17 @@ After=network.target
 
 [Service]
 Type=simple
-# Run from source via the repo venv (Python 3.14+). --host 127.0.0.1 = loopback-only,
+# Run from source via the repo venv (Python 3.11+). --host 127.0.0.1 = loopback-only,
 # the SAFE default: the server is UNAUTHENTICATED, so a non-loopback bind exposes the
 # bridge read/send + kb read endpoints to the LAN with no auth (bearer auth is a
 # planned epic). Override to 0.0.0.0 (or a specific LAN IP) ONLY behind a trusted
 # network — e.g. `kb configure` with KB_SERVER_HOST=0.0.0.0, or edit this line.
 # A non-loopback bind is ALSO what lets the sandboxed kb SSE bridge watcher reach
 # the server (its namespaced loopback can't hit the host's 127.0.0.1). (kb-2os.3)
-ExecStart=/home/mcelrath/Projects/ai/kb/.venv/bin/python /home/mcelrath/Projects/ai/kb/kb.py serve --port 8765 --host 127.0.0.1
-# Clean env: NO KB_EMBEDDING_URL override here, so kb falls back to its default
-# (ash:8081, the healthy qwen3/4096 server). The bridge endpoints don't need
-# embeddings at all; only /kb/search does, and that degrades to FTS if down.
-# Once the kb config-file lands (~/.config/kb/config.toml) the server reads that.
+ExecStart=<KB_REPO>/.venv/bin/python <KB_REPO>/kb.py serve --port 8765 --host 127.0.0.1
+# No KB_EMBEDDING_URL override here — the server reads ~/.config/kb/config.toml
+# (written by `kb configure`). The bridge endpoints need no embeddings; only
+# /kb/search does, and it degrades to FTS when the embedding server is down.
 Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=0

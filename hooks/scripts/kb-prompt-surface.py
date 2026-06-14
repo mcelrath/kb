@@ -55,8 +55,9 @@ def main():
     query = prompt[:600]
 
     env = dict(os.environ)
-    env.setdefault('KB_EMBEDDING_URL', 'http://ash:8081/embedding')
-    env.setdefault('KB_EMBEDDING_DIM', '4096')
+    # Do NOT setdefault an embedding URL/dim here — env beats config.toml in
+    # config.py, so injecting the author's ash:8081 would override a user's
+    # configured endpoint. Let kb resolve env -> config.toml -> default.
     try:
         r = subprocess.run(
             [KB_VENV_PYTHON, KB_SCRIPT, 'search', query, '-n', '8', '--json'],
