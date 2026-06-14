@@ -11,9 +11,62 @@ factory pattern used in routes.py and live.py.
 """
 
 import json
+import os
+from pathlib import Path
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
+# Per-recipient /moim delivery cursor. A STATELESS poller (goose's fixed-URL
+# ContextProvider can't carry ?since=) relies on the SERVER to remember what it
+# has already delivered, so it gets only-NEW bridge messages each call and
+# NOTHING on first contact (start at tail) — the same lesson the SSE endpoint
+# learned (bridge.py fresh-subscriber tail). Without it /moim re-dumps the last
+# 50 messages every turn (the goose first-run "whole bridge history" bug).
+_MOIM_CURSOR_PATH = Path.home() / ".cache" / "kb" / "moim-cursors.json"
+
+
+def _moim_cursor_load(recipient: str) -> int | None:
+    try:
+        data = json.loads(_MOIM_CURSOR_PATH.read_text())
+        return int(data[recipient])
+    except Exception:
+        return None
+
+
+def _moim_cursor_save(recipient: str, last_id: int) -> None:
+    try:
+        _MOIM_CURSOR_PATH.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = json.loads(_MOIM_CURSOR_PATH.read_text())
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:
+            data = {}
+        data[recipient] = int(last_id)
+        tmp = _MOIM_CURSOR_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, _MOIM_CURSOR_PATH)
+    except Exception:
+        pass
+
+
+def _bridge_tail_id() -> int:
+    """Current max bridge message id (mirrors the SSE fresh-subscriber tail)."""
+    from .bridge import BRIDGE_MESSAGES_PATH
+    maxid = 0
+    try:
+        with open(BRIDGE_MESSAGES_PATH) as f:
+            for line in f:
+                try:
+                    mid = json.loads(line).get("id")
+                    if mid is not None and int(mid) > maxid:
+                        maxid = int(mid)
+                except Exception:
+                    pass
+    except FileNotFoundError:
+        pass
+    return maxid
 
 
 class _StrJSONResponse(JSONResponse):
@@ -133,7 +186,23 @@ def make_api_handlers(kb):
 
         parts = []
 
-        msgs = _parse_bridge_messages(recipient, limit=50, last_event_id=since)
+        # Server-side per-recipient cursor: an explicit ?since= wins; otherwise use
+        # the stored cursor; on first contact (no cursor) start at the TAIL so a
+        # stateless poller never gets the backlog dumped. Then advance the cursor to
+        # the newest delivered id so each message injects exactly once.
+        if since is not None:
+            eff_since: int | None = since
+        else:
+            stored = _moim_cursor_load(recipient)
+            eff_since = stored if stored is not None else _bridge_tail_id()
+        msgs = _parse_bridge_messages(recipient, limit=50, last_event_id=eff_since)
+        new_cursor = eff_since or 0
+        for _m in msgs:
+            try:
+                new_cursor = max(new_cursor, int(_m["id"]))
+            except (TypeError, ValueError, KeyError):
+                pass
+        _moim_cursor_save(recipient, new_cursor)
         if msgs:
             lines = []
             for m in msgs:
