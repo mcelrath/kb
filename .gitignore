@@ -16,3 +16,4 @@ build/
 *.db
 tmp/bd_export/
 tmp/issues_smoke/*.db*
+tmp/
