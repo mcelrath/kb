@@ -162,16 +162,18 @@ def make_api_handlers(kb):
         return _json(result)
 
     async def moim(request: Request):
-        """GET /moim?query=<text>&recipient=<id>&since=<cursor>&limit=N
+        """GET /moim?query=<text>&recipient=<id>&session_id=<sid>&since=<cursor>&limit=N
 
-        Returns plain-text context for injection into agent MOIM.
-        Combines unread bridge messages and kb findings.
+        Returns plain-text context for injection into agent MOIM: unread bridge
+        messages + relevant kb findings. The SOLE bridge-delivery path for goose
+        (goose's native BridgeReader was retired in favor of this — kb-3fj).
         Designed as a ContextProvider target for goose.
         """
         from starlette.responses import PlainTextResponse
         from .bridge import _parse_bridge_messages
 
         recipient = request.query_params.get("recipient", "goose").strip()
+        session_id = request.query_params.get("session_id", "").strip()
         query = request.query_params.get("query", "").strip()
         raw_since = request.query_params.get("since", "").strip()
         try:
@@ -186,14 +188,17 @@ def make_api_handlers(kb):
 
         parts = []
 
-        # Server-side per-recipient cursor: an explicit ?since= wins; otherwise use
-        # the stored cursor; on first contact (no cursor) start at the TAIL so a
-        # stateless poller never gets the backlog dumped. Then advance the cursor to
-        # the newest delivered id so each message injects exactly once.
+        # Cursor key is SESSION-scoped when the caller passes ?session_id= (goose's
+        # ContextProvider does), so two sessions of the same recipient don't consume
+        # each other's messages; falls back to recipient-only otherwise. An explicit
+        # ?since= wins; else the stored cursor; else the TAIL on first contact so a
+        # stateless poller never gets the backlog dumped. Advance to the newest
+        # delivered id so each message injects exactly once.
+        cursor_key = f"{recipient}#{session_id}" if session_id else recipient
         if since is not None:
             eff_since: int | None = since
         else:
-            stored = _moim_cursor_load(recipient)
+            stored = _moim_cursor_load(cursor_key)
             eff_since = stored if stored is not None else _bridge_tail_id()
         msgs = _parse_bridge_messages(recipient, limit=50, last_event_id=eff_since)
         new_cursor = eff_since or 0
@@ -202,7 +207,7 @@ def make_api_handlers(kb):
                 new_cursor = max(new_cursor, int(_m["id"]))
             except (TypeError, ValueError, KeyError):
                 pass
-        _moim_cursor_save(recipient, new_cursor)
+        _moim_cursor_save(cursor_key, new_cursor)
         if msgs:
             lines = []
             for m in msgs:
