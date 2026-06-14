@@ -242,8 +242,10 @@ def test_watch_no_trap_and_long_holdtime():
     #   2. --max-time is a LONG connection-freshness backstop (>= 1h), not a
     #      ~9-min cycle.
     src = open(os.path.join(SCRIPTS, "kb-bridge-watch.sh")).read()
-    assert "trap 'exit 0'" not in src and 'trap "exit 0"' not in src, \
-        "watcher must NOT trap signals -> exit 0 (caused spurious early-exit loop)"
+    # No ACTIVE trap line (a comment explaining the removed trap is fine).
+    active_trap = [ln for ln in src.splitlines()
+                   if ln.strip().startswith("trap ") and "exit 0" in ln]
+    assert not active_trap, f"watcher must NOT trap -> exit 0 (early-exit-loop bug): {active_trap}"
     import re
     m = re.search(r"--max-time\s+(\d+)", src)
     assert m and int(m.group(1)) >= 3600, \
