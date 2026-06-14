@@ -233,16 +233,21 @@ def test_watch_script_has_announce_skip():
     assert 'event' in src and 'announce' in src and 'continue' in src
 
 
-def test_watch_hold_is_bounded():
-    # A run_in_background task has a ~10-min lifetime cap; an unbounded
-    # --max-time 86400 hold is KILLED at the cap (exit 144, "failed"). The hold
-    # must be bounded under the cap so curl times out cleanly (exit 0). Guards
-    # against regressing to the infinite hold.
+def test_watch_no_trap_and_long_holdtime():
+    # The watcher holds for DAYS: boundedness comes from OMITTING the launch
+    # timeout (an omitted timeout runs the bg task unbounded), NOT from a short
+    # --max-time. Two regression guards:
+    #   1. NO 'trap ... exit 0' — that trap fired on a benign bg signal and made
+    #      the watcher exit immediately (empty output) -> the relaunch loop.
+    #   2. --max-time is a LONG connection-freshness backstop (>= 1h), not a
+    #      ~9-min cycle.
     src = open(os.path.join(SCRIPTS, "kb-bridge-watch.sh")).read()
-    assert "--max-time 86400" not in src, "watcher must not use an infinite hold"
+    assert "trap 'exit 0'" not in src and 'trap "exit 0"' not in src, \
+        "watcher must NOT trap signals -> exit 0 (caused spurious early-exit loop)"
     import re
     m = re.search(r"--max-time\s+(\d+)", src)
-    assert m and int(m.group(1)) <= 570, f"watcher --max-time must be < 10-min cap, got {m and m.group(1)}"
+    assert m and int(m.group(1)) >= 3600, \
+        f"watcher --max-time must be a long backstop (>=1h), got {m and m.group(1)}"
 
 
 def test_inject_kills_watcher_on_userprompt():
