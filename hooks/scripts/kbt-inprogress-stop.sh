@@ -1,17 +1,17 @@
 #!/bin/bash
-# Stop hook: block a bridge agent from stopping while it has claimed in-progress bd work.
+# Stop hook: block a bridge agent from stopping while it has claimed in-progress kbt work.
 #
 # Fires ONLY for sessions whose bridge identity is a known persona (pip, tip,
 # emmy, carl, archie, kb-dev, ...). User/main sessions with no bridge identity
 # are not affected.
 #
-# Mechanism: resolve the session's bridge persona; run `bd list --status=in_progress
-# --assignee=<persona>`; if any items exist, block with exit 2 and echo the queue.
+# Mechanism: resolve the session's bridge persona; run `kbt list --status=in_progress
+# --assignee=<persona> --json`; if any items exist, block with exit 2 and echo the queue.
 #
 # Loop guard: uses stop_hook_active (same as block-unprompted-deferral.sh) — fires
 # once, then allows the stop so the agent isn't trapped forever. One warning is enough.
 #
-# Why this matters: the IDLE RULE in persona files ("idle legitimate ONLY when bd
+# Why this matters: the IDLE RULE in persona files ("idle legitimate ONLY when kbt
 # in_progress shows nothing claimed by you") is instruction-level prose that the Stop
 # event does not enforce. This hook converts it to enforcement.
 
@@ -53,22 +53,31 @@ case "${PERSONA:-}" in
     *) exit 0 ;;
 esac
 
-# Check for claimed in-progress work.
-IN_PROGRESS=$(bd list --status=in_progress --assignee="$PERSONA" 2>/dev/null)
-# bd outputs "No issues found" when empty — test for actual issue rows (lines starting with id characters)
-echo "$IN_PROGRESS" | grep -qE '^[a-z0-9]' || exit 0
+# Check for claimed in-progress work. Use --json + a count (kbt human output is
+# bracketed `[id] (status) title`, so a "line starts with id char" test is wrong).
+COUNT=$(kbt list --status=in_progress --assignee="$PERSONA" --json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print(len(d) if isinstance(d, list) else 0)
+except Exception:
+    print(0)
+" 2>/dev/null)
+[ "${COUNT:-0}" = "0" ] && exit 0
+
+IN_PROGRESS=$(kbt list --status=in_progress --assignee="$PERSONA" 2>/dev/null)
 
 cat >&2 <<EOF
-BD_INPROGRESS_BLOCKED: $PERSONA has claimed in-progress bd work. Do not stop silently.
+KBT_INPROGRESS_BLOCKED: $PERSONA has claimed in-progress kbt work. Do not stop silently.
 
 Your claimed queue:
 $IN_PROGRESS
 
-Per your IDLE RULE: idle is legitimate ONLY when 'bd list --status=in_progress'
+Per your IDLE RULE: idle is legitimate ONLY when 'kbt list --status=in_progress'
 shows nothing claimed by you. You have claimed work — finish it, or if blocked:
   1. State the blocker on the bridge (bridge send archie "blocked on X because Y")
   2. Set an explicit defer on each item if genuinely gated:
-       bd update <id> --notes "defer: <reason>"
+       kbt update <id> --notes "defer: <reason>"
   Then you may stop.
 
 This hook fires once. The next stop attempt will be allowed.

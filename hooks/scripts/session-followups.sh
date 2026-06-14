@@ -2,7 +2,7 @@
 # SessionStart hook: surface open follow-ups discovered from recently-closed epics.
 #
 # Plans frequently defer work as "Out of scope" or "Follow-up" bullets. The
-# CLAUDE.md "Follow-up Discipline" rule requires those to be real bd issues
+# CLAUDE.md "Follow-up Discipline" rule requires those to be real kbt issues
 # with --deps=discovered-from:<epic-id>. This hook surfaces those issues at
 # session start so they don't fall off the radar between sessions.
 #
@@ -11,7 +11,7 @@
 
 source "$HOME/.claude/hooks/lib/claude-env.sh" 2>/dev/null
 
-# Bail quietly if bd isn't available or no .beads in cwd or ancestors
+# Bail quietly if kbt isn't available
 command -v kbt >/dev/null 2>&1 || exit 0
 kbt list --limit=1 >/dev/null 2>&1 || exit 0
 

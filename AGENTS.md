@@ -1,15 +1,16 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+This project uses **`kbt`** (the kb-native issue tracker) for issue tracking.
+`kbt` needs no external database or services — it stores issues in the local kb
+SQLite db and works offline.
 
 ## Quick Reference
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
-bd close <id>         # Complete work
-bd dolt push          # Push beads data to remote
+kbt ready                  # Find available work (unblocked issues)
+kbt show <id>              # View issue details
+kbt update <id> --claim    # Claim work atomically
+kbt close <id>             # Complete work
 ```
 
 ## Non-Interactive Shell Commands
@@ -36,16 +37,15 @@ cp -rf source dest          # NOT: cp -r source dest
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
-<!-- BEGIN BEADS INTEGRATION -->
-## Issue Tracking with bd (beads)
+## Issue Tracking with `kbt`
 
-**IMPORTANT**: This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
+**IMPORTANT**: This project uses **`kbt`** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
 
-### Why bd?
+### Why kbt?
 
-- Dependency-aware: Track blockers and relationships between issues
-- Version-controlled: Built on Dolt with cell-level merge
-- Agent-optimized: JSON output, ready work detection, discovered-from links
+- Dependency-aware: track blockers and `discovered-from` relationships between issues
+- Self-contained: issues live in the local kb SQLite db — no external service, works offline
+- Agent-optimized: `--json` output, ready-work detection, semantic `kbt search`
 - Prevents duplicate tracking systems and confusion
 
 ### Quick Start
@@ -53,27 +53,28 @@ cp -rf source dest          # NOT: cp -r source dest
 **Check for ready work:**
 
 ```bash
-bd ready --json
+kbt ready --json
 ```
 
-**Create new issues:**
+**Create new issues** (note: `--title` is required; `kbt create` prints `Created: <id>`):
 
 ```bash
-bd create "Issue title" --description="Detailed context" -t bug|feature|task -p 0-4 --json
-bd create "Issue title" --description="What this issue is about" -p 1 --deps discovered-from:bd-123 --json
+kbt create --title "Issue title" --description "Detailed context" --type task --priority 2
+kbt create --title "Issue title" --description "Context" --priority 1 --deps discovered-from:<parent-id>
 ```
 
 **Claim and update:**
 
 ```bash
-bd update <id> --claim --json
-bd update bd-42 --priority 1 --json
+kbt update <id> --claim
+kbt update <id> --status in_progress
+kbt update <id> --notes "progress note"
 ```
 
 **Complete work:**
 
 ```bash
-bd close bd-42 --reason "Completed" --json
+kbt close <id> --reason "Completed"
 ```
 
 ### Issue Types
@@ -94,57 +95,58 @@ bd close bd-42 --reason "Completed" --json
 
 ### Workflow for AI Agents
 
-1. **Check ready work**: `bd ready` shows unblocked issues
-2. **Claim your task atomically**: `bd update <id> --claim`
-3. **Work on it**: Implement, test, document
-4. **Discover new work?** Create linked issue:
-   - `bd create "Found bug" --description="Details about what was found" -p 1 --deps discovered-from:<parent-id>`
-5. **Complete**: `bd close <id> --reason "Done"`
+1. **Check ready work**: `kbt ready` shows unblocked issues
+2. **Claim your task atomically**: `kbt update <id> --claim`
+3. **Work on it**: implement, test, document
+4. **Discover new work?** Create a linked issue:
+   - `kbt create --title "Found bug" --description "Details" --priority 1 --deps discovered-from:<parent-id>`
+5. **Complete**: `kbt close <id> --reason "Done"`
 
-### Auto-Sync
+### Read commands
 
-bd automatically syncs with git:
-
-- Exports to `.beads/issues.jsonl` after changes (5s debounce)
-- Imports from JSONL when newer (e.g., after `git pull`)
-- No manual export/import needed!
+```bash
+kbt list --status open        # all open issues
+kbt blocked                   # blocked issues + their blockers
+kbt search "<query>"          # semantic search (FTS fallback when offline)
+kbt dep add <issue> <depends-on>
+kbt show <id> --json          # --json works on read commands (show/list/ready/blocked/children/dep list)
+```
 
 ### Important Rules
 
-- ✅ Use bd for ALL task tracking
-- ✅ Always use `--json` flag for programmatic use
+- ✅ Use `kbt` for ALL task tracking
+- ✅ Use `--json` on read commands for programmatic use
 - ✅ Link discovered work with `discovered-from` dependencies
-- ✅ Check `bd ready` before asking "what should I work on?"
+- ✅ Check `kbt ready` before asking "what should I work on?"
 - ❌ Do NOT create markdown TODO lists
 - ❌ Do NOT use external issue trackers
 - ❌ Do NOT duplicate tracking systems
 
-For more details, see README.md and docs/QUICKSTART.md.
+> **Migrating from bd/beads?** `python -m kb.bd_import <bd-export.json>` imports an
+> existing `bd export --json` into the kbt issues tables. That importer is the
+> only bd touchpoint kb ships.
+
+For more details, see README.md.
 
 ## Landing the Plane (Session Completion)
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+**When ending a work session**, complete ALL steps below. Work is NOT complete until `git push` succeeds.
 
 **MANDATORY WORKFLOW:**
 
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
+1. **File issues for remaining work** - create issues for anything that needs follow-up
+2. **Run quality gates** (if code changed) - tests, linters, builds
+3. **Update issue status** - close finished work, update in-progress items
+4. **PUSH TO REMOTE** - this is MANDATORY:
    ```bash
    git pull --rebase
-   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+5. **Clean up** - clear stashes, prune remote branches
+6. **Verify** - all changes committed AND pushed
 
 **CRITICAL RULES:**
 - Work is NOT complete until `git push` succeeds
 - NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
-
-<!-- END BEADS INTEGRATION -->
