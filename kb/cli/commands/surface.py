@@ -120,7 +120,6 @@ def _run_producer_mode(kb: Any, args: Any, mode: str) -> None:
         return
 
     if as_json:
-        import dataclasses
         print(json.dumps({
             "producer": inj.producer,
             "fired": inj.fired,
@@ -129,13 +128,75 @@ def _run_producer_mode(kb: Any, args: Any, mode: str) -> None:
         }, indent=2, default=str))
         return
 
-    # Human-readable
+    # Human-readable — name the producer AND the input it ran on
+    inp = _input_preview(mode, args)
     if not inj.fired:
-        print(f"[{mode}] No results fired (no match above threshold)")
+        print(f"[{mode}] did NOT fire on {inp} (no match above threshold)")
         return
 
-    print(f"--- {mode} producer ---")
+    print(f"--- {mode} producer (on {inp}) ---")
     print(inj.context)
+
+
+def _input_preview(mode: str, args: Any) -> str:
+    """Short, single-line description of the input a producer ran on."""
+    raw = {
+        "prompt": getattr(args, "prompt", None),
+        "analysis": getattr(args, "analysis", None),
+        "file": getattr(args, "file", None),
+        "issues": getattr(args, "issues", None),
+        "bridge": getattr(args, "bridge", None),
+        "all": getattr(args, "all_input", None),
+    }.get(mode)
+    if raw is None:
+        return "(none)"
+    if mode == "file":
+        return raw  # a path — show it whole
+    s = " ".join(str(raw).split())
+    return f'"{s[:60]}…"' if len(s) > 60 else f'"{s}"'
+
+
+def _run_all(kb: Any, args: Any) -> None:
+    """Run ALL producers against one text input; show fired + did-NOT-fire."""
+    from kb.surface.producers import (
+        produce_prompt, produce_analysis, produce_symbols,
+        produce_open_issues, produce_bridge,
+    )
+    text: str = args.all_input
+    project: str | None = getattr(args, "project", None)
+    limit: int = getattr(args, "limit", 8)
+
+    injections = [
+        produce_prompt(text, kb=kb, limit=limit),
+        produce_analysis(text, kb=kb, limit=limit),
+        produce_symbols(text=text, project=project, kb=kb),
+        produce_open_issues(text, kb=kb, project=project),
+        produce_bridge(msg_text=text, kb=kb),
+    ]
+
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "input": {"mode": "all", "text": text},
+            "injections": [
+                {"producer": i.producer, "fired": i.fired,
+                 "context": i.context, "hits": i.hits}
+                for i in injections
+            ],
+        }, indent=2, default=str))
+        return
+
+    inp = _input_preview("all", args)
+    fired = [i for i in injections if i.fired]
+    quiet = [i.producer for i in injections if not i.fired]
+
+    if not fired:
+        print(f"No producers fired on {inp}.")
+    for inj in fired:
+        print(f"--- {inj.producer} producer (on {inp}) ---")
+        print(inj.context)
+        print()
+    if quiet:
+        print(f"producers that did NOT fire: {', '.join(quiet)}")
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +224,9 @@ def run_surface(kb: Any, args: Any) -> None:
         return
     if getattr(args, "bridge", None) is not None:
         _run_producer_mode(kb, args, "bridge")
+        return
+    if getattr(args, "all_input", None) is not None:
+        _run_all(kb, args)
         return
 
     # Legacy --query mode

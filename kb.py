@@ -1141,6 +1141,8 @@ def main():
         help="What open_issues_surface would inject for this dispatch/bridge prompt text")
     surface_parser.add_argument("--bridge", metavar="ID_OR_TEXT",
         help="What bridge-inject would surface for a bridge message id (int) or raw text")
+    surface_parser.add_argument("--all", metavar="TEXT", dest="all_input",
+        help="Run ALL producers against this input, each labeled; lists producers that did NOT fire")
     surface_parser.add_argument("-n", "--limit", type=int, default=8,
         help="Max results per source (default: 8)")
     surface_parser.add_argument("-p", "--project", help="Filter findings + symbols + issues by project")
