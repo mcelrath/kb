@@ -181,6 +181,12 @@ message bridge (`/bridge/messages`, `/bridge/watch` SSE, `/bridge/send`). It bin
 **`127.0.0.1` by default** — the endpoints are unauthenticated, so only bind a
 non-loopback host (`KB_SERVER_HOST=0.0.0.0`) behind a trusted network.
 
+> These bridge **endpoints** ship, but the agent **registry** (announce/whoami,
+> which agents exist) lives in the external `~/.agent-bridge/bridge` binary that
+> is **not** in this repo (see the plugin section above). On a fresh host you get
+> findings surfacing + `kbt`; cross-agent messaging stays dark until that binary
+> is present.
+
 ## Database
 
 - Default: `~/.cache/kb/knowledge.db` (override with `--db` or `KB_DB`).
