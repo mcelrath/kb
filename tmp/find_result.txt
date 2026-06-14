@@ -1,0 +1,11 @@
+941:     ("embed-status",  "show configured-vs-stored embedding model/dim + verdict"),
+1201:     # embed-status: show configured vs stored embedding metadata + verdict
+1202:     embed_status_parser = _add_parser(
+1203:         "embed-status",
+1204:         "Show embedding model status (configured vs stored signature)",
+1206:     del embed_status_parser  # no flags needed
+2094:         elif args.command == "embed-status":
+2095:             status = kb.embedding_status()
+2107:                 print("Stored:     (no embedding_meta row)")
+2118:             status = kb.embedding_status()
+2121:                 print(f"Embedding metadata OK (no change detected). Use --force to reembed anyway.")

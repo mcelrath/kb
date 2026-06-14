@@ -1,0 +1,15 @@
+/home/mcelrath/Projects/ai/kb/kb.py: DEFAULT_DB_PATH
+/home/mcelrath/Projects/ai/kb/kb/__init__.py: DEFAULT_EMBEDDING_URL
+/home/mcelrath/Projects/ai/kb/kb/bd_import.py: DEFAULT_DB_PATH
+/home/mcelrath/Projects/ai/kb/kb/constants.py: DEFAULT_EMBEDDING_FORMAT
+/home/mcelrath/Projects/ai/kb/kb/facade.py: DEFAULT_EMBEDDING_URL
+/home/mcelrath/Projects/ai/kb/kb/issue_cli.py: DEFAULT_DB_PATH
+/home/mcelrath/Projects/ai/kb/kb/configure.py: DEFAULT_DB_PATH
+/home/mcelrath/Projects/ai/kb/kb/core/connection.py: DEFAULT_DB_PATH
+/home/mcelrath/Projects/ai/kb/kb/core/embedding.py: DEFAULT_EMBEDDING_FORMAT
+/home/mcelrath/Projects/ai/kb/kb/llm/client.py: DEFAULT_LLM_URL
+/home/mcelrath/Projects/ai/kb/scripts/ingest_lean_contracts.py: DEFAULT_DB_PATH
+/home/mcelrath/Projects/ai/kb/scripts/ingest_python.py: DEFAULT_DB_PATH
+/home/mcelrath/Projects/ai/kb/scripts/ingest_tex.py: DEFAULT_DB_PATH
+/home/mcelrath/Projects/ai/kb/tmp/patch/test_prune_demo.py: DEFAULT_DB_PATH
+/home/mcelrath/Projects/ai/kb/tests/test_config_resolution.py: DEFAULT_EMBEDDING_FORMAT

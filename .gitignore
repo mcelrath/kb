@@ -13,7 +13,10 @@ build/
 
 # Dolt database files (added by bd init)
 .dolt/
+# SQLite DBs + WAL/SHM are data/scratch — never track (incl. the test/smoke
+# artifacts that pile up under tmp/<topic>/). Scratch SCRIPTS in tmp/ stay tracked.
 *.db
-tmp/bd_export/
-tmp/issues_smoke/*.db*
-tmp/
+*.db-wal
+*.db-shm
+# scratch test fixtures (PDFs etc.) under tmp/
+tmp/**/*.pdf

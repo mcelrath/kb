@@ -1,0 +1,16 @@
+126:         # Seed embedding_meta on first run (idempotent; no-op if row exists)
+128:             self._ensure_embedding_meta()
+1405:     def _ensure_embedding_meta(self) -> None:
+1406:         """Seed embedding_meta on first run; no-op if row already exists.
+1409:         that predates embedding_meta. In both cases we assume the current config
+1414:             "SELECT id FROM embedding_meta WHERE id = 1"
+1422:             INSERT INTO embedding_meta (id, format, url, model, dim, signature, updated_at)
+1434:     def embedding_status(self) -> dict[str, Any]:
+1454:                 "SELECT format, url, model, dim, signature, updated_at FROM embedding_meta WHERE id = 1"
+1462:                 "message": "No embedding_meta row; run `kb reembed --force` to initialize.",
+1470:                 "message": "No embedding_meta row; run `kb reembed --force` to initialize.",
+1529:         On completion, writes embedding_meta = configured signature.
+1548:                 "SELECT dim FROM embedding_meta WHERE id = 1"
+1808:         # Write embedding_meta = configured signature.
+1812:             INSERT OR REPLACE INTO embedding_meta (id, format, url, model, dim, signature, updated_at)
+1824:         print(f"reembed_all: complete; embedding_meta updated (sig={sig[:16]}...)", file=sys.stderr, flush=True)
