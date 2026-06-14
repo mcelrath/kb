@@ -446,7 +446,9 @@ def _check_embedding(url: str, fmt: str, model: str, dim: int, key: str) -> bool
     try:
         from kb.core.embedding import EmbeddingService
         svc = EmbeddingService(url, dim, 8, fmt, model, key)
-        vec = svc.embed("kb configure health check", max_retries=1, timeout=12)
+        # _embed_remote returns the raw list[float] (true dim). embed() would
+        # return SERIALIZED float32 BYTES (len = dim*4) — do NOT len() that.
+        vec = svc._embed_remote("kb configure health check", max_retries=1, timeout=12)
     except Exception as e:  # noqa: BLE001 — report any failure to the user
         print(f"  ⚠ Embedding endpoint NOT healthy: {type(e).__name__}: {str(e)[:140]}\n"
               f"    Fix the server/url/model before relying on semantic search "
