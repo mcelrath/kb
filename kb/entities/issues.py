@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 import uuid
 from datetime import datetime
 from typing import Any
@@ -112,15 +113,30 @@ class IssuesRepository(EntityRepository):
             (issue_id, type, status, priority, parent_id, title, description,
              design_file, assignee, project, tags_json, now, now),
         )
-
-        embed_text = title + (" " + description if description else "")
-        embedding = self.embedding_service.embed(embed_text)
-        self.conn.execute("DELETE FROM issues_vec WHERE id = ?", (issue_id,))
-        self.conn.execute(
-            "INSERT INTO issues_vec (id, embedding) VALUES (?, ?)",
-            (issue_id, embedding),
-        )
+        # Commit the issue row FIRST: tracking (create/list/close) must NOT
+        # depend on a live embedding server. On a fresh dogfood host the kb
+        # backend is the default (kb-9kr.3) and the embed endpoint may be down,
+        # offline, or unconfigured — an issue must still be created.
         self.conn.commit()
+
+        # Embedding is best-effort: it only powers `kbt search` (semantic),
+        # which falls back to FTS when issues_vec is absent. A failure here
+        # leaves the issue fully usable, just not vector-searchable until a
+        # later re-embed. NEVER let it crash issue creation.
+        embed_text = title + (" " + description if description else "")
+        try:
+            # Fast-fail: tracker ops must not eat the full retry storm (~55s) when
+            # the embed server is down/unconfigured on a fresh host. One quick try.
+            embedding = self.embedding_service.embed(embed_text, max_retries=1, timeout=3)
+            self.conn.execute("DELETE FROM issues_vec WHERE id = ?", (issue_id,))
+            self.conn.execute(
+                "INSERT INTO issues_vec (id, embedding) VALUES (?, ?)",
+                (issue_id, embedding),
+            )
+            self.conn.commit()
+        except Exception as e:
+            print(f"kbt: issue {issue_id} created; embedding deferred "
+                  f"(embed server unavailable: {e})", file=sys.stderr)
         return {"id": issue_id, "is_new": True}
 
     def get(self, issue_id: str) -> dict[str, Any] | None:
@@ -208,8 +224,19 @@ class IssuesRepository(EntityRepository):
         return results
 
     def search(self, query: str, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-        """Semantic search over issues via issues_vec (sqlite-vec KNN)."""
-        embedding = self.embedding_service.embed(query)
+        """Semantic search over issues via issues_vec (sqlite-vec KNN).
+
+        Fast-fails and returns [] when the embed server is unavailable rather
+        than crashing the tracker — vector search is unavailable with no embed
+        server (FTS fallback tracked as a follow-up). Core tracking (create/
+        list/close) does NOT use this path.
+        """
+        try:
+            embedding = self.embedding_service.embed(query, max_retries=1, timeout=3)
+        except Exception as e:
+            print(f"kbt: semantic search unavailable (embed server down: {e})",
+                  file=sys.stderr)
+            return []
         conditions: list[str] = []
         params: list[Any] = []
         if project:

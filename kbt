@@ -5,7 +5,12 @@ kbt — kb-native issue tracker with transition passthrough.
 Backend resolution (highest priority first):
 1. KBT_BACKEND env var (test-only override; logged to stderr when it fires)
 2. .beads/config.yaml `backend:` key found by walking UP from cwd
-3. Default: 'dolt' (no .beads/ found — all projects stay on dolt until migrated)
+3. Default (no .beads/ found): bd-AWARE — 'dolt' when the `bd` binary is on
+   PATH (existing bd/dolt host, zero disruption), else 'kb' (fresh host with no
+   bd/dolt — the self-contained kb-native backend, so tracking works with no
+   external dependency). This is what makes kb the dogfood default on a clean
+   install (kb-9kr.3): a friend who never installed bd+dolt gets the kb backend
+   automatically. See kb/issue_cli.py::_default_backend.
 
 When backend == 'dolt':  os.execvp('bd', ['bd'] + sys.argv[1:])
   exec-replace gives byte-identical stdin/stdout/stderr/exit-code/signals.
