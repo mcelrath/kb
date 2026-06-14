@@ -21,6 +21,7 @@ ready/blocked blocking criteria:
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import sys
 import uuid
@@ -224,19 +225,21 @@ class IssuesRepository(EntityRepository):
         return results
 
     def search(self, query: str, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-        """Semantic search over issues via issues_vec (sqlite-vec KNN).
+        """Search issues — semantic (issues_vec KNN) with an FTS5 lexical fallback.
 
-        Fast-fails and returns [] when the embed server is unavailable rather
-        than crashing the tracker — vector search is unavailable with no embed
-        server (FTS fallback tracked as a follow-up). Core tracking (create/
-        list/close) does NOT use this path.
+        When the embed server is reachable: vector KNN over issues_vec (each hit
+        carries a real `similarity`). When it is down/offline: fall back to BM25
+        over issues_fts (hits carry `similarity=None` to mark them lexical), so
+        `kbt search` still works with no embed server — matching the FTS fallback
+        kb's findings search already has. Core tracking (create/list/close) does
+        NOT use this path. Returns [] only when BOTH tiers find nothing.
         """
         try:
             embedding = self.embedding_service.embed(query, max_retries=1, timeout=3)
         except Exception as e:
-            print(f"kbt: semantic search unavailable (embed server down: {e})",
+            print(f"kbt: embed server down ({e}); falling back to FTS lexical search",
                   file=sys.stderr)
-            return []
+            return self._search_fts(query, project=project, limit=limit)
         conditions: list[str] = []
         params: list[Any] = []
         if project:
@@ -265,6 +268,48 @@ class IssuesRepository(EntityRepository):
                 r["tags"] = json.loads(r["tags"] or "[]")
                 r["similarity"] = round(1 - (dist ** 2) / 2, 4)
                 results.append(r)
+        return results
+
+    def _search_fts(self, query: str, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+        """BM25 lexical fallback over issues_fts when embeddings are unavailable.
+
+        Tokenizes the query into an OR match (FTS5 syntax-safe), ranks by bm25.
+        Returns the same dict shape as the semantic path with similarity=None
+        (lexical, not a cosine score). Returns [] on no tokens / no match / any
+        FTS error — never raises (the tracker must not crash on search).
+        """
+        tokens = list({
+            m.group(1).lower()
+            for m in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]{2,})\b", query)
+        })
+        if not tokens:
+            return []
+        match = " OR ".join(tokens[:20])
+
+        sql = """SELECT i.id, i.type, i.status, i.priority, i.parent_id,
+                        i.title, i.description, i.project, i.tags
+                 FROM issues_fts
+                 JOIN issues i ON i.rowid = issues_fts.rowid
+                 WHERE issues_fts MATCH ?"""
+        params: list[Any] = [match]
+        if project:
+            sql += " AND (i.project = ? OR i.project IS NULL)"
+            params.append(project)
+        sql += " ORDER BY bm25(issues_fts) LIMIT ?"
+        params.append(limit)
+
+        try:
+            rows = self.conn.execute(sql, params).fetchall()
+        except sqlite3.Error:
+            return []
+
+        results = []
+        for row in rows:
+            r = dict(zip(["id", "type", "status", "priority", "parent_id",
+                          "title", "description", "project", "tags"], row))
+            r["tags"] = json.loads(r["tags"] or "[]")
+            r["similarity"] = None  # lexical hit — no cosine score
+            results.append(r)
         return results
 
     def count(self, project: str | None = None) -> int:

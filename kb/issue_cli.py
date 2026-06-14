@@ -647,7 +647,9 @@ def cmd_search(args: Any, kb: Any) -> int:
     project = getattr(args, "project", None)
     rows = kb.issue_search(args.query, project=project)
     for r in rows:
-        print(f"[{r['id']}] ({r['status']}) {r['title']}  sim={r.get('similarity', 0):.3f}")
+        sim = r.get("similarity")
+        score = f"sim={sim:.3f}" if isinstance(sim, (int, float)) else "fts"
+        print(f"[{r['id']}] ({r['status']}) {r['title']}  {score}")
     return 0
 
 
