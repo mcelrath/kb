@@ -159,7 +159,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-followup-without-bd-id.sh\"",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-followup-without-issue-id.sh\"",
             "timeout": 15
           }
         ]

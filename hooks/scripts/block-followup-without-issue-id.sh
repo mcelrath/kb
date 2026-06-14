@@ -34,12 +34,8 @@ data = json.load(sys.stdin).get('tool_input', {})
 print(data.get('content') or data.get('new_string') or '')
 " 2>/dev/null)
 
-# bd-ID regex: <project-slug>-<short> or bd-<short>. Examples:
-#   llamacpp-abcd, secular-constraints-adkh, bd-1234, claude-xy12
-BD_ID_RX='([a-z][a-z0-9_-]+-[a-z0-9]+|bd-[a-z0-9]+)'
-
 # Scan content. For each line containing a follow-up trigger phrase, check
-# whether that line OR any of the next 3 lines contains a bd-ID.
+# whether that line OR any of the next 3 lines contains a tracker-ID.
 VIOLATIONS=$(echo "$CONTENT" | python3 -c "
 import sys, re
 content = sys.stdin.read()
@@ -59,20 +55,22 @@ trigger_rx = re.compile(
     r')\b'
 )
 
-# Detect real bd-IDs only. Pattern: <project>-<short> where <short> is 3+
+# Detect real tracker-IDs only. Pattern: <project>-<short> where <short> is 3+
 # chars with at least one DIGIT. This excludes English compound words like
-# 'follow-up', 'out-of-scope'. Real bd IDs are hash-like (digits present).
+# 'follow-up', 'out-of-scope'. Real tracker IDs are hash-like (digits present).
+# The 'bd-' alternative still matches legacy bd ids; kb ids (kb-xxxxxx) match the
+# general <project>-<short-with-digit> branch.
 bd_id_rx = re.compile(r'\b(bd-[a-z0-9]+|[a-z][a-z0-9_]*[a-z0-9](?:-[a-z][a-z0-9_]*[a-z0-9])*-[a-z0-9]*[0-9][a-z0-9]*)\b')
 
-# Skip section headers (### Follow-ups (in bd)) — they're the legitimate marker.
+# Skip section headers (### Follow-ups (in kbt)) — they're the legitimate marker.
 # Only flag bullet/sentence-level references.
 violations = []
 for i, line in enumerate(lines):
     if not trigger_rx.search(line):
         continue
-    # Allow if the line is a section heading with '(in bd)' note
+    # Allow if the line is a section heading with '(in bd)'/'(in kbt)' note
     stripped = line.strip()
-    if re.match(r'^#+\s.*\(in bd\)', stripped):
+    if re.match(r'^#+\s.*\(in (bd|kbt)\)', stripped):
         continue
     # Skip pure header lines without colon or hyphen context
     if re.match(r'^#+\s+(out[- ]of[- ]scope|follow[- ]ups?|deferred?)\s*\$', stripped, re.IGNORECASE):
@@ -102,7 +100,7 @@ Violations found:
 $VIOLATIONS
 
 How to fix:
-  1. For each deferred item, create a bd issue:
+  1. For each deferred item, create a kbt issue:
        kbt create --title="<title>" --type=task --priority=3 \\
                  --deps=discovered-from:<current-epic-id> \\
                  --description="Discovered during <current-epic-id>. <why>."
