@@ -47,33 +47,20 @@ if [ -f "${VENV_PYTHON}" ] && [ -f "${HASH_FILE}" ]; then
 fi
 
 # Build or rebuild the venv.
-# Interpreter selection: kb currently relies on Python 3.14's PEP-649 lazy
-# annotation evaluation (some kb modules have builtin-name shadowing in class
-# bodies that 3.14 tolerates but 3.11-3.13 evaluate eagerly and raise on). So
-# PREFER 3.14+. The 3.11-3.13 portability fix (from __future__ import annotations
-# in the offending modules) is tracked separately; until it lands, a 3.14+
-# interpreter is required for kb to import from the venv.
+# Interpreter selection: kb supports Python 3.11+ (PEP-563 portability fix landed
+# in kb-9kr.2 — offending modules with builtin-name shadows in class bodies now
+# carry "from __future__ import annotations" so eager evaluation on 3.11-3.13 is
+# safe). Prefer 3.14+ when available (PEP-649 lazy eval is faster), but 3.11-3.13
+# are fully supported.
 PY_BIN=""
-for candidate in python3.14 python3.15 python3.16 python3; do
+for candidate in python3.14 python3.15 python3.16 python3.13 python3.12 python3.11 python3 python; do
     if command -v "${candidate}" &>/dev/null; then
         ver=$("${candidate}" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "")
         case "${ver}" in
-            3.14|3.15|3.16) PY_BIN="${candidate}"; break ;;
+            3.11|3.12|3.13|3.14|3.15|3.16) PY_BIN="${candidate}"; break ;;
         esac
     fi
 done
-
-# Fallback: no 3.14+ found — take the highest available 3.x and WARN (kb may
-# fail to import until the 3.11-3.13 portability fix lands).
-if [ -z "${PY_BIN}" ]; then
-    for candidate in python3.13 python3.12 python3.11 python3 python; do
-        if command -v "${candidate}" &>/dev/null; then
-            PY_BIN="${candidate}"
-            echo "kb-plugin setup-venv: WARNING — no Python 3.14+ found; using ${PY_BIN}. kb may fail to import until 3.11-3.13 portability lands." >&2
-            break
-        fi
-    done
-fi
 
 if [ -z "${PY_BIN}" ]; then
     echo "kb-plugin setup-venv: ERROR — no python3 found in PATH" >&2
