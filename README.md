@@ -53,9 +53,14 @@ uv venv --python python3.14 --seed
 # 3. (non-interactive only) install + start the kb-server systemd --user unit
 .venv/bin/python kb.py configure --install-server [--server-port 8765]
 
-# 4. Optional: a `kb` wrapper on PATH
+# 4. Put `kb` AND `kbt` (the issue tracker) on PATH. Agents and the plugin's
+#    git/lifecycle hooks invoke `kbt` BY NAME — without it on PATH, issue
+#    tracking falls back to nothing on a host that also lacks `bd`.
+mkdir -p ~/.local/bin
 printf '#!/bin/bash\nexec %s %s "$@"\n' "$PWD/.venv/bin/python" "$PWD/kb.py" > ~/.local/bin/kb
-chmod +x ~/.local/bin/kb
+printf '#!/bin/bash\nexec %s %s "$@"\n' "$PWD/.venv/bin/python" "$PWD/kbt"   > ~/.local/bin/kbt
+chmod +x ~/.local/bin/kb ~/.local/bin/kbt
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo 'add ~/.local/bin to PATH' ;; esac
 ```
 
 `kb configure` writes `~/.config/kb/config.toml` (the source of truth) and mirrors
@@ -168,6 +173,11 @@ defaults to the self-contained **kb backend** (no external DB); where `bd` is
 present it defers to dolt, and an explicit `.beads/config.yaml` `backend:` always
 wins. Enable the kb backend for a project with
 `kb configure --project <tag> --enable-tracker`.
+
+`kbt` must be **on PATH** (install step 4) — agents and the lifecycle hooks call
+it by name. It needs no live embedding server: issue create/list/close work
+offline, and `kbt search` falls back from semantic to FTS when embeddings are
+unreachable.
 
 ```bash
 kbt ready | list | create | show <id> | update <id> | close <id> | dep | blocked
