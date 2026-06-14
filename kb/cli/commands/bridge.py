@@ -140,5 +140,25 @@ def run_bridge(kb, args, bridge_parser) -> None:
         _run_search(kb, args)
     elif cmd == "promote":
         _run_promote(kb, args)
+    elif cmd == "watch":
+        _run_watch(args)
     else:
         bridge_parser.print_help()
+
+
+def _run_watch(args) -> None:
+    """Exec the SSE bridge watcher (kb-bridge-watch.sh) for this agent.
+
+    Thin wrapper so `kb bridge watch <id>` is the public interface; the watcher
+    script stays the (tested) implementation. Resolves the script via
+    CLAUDE_PLUGIN_ROOT, else relative to this file's repo root. os.execvp
+    replaces this process so stdout/exit pass through unchanged. Launch with
+    run_in_background:true and the timeout param OMITTED (unbounded hold)."""
+    import os
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    script = os.path.join(root, "hooks", "scripts", "kb-bridge-watch.sh")
+    if not os.path.exists(script):
+        print(f"kb bridge watch: watcher not found at {script}", file=sys.stderr)
+        sys.exit(1)
+    os.execvp("bash", ["bash", script, args.agent_id])

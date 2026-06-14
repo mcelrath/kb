@@ -25,7 +25,7 @@ BRIDGE PROTOCOL (main session only — sub-agents never run bridge commands):
   timeout runs it UNBOUNDED, so it holds for DAYS. Do NOT pass timeout:N — that caps the
   bg task at N (<=10min) and the harness kills it ('failed' exit 144); that cap-kill was
   the old 144 bug, NOT the SSE.
-      bash "$HERE/kb-bridge-watch.sh" <your-id>
+      kb bridge watch <your-id>
   It holds the SSE for days until a REAL peer message — then it prints 'BRIDGE_WAKE <json>'
   and EXITS (the task-exit notification wakes you) → relaunch ONE. It also exits (empty) if
   the kb-server closes the connection (e.g. a server restart) → relaunch ONE. Relaunch is
@@ -102,4 +102,4 @@ except: print('- - -')" 2>/dev/null)
 
 fi
 
-echo "BRIDGE RESUME [$AGENT_ID]: announced. Launch the kb SSE watcher via run_in_background:true on first tool call (Stop launcher reminds): bash $HERE/kb-bridge-watch.sh $AGENT_ID"
+echo "BRIDGE RESUME [$AGENT_ID]: announced. Launch the kb SSE watcher via run_in_background:true on first tool call (Stop launcher reminds): kb bridge watch $AGENT_ID"

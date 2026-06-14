@@ -9,9 +9,6 @@
 # (normal sessions are NEVER blocked). 3-block escape so a stuck agent isn't
 # hard-locked. Exit 2 = BLOCK the stop (stderr shown to the agent).
 set -u
-HERE="$(dirname "$(readlink -f "$0")")"
-WATCHER="$HERE/kb-bridge-watch.sh"
-
 INPUT=$(cat 2>/dev/null)
 SESSION_ID=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
 
@@ -37,13 +34,11 @@ N=$((N + 1))
 echo "$N" > "$CTR"
 
 if [ "$N" -gt 3 ]; then
-    echo "KB_BRIDGE_WATCHER_DOWN (stop allowed after 3 blocks): still no live kb-bridge watcher for '$ID'. You are OFF the bridge. Relaunch ASAP with run_in_background:true and NO timeout parameter (omit it — unbounded hold):  bash $WATCHER $ID" >&2
     rm -f "$CTR" 2>/dev/null
     exit 0
 fi
 
-echo "KB_BRIDGE_WATCHER_DOWN: no live kb-bridge SSE watcher for '$ID' — you would go SILENT on the bridge and your orchestrator could not reach you.
-Relaunch it NOW as its OWN Bash call with run_in_background:true and NO timeout parameter — OMIT timeout entirely. An omitted timeout runs the watcher UNBOUNDED so it holds for DAYS. Do NOT pass timeout:N — that CAPS the task at N (<=10min) and the harness kills it ('failed' exit 144); that cap-kill was the old 144 bug.
-  bash $WATCHER $ID
-It holds the SSE until a REAL message (prints BRIDGE_WAKE, exits -> relaunch ONE) or the server closes the connection (e.g. kb-server restart; exits empty -> relaunch ONE). Either way keep exactly ONE live, including when done." >&2
-exit 2
+# JSON decision:block — reason is delivered to the AGENT, not dumped to the
+# user's terminal. Instruction only, no narrative.
+printf '%s' "{\"decision\":\"block\",\"reason\":\"Bridge watcher down. Relaunch as its own background Bash call (run_in_background:true, OMIT the timeout param): kb bridge watch $ID\"}"
+exit 0

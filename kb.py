@@ -962,6 +962,11 @@ def main():
     bridge_promote_parser.add_argument("id", help="bridge_messages id to promote")
     bridge_promote_parser.add_argument("-p", "--project", help="Project tag for the new finding")
 
+    bridge_watch_parser = bridge_sub.add_parser("watch",
+        help="Idle SSE bridge watcher: holds until a peer message, prints BRIDGE_WAKE, exits. "
+             "Launch with run_in_background:true and NO timeout.")
+    bridge_watch_parser.add_argument("agent_id", help="Your bridge agent id")
+
     # Reconcile command
     reconcile_parser = _add_parser("reconcile", "Reconcile KB with source document", user_visible=False)
     reconcile_parser.add_argument("document", type=Path, help="Source document to reconcile against")
