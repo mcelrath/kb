@@ -438,6 +438,57 @@ def _check_ollama(url: str, model: str) -> None:
         )
 
 
+def _check_embedding(url: str, fmt: str, model: str, dim: int, key: str) -> bool:
+    """Live health check of the embedding endpoint: embed a test string through the
+    real EmbeddingService and verify a dim-correct vector comes back (validates url
+    + format + model + dim + key together). Advisory — never fails configure."""
+    print(f"  Checking embedding endpoint {url} …")
+    try:
+        from kb.core.embedding import EmbeddingService
+        svc = EmbeddingService(url, dim, 8, fmt, model, key)
+        vec = svc.embed("kb configure health check", max_retries=1, timeout=12)
+    except Exception as e:  # noqa: BLE001 — report any failure to the user
+        print(f"  ⚠ Embedding endpoint NOT healthy: {type(e).__name__}: {str(e)[:140]}\n"
+              f"    Fix the server/url/model before relying on semantic search "
+              f"(kb falls back to FTS-only until then).")
+        return False
+    if not vec:
+        print("  ⚠ Embedding endpoint reachable but returned no vector — check the model.")
+        return False
+    if len(vec) != dim:
+        print(f"  ⚠ DIM MISMATCH: endpoint returned {len(vec)}-dim vectors but you "
+              f"configured dim={dim}. Set --dim {len(vec)} (or pick a matching model) "
+              f"or the _vec tables will be wrong.")
+        return False
+    print(f"  ✓ Embedding endpoint healthy — returned a correct {len(vec)}-dim vector.")
+    return True
+
+
+def _check_llm(llm_url: str) -> bool | None:
+    """Reachability probe of the LLM completion endpoint (used for --expand query
+    expansion + local-llm summaries). Any HTTP response means the server is up.
+    Advisory. Returns None when no endpoint is configured."""
+    if not llm_url:
+        print("  (no LLM endpoint set — query-expansion + local-llm summaries are "
+              "disabled; kb works without them.)")
+        return None
+    import urllib.error
+    import urllib.request
+    print(f"  Checking LLM endpoint {llm_url} …")
+    try:
+        urllib.request.urlopen(urllib.request.Request(llm_url, method="GET"), timeout=5)
+        print(f"  ✓ LLM endpoint reachable: {llm_url}")
+        return True
+    except urllib.error.HTTPError:
+        # An HTTP error response still means the server IS up (just not GET-able here).
+        print(f"  ✓ LLM endpoint reachable: {llm_url} (server responded).")
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"  ⚠ LLM endpoint NOT reachable: {type(e).__name__}. --expand query "
+              f"expansion + local-llm summaries will be unavailable; kb otherwise works.")
+        return False
+
+
 def run_global_configure(
     provider: str | None,
     model: str | None,
@@ -515,9 +566,33 @@ def run_global_configure(
             resolved_key = raw
 
     # ------------------------------------------------------------------
+    # 3b. Live EMBEDDING health check (validates url+format+model+dim+key together)
+    # ------------------------------------------------------------------
+    _check_embedding(resolved_url, resolved_fmt, resolved_model, resolved_dim, resolved_key or "")
+
+    # ------------------------------------------------------------------
+    # 3c. LLM endpoint (query-expansion + local-llm summaries) — prompt + health check
+    # ------------------------------------------------------------------
+    from kb.config import _DEFAULTS
+    resolved_llm_url = llm_url or os.environ.get("KB_LLM_URL", "")
+    if interactive and llm_url is None:
+        shown = resolved_llm_url or _DEFAULTS.llm_url
+        raw = _prompt(
+            f"LLM completion endpoint for --expand + local-llm summaries "
+            f"(Enter = {shown}; type 'none' for no LLM)"
+        )
+        raw = raw.strip()
+        if raw.lower() == "none":
+            resolved_llm_url = ""
+        elif raw:
+            resolved_llm_url = raw
+        elif not resolved_llm_url:
+            resolved_llm_url = _DEFAULTS.llm_url
+    _check_llm(resolved_llm_url)
+
+    # ------------------------------------------------------------------
     # 4a. Write non-secret config to ~/.config/kb/config.toml (source of truth)
     # ------------------------------------------------------------------
-    resolved_llm_url = llm_url or os.environ.get("KB_LLM_URL", "")
     _write_config_toml(resolved_fmt, resolved_url, resolved_model, resolved_dim,
                        resolved_summary, llm_url=resolved_llm_url)
 
