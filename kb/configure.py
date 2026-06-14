@@ -657,6 +657,18 @@ def run_global_configure(
         else:
             print("  Embedding config matches existing index — no reembed needed.")
 
+    # ------------------------------------------------------------------
+    # 7. Offer to install + start the kb-server systemd --user unit
+    #    (provides the bridge + kb/issue HTTP endpoints the plugin/adapters use)
+    # ------------------------------------------------------------------
+    if interactive:
+        ans = _prompt(
+            "Install + start the kb-server systemd --user unit now? "
+            "(bridge + kb/issue HTTP endpoints on 127.0.0.1:8765) [y/N]"
+        )
+        if ans.strip().lower() in ("y", "yes"):
+            _install_systemd_service()
+
     print(f"\nGlobal configure done (provider={provider}, model={resolved_model}, dim={resolved_dim}, summary={resolved_summary})")
     return 0
 
