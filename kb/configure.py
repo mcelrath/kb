@@ -252,6 +252,7 @@ def _write_config_toml(
     dim: int,
     summary_mode: str,
     toml_path: Path | None = None,
+    llm_url: str = "",
 ) -> None:
     """Write non-secret embedding + LLM config to ~/.config/kb/config.toml.
 
@@ -265,6 +266,12 @@ def _write_config_toml(
         toml_path = Path.home() / ".config" / "kb" / "config.toml"
     toml_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # LLM endpoint (query-expansion + local-llm summaries). Always written so the
+    # config.toml is self-documenting on a fresh host; falls back to the default
+    # if not explicitly configured (set to "" / a local endpoint as appropriate).
+    from kb.config import _DEFAULTS
+    llm_line = llm_url or _DEFAULTS.llm_url
+
     content = (
         "# kb configuration — written by `kb configure`.\n"
         "# Non-secret values only; KB_EMBEDDING_KEY lives in settings.local.json.\n\n"
@@ -274,6 +281,7 @@ def _write_config_toml(
         f'format = "{fmt}"\n'
         f'model  = "{model}"\n\n'
         "[llm]\n"
+        f'url          = "{llm_line}"   # query-expansion + local-llm summaries; unreachable is OK (kb degrades)\n'
         f'summary_mode = "{summary_mode}"\n'
     )
     toml_path.write_text(content)
@@ -442,6 +450,7 @@ def run_global_configure(
     config_dir: Path,
     db_path: Path | None,
     interactive: bool,
+    llm_url: str | None = None,
 ) -> int:
     """Write global config. Returns 0 on success, 1 on error."""
     from kb.constants import DEFAULT_DB_PATH
@@ -508,7 +517,9 @@ def run_global_configure(
     # ------------------------------------------------------------------
     # 4a. Write non-secret config to ~/.config/kb/config.toml (source of truth)
     # ------------------------------------------------------------------
-    _write_config_toml(resolved_fmt, resolved_url, resolved_model, resolved_dim, resolved_summary)
+    resolved_llm_url = llm_url or os.environ.get("KB_LLM_URL", "")
+    _write_config_toml(resolved_fmt, resolved_url, resolved_model, resolved_dim,
+                       resolved_summary, llm_url=resolved_llm_url)
 
     # ------------------------------------------------------------------
     # 4b. Write non-secret env to settings.json (MERGE) — kept so the
@@ -523,6 +534,8 @@ def run_global_configure(
         "KB_EMBEDDING_DIM": str(resolved_dim),
         "KB_SUMMARY_MODE": resolved_summary,
     }
+    if resolved_llm_url:
+        env_updates["KB_LLM_URL"] = resolved_llm_url
     _merge_env(settings_path, env_updates)
     print(f"Written non-secret config to {settings_path}")
 
@@ -806,4 +819,5 @@ def configure_main(args: Any) -> int:  # noqa: ANN401
         config_dir=config_dir,
         db_path=getattr(args, "db", None),
         interactive=interactive,
+        llm_url=getattr(args, "llm_url", None),
     )

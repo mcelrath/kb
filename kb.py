@@ -1036,6 +1036,11 @@ def main():
     )
     configure_parser.add_argument("--url", help="Embedding server URL")
     configure_parser.add_argument(
+        "--llm-url",
+        help="LLM completion endpoint (query-expansion + local-llm summaries); "
+             "written to config.toml [llm] url. Unreachable is OK — kb degrades.",
+    )
+    configure_parser.add_argument(
         "--summary-mode", choices=["none", "local-llm", "subscription-sdk", "api"],
         help="Summary generation mode"
     )
