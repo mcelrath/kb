@@ -650,6 +650,7 @@ _AGENT_CMDS = [
     ("get",           "<kb-id>   full entry"),
     ("correct",       '<kb-id> "new content" [-r reason]   supersede a finding'),
     ("related",   "<kb-id> [-n N]   find semantically similar findings"),
+    ("surface",   '"query" | --prompt/--analysis/--file/--all   multi-source surface (code symbols + findings + bridge)'),
 ]
 
 _MAINT_CMDS = [

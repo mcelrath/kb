@@ -30,7 +30,16 @@ if str(_here) not in sys.path:
 
 
 def main() -> None:
-    from kb.issue_cli import resolve_backend, run
+    from kb.issue_cli import resolve_backend, run, build_parser
+
+    # Top-level help/usage always shows kbt's OWN interface, even on a bd
+    # passthrough host — otherwise `kbt` / `kbt --help` execs `bd --help` and
+    # advertises bd-only commands (gate, merge-slot, wisp, ...) the kb backend
+    # does not implement. (The kbt contract is the same regardless of backend.)
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help"):
+        build_parser().print_help()
+        sys.exit(0)
 
     backend = resolve_backend(Path.cwd())
 

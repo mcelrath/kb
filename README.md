@@ -24,8 +24,8 @@ tools are stale.
 
 ## Prerequisites
 
-- **Python 3.14+** (3.11–3.13 may fail to import due to builtin-shadowing in class
-  bodies; portability fix tracked).
+- **Python 3.11+** (3.11, 3.12, 3.13, 3.14 all supported; 3.14+ is slightly faster
+  via PEP-649 lazy annotation evaluation but not required).
 - **An embedding endpoint.** kb does not run a local embedding model — it calls a
   remote endpoint (llama.cpp `/embedding`, or any OpenAI-compatible `/v1/embeddings`
   such as **Ollama**). For a CPU box: `ollama pull qwen3-embedding:0.6b` (1024-dim).
@@ -38,7 +38,7 @@ tools are stale.
 ```bash
 # 1. Clone, build the venv, install deps
 git clone <kb-repo-url> kb && cd kb
-uv venv --python python3.14 --seed
+uv venv --seed                      # uses your default python3 (needs 3.11+)
 .venv/bin/pip install -r requirements.txt
 
 # 2. Configure embedding + LLM endpoints (interactive: health-checks both, and
@@ -131,7 +131,10 @@ url          = "http://localhost:8080/completion"   # for --expand + local-llm s
 summary_mode = "extractive"                         # none | extractive | local-llm | subscription-sdk | api
 ```
 
-Environment overrides (each overrides the toml; a one-line note is logged when it does):
+Environment overrides (each overrides the toml; a one-line note is logged when it
+does). The defaults below point at the original author's dev hosts (`ash`, `tardis`);
+`kb configure` writes your own endpoints into `config.toml`, which is the supported path —
+you should not need these vars:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -158,12 +161,14 @@ kb search --expand "FMHA kernel"                            # LLM query expansio
 kb list -n 10 -p myproject                                  # recent findings
 kb get <kb-id>                                              # full entry
 kb correct <kb-id> "new content" -r "old approach was wrong"
+kb surface "topic"                                          # multi-source surface: code symbols + findings + bridge
+kb surface --prompt "..." | --file PATH | --all "..."       # preview what the surfacing hooks would inject
 kb stats                                                    # counts by type/project
 kb embed-status                                             # embedding config vs stored
 kb --db /path/to/other.db <command>                         # override the database
 ```
 
-Run `kb` with no args (or `kb --help`) for the full command list. Set `KB_AGENT=0`
+Run `kb` with no args (or `kb --help`) for the command list. Set `KB_AGENT=0`
 for the colorized human-mode help.
 
 ## Issue tracking — `kbt`
