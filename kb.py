@@ -664,7 +664,7 @@ _MAINT_CMDS = [
     ("export",        "<file.json> [-p PROJECT]"),
     ("import",        "<file.json>"),
     ("serve",         "[--port 8000]   HTTP/SSE server (bridge watch/messages/agents + kb endpoints)"),
-    ("configure",     "set embedding provider/model/dim/url/format + summary mode  [--project TAG] [--url URL]"),
+    ("configure",     "embedding + LLM endpoints (health-checked) + summary mode; [--llm-url][--install-server][--project TAG --enable-tracker]"),
     ("embed-status",  "show configured-vs-stored embedding model/dim + verdict"),
     ("reembed",       "re-embed all findings  [--force]  (required after an embedding model/dim change)"),
 ]
@@ -681,6 +681,11 @@ def _print_main_help():
         print()
         for cmd, desc in _MAINT_CMDS:
             print(f"  {cmd:<{W}}{desc}")
+        print("\nIssue tracking: use the  kbt  command (kb-native tracker, bd-compatible:")
+        print("  kbt ready | list | create | show | update | close | dep | blocked).")
+        print("  Defaults to the kb backend when bd is absent; an explicit .beads/config.yaml wins.")
+        print("kb-server (bridge + kb/issue HTTP endpoints): install the systemd --user unit with")
+        print("  kb configure --install-server [--server-port 8765].")
         print("\nRun any command with --help for full flag list.")
         print("Set KB_AGENT=0 for user mode.")
     else:
@@ -709,6 +714,11 @@ def _print_main_help():
             else:
                 plain, flags = desc, ""
             print(f"  {yellow}{cmd:<{W}}{reset}{plain}{dim}{flags}{reset}")
+        print()
+
+        print(f"{bold}Issue tracking:{reset}  {cyan}kbt{reset}{dim}  (kb-native, bd-compatible: ready|list|create|show|update|close|dep|blocked){reset}")
+        print(f"  {dim}defaults to the kb backend when bd is absent; an explicit .beads/config.yaml wins{reset}")
+        print(f"{bold}Server:{reset}  {dim}kb configure --install-server  installs the kb-server systemd --user unit{reset}")
         print()
 
         if _LEGACY_CMDS:
