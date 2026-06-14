@@ -2,13 +2,12 @@
 
 These hooks moved out of the claude-repo harness suite (their tests went with
 them). Covered here:
-  - block-followup-without-bd-id.sh   : deferral without a tracker-id blocks
+  - block-followup-without-issue-id.sh   : deferral without a tracker-id blocks
   - kbt-lifecycle.sh                  : no-op on non-commit input (id-close needs kbt state)
   - bridge-owed-reply-stop.py         : INBOUND owed replies (mocked kb-server feed)
-  - bridge-pending-replies-stop.py    : OUTBOUND pending replies (mocked feed)
   - kb-bridge-watch.sh                : loopback->ash URL rewrite (sandbox reachability)
 
-The two bridge Stop hooks read GET /bridge/messages from the kb-server, so we
+The bridge Stop hook reads GET /bridge/messages from the kb-server, so we
 stand up a threaded mock server returning canned messages instead of the live one.
 """
 import json
@@ -67,7 +66,7 @@ class _MockServer:
 
 
 # --------------------------------------------------------------------------
-# block-followup-without-bd-id.sh
+# block-followup-without-issue-id.sh
 # --------------------------------------------------------------------------
 def _followup_payload(content):
     return json.dumps({"tool_name": "Write",
@@ -75,13 +74,13 @@ def _followup_payload(content):
 
 
 def test_followup_without_id_blocks():
-    p = _run(["bash", os.path.join(SCRIPTS, "block-followup-without-bd-id.sh")],
+    p = _run(["bash", os.path.join(SCRIPTS, "block-followup-without-issue-id.sh")],
              stdin=_followup_payload("- Strategy B: deferred to a follow-up epic.\n"))
     assert p.returncode == 2, f"expected block (exit 2), got {p.returncode}: {p.stderr}"
 
 
 def test_followup_with_id_passes():
-    p = _run(["bash", os.path.join(SCRIPTS, "block-followup-without-bd-id.sh")],
+    p = _run(["bash", os.path.join(SCRIPTS, "block-followup-without-issue-id.sh")],
              stdin=_followup_payload("- kb-1234: sync upstream, deferred to a follow-up epic.\n"))
     assert p.returncode == 0, f"expected pass (exit 0), got {p.returncode}: {p.stderr}"
 
@@ -141,36 +140,9 @@ def test_owed_reply_defer_clears_block(tmp_path):
     assert p.returncode == 0, f"defer should clear the block, got {p.returncode}"
 
 
-# --------------------------------------------------------------------------
-# bridge-pending-replies-stop.py  (OUTBOUND: messages I sent, needs_reply, unanswered)
-# --------------------------------------------------------------------------
-PENDING_MSGS = [
-    {"id": 10, "sender": "me", "to": ["peer"], "needs_reply": True, "subject": "my-q", "body": "b"},
-    {"id": 11, "sender": "me", "to": ["peer"], "needs_reply": True, "subject": "answered-q", "body": "b"},
-    {"id": 12, "sender": "peer", "to": ["me"], "needs_reply": False, "subject": "their-reply", "reply_to": 11, "body": "b"},
-    {"id": 13, "sender": "peer", "to": ["me"], "needs_reply": True, "subject": "inbound-not-mine", "body": "b"},
-]
-
-
-def test_pending_replies_outbound():
-    with _MockServer(PENDING_MSGS) as url:
-        p = _run(["python3", os.path.join(SCRIPTS, "bridge-pending-replies-stop.py")],
-                 stdin='{"session_id":"x"}', env={"AGENT_ID": "me", "KB_SERVER_URL": url})
-    assert p.returncode == 0
-    assert "#10" in p.stdout and "BRIDGE_PENDING_REPLIES" in p.stdout
-    # #11 answered by #12; #13 is inbound (not mine to wait on)
-    assert "#11" not in p.stdout and "inbound-not-mine" not in p.stdout
-
-
-def test_pending_replies_none_when_all_answered():
-    msgs = [
-        {"id": 20, "sender": "me", "to": ["peer"], "needs_reply": True, "subject": "q", "body": "b"},
-        {"id": 21, "sender": "peer", "to": ["me"], "needs_reply": False, "subject": "a", "reply_to": 20, "body": "b"},
-    ]
-    with _MockServer(msgs) as url:
-        p = _run(["python3", os.path.join(SCRIPTS, "bridge-pending-replies-stop.py")],
-                 stdin='{"session_id":"x"}', env={"AGENT_ID": "me", "KB_SERVER_URL": url})
-    assert p.returncode == 0 and p.stdout.strip() == ""
+# (bridge-pending-replies-stop.py was removed — outbound "replies I'm owed" is
+#  non-actionable by the sender, so it's no longer a Stop hook; the on-demand
+#  `bridge pending-replies` covers the check. Tests removed with the hook.)
 
 
 # --------------------------------------------------------------------------

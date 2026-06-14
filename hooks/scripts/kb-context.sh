@@ -38,8 +38,10 @@ if [[ -z "$PROJECT" ]]; then
     exit 0
 fi
 
-export KB_EMBEDDING_URL="${KB_EMBEDDING_URL:-http://ash:8081/embedding}"
-export KB_EMBEDDING_DIM="${KB_EMBEDDING_DIM:-4096}"
+# NOTE: do NOT export KB_EMBEDDING_URL/DIM defaults here. config.py resolves
+# env -> ~/.config/kb/config.toml -> defaults; injecting an env default (e.g. the
+# author's ash:8081) would OVERRIDE the user's config.toml on every SessionStart
+# (env beats toml), sending their searches to an unreachable host. Let kb resolve.
 
 # Show last work context if available and recent (within last hour)
 if [[ -f "$CONTEXT_FILE" ]]; then

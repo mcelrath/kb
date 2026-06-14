@@ -207,7 +207,8 @@ def make_api_handlers(kb):
                 new_cursor = max(new_cursor, int(_m["id"]))
             except (TypeError, ValueError, KeyError):
                 pass
-        _moim_cursor_save(cursor_key, new_cursor)
+        # NOTE: the cursor is advanced AFTER the response body is built (below),
+        # not here — so a formatting error can't advance past undelivered messages.
         if msgs:
             lines = []
             for m in msgs:
@@ -229,6 +230,10 @@ def make_api_handlers(kb):
                 lines.append(f"[kb {f['id']}{proj}] {f.get('summary', '')}\n{f.get('content', '')}")
             parts.append("Relevant knowledge base findings:\n" + "\n\n".join(lines))
 
+        # Advance the cursor only now that the bridge messages are captured in the
+        # response body — if formatting above had thrown, the cursor stays put and
+        # the messages redeliver on the next poll (no silent loss).
+        _moim_cursor_save(cursor_key, new_cursor)
         if not parts:
             return PlainTextResponse("")
         return PlainTextResponse("\n\n".join(parts))

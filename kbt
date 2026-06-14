@@ -48,10 +48,14 @@ def main() -> None:
         # os.execvp replaces this process entirely — no return, no subprocess
         # overhead, byte-identical stdin/stdout/stderr/exit/signals.
         # sys.argv[0] is 'kbt'; pass 'bd' as argv[0] to bd so bd sees its own name.
-        os.execvp("bd", ["bd"] + sys.argv[1:])
-        # execvp only returns on failure (ENOENT etc.)
-        print("kbt: exec bd failed — is bd installed?", file=sys.stderr)
-        sys.exit(127)
+        # execvp does NOT return on success; on ENOENT it RAISES OSError (it does
+        # not fall through), so catch it to emit a clean message, not a traceback.
+        try:
+            os.execvp("bd", ["bd"] + sys.argv[1:])
+        except OSError:
+            print("kbt: exec bd failed — is bd installed? "
+                  "(set KBT_BACKEND=kb to use the kb-native backend)", file=sys.stderr)
+            sys.exit(127)
 
     # backend == 'kb'
     sys.exit(run(sys.argv[1:]))
