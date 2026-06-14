@@ -19,9 +19,9 @@ TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.std
 
 FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null)
 
-# Only check plan files. Match ANY .../plans/PLAN-*.md — covers both the
-# ~/.claude/plans symlink path AND the real ~/Projects/ai/claude/plans path
-# (plans are written via the REAL path to dodge the config-dir edit guard).
+# Only check plan files. Match ANY .../plans/PLAN-*.md — covers project-local
+# <project-root>/.claude/plans/ (the canonical home; outside the config dir so
+# no config-dir write-guard prompt) as well as legacy global plan paths.
 case "$FILE_PATH" in
     */plans/PLAN-*.md) ;;
     *) exit 0 ;;
