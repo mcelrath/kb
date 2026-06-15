@@ -35,6 +35,7 @@ class KbConfig:
     embedding_key: str
     llm_url: str
     summary_mode: str
+    tracker_backend: str | None = None  # host-wide kbt backend ([tracker] backend); None = unset
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +51,7 @@ _DEFAULTS = KbConfig(
     embedding_key="",
     llm_url="http://tardis:9510/completion",
     summary_mode="extractive",
+    tracker_backend=None,
 )
 
 # ---------------------------------------------------------------------------
@@ -90,6 +92,7 @@ def _resolve_config() -> KbConfig:
         embedding_key=_DEFAULTS.embedding_key,
         llm_url=_DEFAULTS.llm_url,
         summary_mode=_DEFAULTS.summary_mode,
+        tracker_backend=_DEFAULTS.tracker_backend,
     )
 
     # Layer (b): toml file
@@ -129,6 +132,7 @@ def _load_toml(path: Path) -> dict[str, str]:
         emb = data.get("embedding", {})
         llm = data.get("llm", {})
         db = data.get("database", {})
+        tracker = data.get("tracker", {})
         if "url" in emb:
             result["embedding_url"] = str(emb["url"])
         if "dim" in emb:
@@ -144,6 +148,8 @@ def _load_toml(path: Path) -> dict[str, str]:
             result["summary_mode"] = str(llm["summary_mode"])
         if "db_path" in db:
             result["db_path"] = str(db["db_path"])
+        if "backend" in tracker:
+            result["tracker_backend"] = str(tracker["backend"])
         return result
     except Exception:
         return {}
@@ -168,6 +174,8 @@ def _apply_toml(cfg: KbConfig, toml: dict[str, str]) -> KbConfig:
         cfg.summary_mode = toml["summary_mode"]
     if "db_path" in toml:
         cfg.db_path = Path(toml["db_path"])
+    if "tracker_backend" in toml:
+        cfg.tracker_backend = toml["tracker_backend"]
     return cfg
 
 

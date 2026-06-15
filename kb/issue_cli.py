@@ -87,26 +87,99 @@ from typing import Any
 
 
 def _default_backend() -> str:
-    """The backend to use when nothing explicit is configured.
+    """Backend when nothing explicit is configured: dolt-if-bd (TRANSITIONAL).
 
-    bd-AWARE: 'dolt' when the `bd` binary is on PATH (this is an existing
-    bd/dolt host — keep its projects on dolt, zero disruption), else 'kb'
-    (a fresh host with no bd/dolt — use the self-contained kb-native backend
-    so tracking works with no external dependency). An explicit `backend:` in
-    .beads/config.yaml ALWAYS wins over this. Override with KBT_BACKEND.
+    UNCHANGED this epic (kb-sg0.14): a legacy host with `bd` on PATH and live
+    dolt data is NOT stranded — it keeps resolving to dolt until `kbt
+    bead-migrate` writes a per-project .kbt/config.toml marker. The flip to
+    unconditional 'kb' moves to cutover (kb-sg0.8), where bd is removed
+    (dolt-if-bd → bd absent → kb). resolve_backend emits a one-line stderr
+    notice when this default fires (resolves kb-zpy's "silent routing").
     """
     return "dolt" if shutil.which("bd") else "kb"
 
+
+def _walk_up_for(cwd: Path, rel: str) -> Path | None:
+    """Nearest existing `<ancestor>/<rel>` walking up from cwd, else None."""
+    candidate = cwd.resolve()
+    while True:
+        p = candidate / rel
+        if p.exists():
+            return p
+        parent = candidate.parent
+        if parent == candidate:
+            return None
+        candidate = parent
+
+
+def _read_kbt_marker(path: Path) -> str | None:
+    """Read [tracker] backend from a per-project .kbt/config.toml. None if absent."""
+    try:
+        import tomllib  # type: ignore[import]
+    except ImportError:
+        try:
+            import tomli as tomllib  # type: ignore[import,no-redef]
+        except ImportError:
+            tomllib = None  # type: ignore[assignment]
+    if tomllib is not None:
+        try:
+            with open(path, "rb") as f:
+                data = tomllib.load(f)
+            val = (data.get("tracker") or {}).get("backend")
+            return str(val).lower() if val else None
+        except Exception:
+            pass
+    # Fallback line scan (no tomllib): backend = "x" under a [tracker] table.
+    try:
+        in_tracker = False
+        for line in path.read_text().splitlines():
+            s = line.strip()
+            if s.startswith("[") and s.endswith("]"):
+                in_tracker = s == "[tracker]"
+                continue
+            if in_tracker and s.startswith("backend"):
+                _, _, v = s.partition("=")
+                v = v.strip().strip("\"'")
+                return v.lower() if v else None
+    except Exception:
+        pass
+    return None
+
+
+def _read_beads_backend(path: Path) -> str | None:
+    """Read `backend:` from a legacy .beads/config.yaml. None if no backend key."""
+    try:
+        import yaml  # type: ignore[import]
+        data = yaml.safe_load(path.read_text())
+        if isinstance(data, dict):
+            val = data.get("backend")
+            return str(val).lower() if val else None
+    except Exception:
+        try:
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("backend:"):
+                    val = line[len("backend:"):].strip().strip("\"'")
+                    return val.lower() if val else None
+        except Exception:
+            pass
+    return None
+
+
 def resolve_backend(cwd: Path | None = None) -> str:
-    """Walk up from cwd to find .beads/config.yaml; return backend ('kb' or 'dolt').
+    """Resolve the kbt backend ('kb' or 'dolt').
 
-    Priority (highest first):
-    1. KBT_BACKEND env var (intended for tests; logged to stderr when it fires)
-    2. .beads/config.yaml `backend:` key found by walking up from cwd
-    3. Default (no .beads/ found): _default_backend() — 'dolt' if `bd` is on
-       PATH (existing bd host), else 'kb' (fresh host, no external dep).
+    Precedence (highest first):
+      1. KBT_BACKEND env var (test/override; logged to stderr)
+      2. per-project .kbt/config.toml [tracker] backend  (walk up from cwd)
+      3. legacy .beads/config.yaml backend:              (walk up; deprecation warn)
+      4. host-wide ~/.config/kb/config.toml [tracker] backend
+      5. default: dolt-if-bd (transitional notice; flips to kb at cutover kb-sg0.8)
 
-    Returns 'kb' or 'dolt'.
+    The two walk-ups are INDEPENDENT and SEQUENTIAL (.kbt to root FIRST, then
+    .beads to root) — never interleaved per-directory — so a per-project .kbt
+    marker at a HIGHER ancestor always beats a legacy .beads at a LOWER ancestor
+    (the B3 per-project isolation guarantee).
     """
     env_override = os.environ.get("KBT_BACKEND")
     if env_override:
@@ -119,42 +192,45 @@ def resolve_backend(cwd: Path | None = None) -> str:
 
     if cwd is None:
         cwd = Path.cwd()
+    cwd = cwd.resolve()
 
-    # Walk up directory tree looking for .beads/config.yaml
-    candidate = cwd.resolve()
-    while True:
-        config_path = candidate / ".beads" / "config.yaml"
-        if config_path.exists():
-            backend = _read_backend_from_config(config_path)
-            return backend
-        parent = candidate.parent
-        if parent == candidate:
-            # Reached filesystem root, no .beads/ found → bd-aware default.
-            return _default_backend()
-        candidate = parent
+    # 2. per-project .kbt marker — walk to root FIRST
+    kbt_marker = _walk_up_for(cwd, ".kbt/config.toml")
+    if kbt_marker is not None:
+        b = _read_kbt_marker(kbt_marker)
+        if b:
+            return b
 
+    # 3. legacy .beads/config.yaml — INDEPENDENT walk to root
+    beads_cfg = _walk_up_for(cwd, ".beads/config.yaml")
+    if beads_cfg is not None:
+        b = _read_beads_backend(beads_cfg)
+        print(
+            f"kbt: reading legacy {beads_cfg} — deprecated; run `kbt bead-migrate` "
+            "to move this project to the kb-native tracker",
+            file=sys.stderr,
+        )
+        if b:
+            return b
 
-def _read_backend_from_config(config_path: Path) -> str:
-    """Parse .beads/config.yaml and return the `backend:` value."""
+    # 4. host-wide [tracker] backend
     try:
-        import yaml  # type: ignore[import]
-        with open(config_path) as f:
-            data = yaml.safe_load(f)
-        if isinstance(data, dict):
-            val = data.get("backend")
-            return str(val).lower() if val else _default_backend()
+        from kb.config import load_config
+        host = load_config(force_reload=True).tracker_backend
+        if host:
+            return host.lower()
     except Exception:
-        # yaml unavailable or parse error → try simple line scan
-        try:
-            content = config_path.read_text()
-            for line in content.splitlines():
-                line = line.strip()
-                if line.startswith("backend:"):
-                    val = line[len("backend:"):].strip().strip("\"'")
-                    return val.lower() if val else _default_backend()
-        except Exception:
-            pass
-    return _default_backend()
+        pass
+
+    # 5. transitional default
+    b = _default_backend()
+    if b == "dolt":
+        print(
+            "kbt: defaulting to dolt because bd is on PATH; run `kbt bead-migrate` "
+            "to move this project to the kb-native tracker",
+            file=sys.stderr,
+        )
+    return b
 
 
 # ---------------------------------------------------------------------------
