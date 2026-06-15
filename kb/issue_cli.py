@@ -729,6 +729,187 @@ def cmd_search(args: Any, kb: Any) -> int:
     return 0
 
 
+def cmd_import(args: Any, kb: Any) -> int:
+    """kbt import <export.ndjson> [--project P] [--dry-run] — import a bd NDJSON
+    export into the kb-native issues tables (kb-sg0.12). kb-backend only."""
+    from kb.bd_import import import_bd_export
+    stats = import_bd_export(kb, args.export_json, dry_run=args.dry_run,
+                             project=getattr(args, "project", None))
+    print(f"issues_imported={stats['issues_imported']} deps_imported={stats['deps_imported']} "
+          f"comments_imported={stats['comments_imported']}"
+          + (" [dry-run, rolled back]" if args.dry_run else ""))
+    return 0
+
+
+def _find_beads_dir(cwd: Path) -> Path | None:
+    """Nearest ancestor `.beads/` directory walking up from cwd, else None."""
+    candidate = cwd.resolve()
+    while True:
+        d = candidate / ".beads"
+        if d.is_dir():
+            return d
+        parent = candidate.parent
+        if parent == candidate:
+            return None
+        candidate = parent
+
+
+def _write_kbt_marker(project_dir: Path) -> Path:
+    """Write the per-project kb-native tracker marker `.kbt/config.toml`."""
+    marker_dir = project_dir / ".kbt"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    marker = marker_dir / "config.toml"
+    marker.write_text('[tracker]\nbackend = "kb"\n')
+    return marker
+
+
+def cmd_bead_migrate(args: Any, kb: Any) -> int:
+    """kbt bead-migrate — one-shot dolt→kb migration (kb-sg0.15).
+
+    Gated, fail-safe order (each step hard-stops the next on failure):
+      1. require bd on PATH; independent live count `bd list --all --json`
+      2. `bd export` (exit==0); validate every line parses (truncation defense)
+      3. import_bd_export into the kb db
+      4. issues_imported == live_count AND verify_fidelity empty  → else STOP
+      5. write per-project .kbt/config.toml marker
+      6. archive+commit .beads/ (COMMIT-BEFORE-CLOBBER), then rm -rf  (unless --keep-beads)
+    --dry-run runs 1-4 (import rolled back) and skips 5-6.
+    """
+    import subprocess
+    import tempfile
+
+    if not shutil.which("bd"):
+        print("kbt bead-migrate: bd not on PATH — nothing to migrate.", file=sys.stderr)
+        return 0
+
+    project = getattr(args, "project", None)
+    cwd = Path.cwd()
+
+    # 1. independent live count (separate query from the export → catches truncation)
+    lc = subprocess.run(["bd", "list", "--all", "--json"], capture_output=True, text=True)
+    if lc.returncode != 0:
+        print(f"kbt bead-migrate: `bd list` failed (dolt server down?) — aborting, nothing changed.\n{lc.stderr}",
+              file=sys.stderr)
+        return 1
+    try:
+        live = json.loads(lc.stdout)
+        live_count = len(live) if isinstance(live, list) else 0
+    except Exception:
+        print("kbt bead-migrate: could not parse `bd list --all --json` — aborting.", file=sys.stderr)
+        return 1
+    if live_count == 0:
+        print("kbt bead-migrate: no issues in dolt — nothing to migrate.", file=sys.stderr)
+        return 0
+
+    # 2. export + truncation validation
+    with tempfile.NamedTemporaryFile("w", suffix=".ndjson", delete=False) as tf:
+        export_path = Path(tf.name)
+    ex = subprocess.run(["bd", "export", "-o", str(export_path)], capture_output=True, text=True)
+    if ex.returncode != 0:
+        print(f"kbt bead-migrate: `bd export` failed — aborting, nothing changed.\n{ex.stderr}",
+              file=sys.stderr)
+        return 1
+    export_n = 0
+    for line in export_path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)  # a truncated final line → JSONDecodeError → abort
+        except Exception:
+            print("kbt bead-migrate: export has a malformed/truncated line — aborting (no data deleted).",
+                  file=sys.stderr)
+            return 1
+        if rec.get("_type") == "issue":
+            export_n += 1
+
+    # 3. import — verify must read PERSISTED rows, so we never use the SAVEPOINT
+    #    rollback (dry_run=False). For --dry-run we import into a throwaway temp
+    #    kb db and discard it; for the real run we import into the live kb db.
+    from kb.bd_import import verify_fidelity, _build_test_kb
+    temp_db_dir = None
+    if args.dry_run:
+        temp_db_dir = tempfile.mkdtemp(prefix="kbt_bead_migrate_dry_")
+        target_kb = _build_test_kb(Path(temp_db_dir) / "dry.db")
+    else:
+        target_kb = kb
+    try:
+        stats = import_bd_export_safe(target_kb, export_path, dry_run=False, project=project)
+
+        # 4. gates: live count vs imported, and per-issue fidelity
+        imported = stats["issues_imported"]
+        if imported != live_count:
+            print(f"kbt bead-migrate: ABORT — imported {imported} != live dolt count {live_count}. "
+                  "Export may be truncated or include a different population (infra beads). "
+                  "No marker written, .beads/ untouched. Re-run, or use --keep-beads if the "
+                  "difference is known-safe.", file=sys.stderr)
+            return 1
+        diffs = verify_fidelity(target_kb, export_path)
+        if diffs:
+            print(f"kbt bead-migrate: ABORT — fidelity verify found {len(diffs)} discrepancies. "
+                  "No marker written, .beads/ untouched.", file=sys.stderr)
+            for d in diffs[:10]:
+                print(f"  {d}", file=sys.stderr)
+            return 1
+    finally:
+        if temp_db_dir is not None:
+            shutil.rmtree(temp_db_dir, ignore_errors=True)
+
+    if args.dry_run:
+        print(f"[dry-run] would migrate {imported} issues (live={live_count}); fidelity OK. "
+              "Marker + .beads/ deletion skipped.")
+        return 0
+
+    # 5. per-project marker
+    beads_dir = _find_beads_dir(cwd)
+    project_dir = beads_dir.parent if beads_dir else cwd
+    marker = _write_kbt_marker(project_dir)
+    print(f"Wrote {marker} (backend=kb).")
+
+    # 6. archive-then-delete .beads/ (COMMIT-BEFORE-CLOBBER)
+    if beads_dir is None:
+        print(f"Migrated {imported} issues to the kb-native tracker. (no .beads/ to remove)")
+        return 0
+    if getattr(args, "keep_beads", False):
+        print(f"Migrated {imported} issues. --keep-beads: left {beads_dir} in place.")
+        return 0
+    in_git = subprocess.run(["git", "-C", str(project_dir), "rev-parse", "--is-inside-work-tree"],
+                            capture_output=True, text=True).returncode == 0
+    if in_git:
+        subprocess.run(["git", "-C", str(project_dir), "add", "-A", ".beads"], check=False)
+        # Commit only if `.beads` has staged changes; a clean+committed .beads is
+        # ALREADY safe in git history, so deletion is recoverable without a new commit.
+        staged = subprocess.run(
+            ["git", "-C", str(project_dir), "diff", "--cached", "--quiet", "--", ".beads"]
+        ).returncode
+        if staged != 0:
+            c = subprocess.run(["git", "-C", str(project_dir), "commit", "--no-gpg-sign",
+                                "-m", "archive .beads before kbt bead-migrate"],
+                               capture_output=True, text=True)
+            if c.returncode != 0:
+                print(f"kbt bead-migrate: could not commit .beads/ archive — leaving it in place.\n{c.stderr}",
+                      file=sys.stderr)
+                return 1
+    else:
+        archive = project_dir / ".beads.migrated.tar"
+        a = subprocess.run(["tar", "-cf", str(archive), "-C", str(project_dir), ".beads"],
+                           capture_output=True, text=True)
+        if a.returncode != 0:
+            print(f"kbt bead-migrate: could not archive .beads/ — leaving it in place.\n{a.stderr}",
+                  file=sys.stderr)
+            return 1
+        print(f"Archived {beads_dir} → {archive}")
+    shutil.rmtree(beads_dir)
+    print(f"Migrated {imported} issues to the kb-native tracker; removed {beads_dir}.")
+    return 0
+
+
+def import_bd_export_safe(kb: Any, export_path: Path, dry_run: bool, project: str | None) -> dict[str, Any]:
+    """Thin indirection over bd_import.import_bd_export (kept patchable for tests)."""
+    from kb.bd_import import import_bd_export
+    return import_bd_export(kb, export_path, dry_run=dry_run, project=project)
+
+
 # ---------------------------------------------------------------------------
 # Argparse setup
 # ---------------------------------------------------------------------------
@@ -822,6 +1003,18 @@ def build_parser():
     p = sub.add_parser("search", help="Search issues")
     p.add_argument("query")
 
+    # import (kb-backend only): bd NDJSON export -> kb issues
+    p = sub.add_parser("import", help="Import a bd NDJSON export into kb issues")
+    p.add_argument("export_json")
+    p.add_argument("--dry-run", action="store_true", dest="dry_run")
+
+    # bead-migrate: one-shot dolt->kb migration
+    p = sub.add_parser("bead-migrate",
+                       help="One-shot dolt->kb migration (export+import+verify+marker+delete .beads)")
+    p.add_argument("--dry-run", action="store_true", dest="dry_run")
+    p.add_argument("--keep-beads", action="store_true", dest="keep_beads",
+                   help="Write the kb-native marker but leave .beads/ in place")
+
     return parser
 
 
@@ -873,6 +1066,10 @@ def run(argv: list[str] | None = None) -> int:
         return cmd_blocked(args, kb)
     elif command == "search":
         return cmd_search(args, kb)
+    elif command == "import":
+        return cmd_import(args, kb)
+    elif command == "bead-migrate":
+        return cmd_bead_migrate(args, kb)
 
     print(f"kbt: unknown command: {command}", file=sys.stderr)
     return 1

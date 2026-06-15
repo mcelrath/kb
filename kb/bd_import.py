@@ -82,6 +82,17 @@ logger = logging.getLogger(__name__)
 # Dep types the kb schema CHECK constraint accepts.
 _KB_DEP_TYPES = frozenset({"blocks", "parent-child", "discovered-from", "related", "supersedes"})
 
+# Statuses the kb schema CHECK constraint accepts. bd ALSO has 'deferred' (and
+# niche pin/hook states) which the kb-sg0 design intentionally DROPPED — map any
+# non-kept status to 'open' (the closest actionable kept status) so the import
+# does not violate the CHECK. verify_fidelity applies the SAME normalization.
+_KB_STATUSES = frozenset({"open", "in_progress", "blocked", "closed"})
+
+
+def _normalize_status(status: str | None) -> str:
+    s = (status or "open").lower()
+    return s if s in _KB_STATUSES else "open"
+
 
 def _derive_parent_id(issue_id: str) -> str | None:
     """Derive parent_id from a child id like 'kb-sg0.3' → 'kb-sg0'.
@@ -221,9 +232,9 @@ def _do_import(
 
         # Map fields
         itype = issue.get("issue_type", "task")
-        # bd has statuses: open, in_progress, blocked, closed
-        # kb CHECK accepts the same set; pass verbatim.
-        status = issue.get("status", "open")
+        # bd has open/in_progress/blocked/closed AND deferred (+ niche states).
+        # kb dropped the extras → normalize to a kept status (deferred → open).
+        status = _normalize_status(issue.get("status"))
         priority = issue.get("priority", 2)
         title = issue.get("title", "")
         description = _merge_description_notes(
@@ -400,8 +411,8 @@ def verify_fidelity(
                 f"parent_id: expected={expected_parent!r} got={kb_parent_id!r}"
             )
 
-        # status
-        expected_status = issue.get("status", "open")
+        # status (apply the same dropped-status normalization as the importer)
+        expected_status = _normalize_status(issue.get("status"))
         if kb_status != expected_status:
             diffs.append(
                 f"status: expected={expected_status!r} got={kb_status!r}"
