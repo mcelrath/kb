@@ -478,10 +478,19 @@ _PROOF_VOCAB_RE = re.compile(
 )
 
 
-def query_route_to_tip(tool_name: str, ti: dict, prompt_text: str) -> list[str]:
-    """Advisory: if non-lean-prover agent dispatch contains proof vocabulary, route to tip."""
+def query_route_to_tip(conn: sqlite3.Connection, tool_name: str, ti: dict, prompt_text: str) -> list[str]:
+    """Advisory: if non-lean-prover agent dispatch contains proof vocabulary, route to tip.
+
+    PROJECT-LOCAL (physics): inert unless this db carries the lean_work_queue
+    table — a friend's generic kb has no physics tables, so no route-to-tip
+    advisory leaks. (kb-4mi)
+    """
     if tool_name != 'Agent':
         return []
+    try:
+        conn.execute('SELECT 1 FROM lean_work_queue LIMIT 1')
+    except Exception:
+        return []  # not a physics-configured db → no physics routing
     subagent_type = ti.get('subagent_type', '') or ''
     if 'lean' in subagent_type.lower():
         return []  # already going to a lean agent
@@ -632,8 +641,8 @@ def main() -> None:
         advisories += query_contracts(conn, tokens, project=project, raw_text=prompt_text)
         advisories += query_issues(conn, prompt_text, project=project)
         advisories += query_structural_facts(conn, prompt_text)
+        advisories += query_route_to_tip(conn, tool_name, ti, prompt_text)
         conn.close()
-        advisories += query_route_to_tip(tool_name, ti, prompt_text)
         if advisories:
             print(json.dumps({
                 "hookSpecificOutput": {

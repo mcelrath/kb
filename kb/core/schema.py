@@ -311,7 +311,7 @@ SCHEMA_SQL = """
         negative INTEGER DEFAULT 0,   -- 1 if result asserts the relation does NOT hold
         certified_data_key TEXT,      -- import path, e.g. 'cl44.certified_data.ALGEBRA_RELATIONS["C_Modd"]'
         lean_thm TEXT,                -- qualified Lean theorem name or NULL
-        project TEXT NOT NULL DEFAULT 'algebraic-genesis',
+        project TEXT,  -- caller-supplied; no hardcoded default (kb-4mi: was 'algebraic-genesis', silently mis-tagged other users' rows)
         notes TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -477,7 +477,7 @@ SCHEMA_SQL = """
         agent_id TEXT,
         bead_date TEXT,
         divergence_flag INTEGER NOT NULL DEFAULT 0,
-        project TEXT NOT NULL DEFAULT 'algebraic-genesis',
+        project TEXT,  -- caller-supplied; no hardcoded default (kb-4mi: was 'algebraic-genesis', silently mis-tagged other users' rows)
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -606,7 +606,7 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
                 negative INTEGER DEFAULT 0,
                 certified_data_key TEXT,
                 lean_thm TEXT,
-                project TEXT NOT NULL DEFAULT 'algebraic-genesis',
+                project TEXT,  -- caller-supplied; no hardcoded default (kb-4mi: was 'algebraic-genesis', silently mis-tagged other users' rows)
                 notes TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -640,7 +640,7 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
                 agent_id TEXT,
                 bead_date TEXT,
                 divergence_flag INTEGER NOT NULL DEFAULT 0,
-                project TEXT NOT NULL DEFAULT 'algebraic-genesis',
+                project TEXT,  -- caller-supplied; no hardcoded default (kb-4mi: was 'algebraic-genesis', silently mis-tagged other users' rows)
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
