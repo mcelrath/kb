@@ -77,6 +77,20 @@ kbt update <id> --notes "progress note"
 kbt close <id> --reason "Completed"
 ```
 
+### Migrating an existing bd/dolt project to kb
+
+If this host still runs bd/dolt, move a project's issues into the kb-native
+tracker in one shot:
+
+```bash
+kbt bead-migrate            # export dolt → import kb → verify → write .kbt marker → archive+remove .beads/
+kbt bead-migrate --dry-run  # preview only; mutates nothing
+```
+
+It aborts (no marker, `.beads/` untouched) if the export is truncated or its
+fidelity does not match the live dolt issue count. After migrating, `kbt`
+resolves to the kb backend via the per-project `.kbt/config.toml` marker.
+
 ### Issue Types
 
 - `bug` - Something broken

@@ -92,7 +92,9 @@ python3 -m py_compile kb.py kb_mcp.py
 Two-layer config via `kb configure`:
 
 - GLOBAL (once per host, interactive or flags): `kb configure --provider ollama --model qwen3-embedding:0.6b --dim 1024 --format openai --url http://localhost:11434/v1/embeddings --summary-mode extractive`. Writes non-secret `KB_*` env to `settings.json` (MERGE, never clobber); `KB_EMBEDDING_KEY` → `settings.local.json` ONLY after `git check-ignore` confirms it's ignored (refuses otherwise). Seeds `embedding_meta`.
-- PER-PROJECT (non-interactive, agent-safe): `kb configure --project <tag> --enable-tracker [--db PATH]`. Writes `.beads/config.yaml: backend: kb` (merge) + per-project `KB_DB`. Reuses global. `/project-setup` runs this as its Phase-5 tail.
+- PER-PROJECT (non-interactive, agent-safe): `kb configure --project <tag> --enable-tracker [--db PATH]`. Writes the kb-native marker `.kbt/config.toml [tracker] backend = kb` + per-project `KB_DB`. Reuses global. `/project-setup` runs this as its Phase-5 tail. (It no longer writes `.beads/config.yaml` — the migration target is a beadless host.)
+
+kbt backend resolution (kb/issue_cli.py::resolve_backend), highest first: `KBT_BACKEND` env → per-project `.kbt/config.toml [tracker] backend` (walk up) → legacy `.beads/config.yaml backend:` (walk up, deprecation warning) → host-wide `~/.config/kb/config.toml [tracker] backend` → default dolt-if-`bd`-on-PATH (transitional notice; flips to `kb` at cutover kb-sg0.8). To move a project off dolt for good, run **`kbt bead-migrate`**: it exports live dolt, imports into kb, verifies fidelity against an independent live count, writes the `.kbt` marker, then archives+commits and removes `.beads/` (`--dry-run` to preview, `--keep-beads` to retain the dir).
 
 Env vars: `KB_EMBEDDING_FORMAT` (`llamacpp`|`openai`), `KB_EMBEDDING_URL`, `KB_EMBEDDING_MODEL`, `KB_EMBEDDING_DIM`, `KB_EMBEDDING_KEY` (secret→settings.local.json), `KB_SUMMARY_MODE` (`none`|`local-llm`|`subscription-sdk`|`api`), `KB_DB`. Unset ⇒ defaults to ash:8081 llamacpp 4096.
 

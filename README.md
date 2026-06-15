@@ -175,9 +175,22 @@ for the colorized human-mode help.
 
 `kbt` is a kb-native, bd-compatible issue tracker. On a host **without** `bd` it
 defaults to the self-contained **kb backend** (no external DB); where `bd` is
-present it defers to dolt, and an explicit `.beads/config.yaml` `backend:` always
-wins. Enable the kb backend for a project with
-`kb configure --project <tag> --enable-tracker`.
+present it defers to dolt (with a one-line migration notice). Backend resolution,
+highest first: `KBT_BACKEND` env → per-project `.kbt/config.toml [tracker] backend`
+→ legacy `.beads/config.yaml backend:` (deprecated) → host `~/.config/kb/config.toml
+[tracker] backend` → dolt-if-`bd` default. Enable the kb backend for a new project
+with `kb configure --project <tag> --enable-tracker` (writes the `.kbt` marker).
+
+To migrate an existing dolt-backed project to kb in one shot:
+
+```bash
+kbt bead-migrate            # export dolt → import kb → verify → .kbt marker → archive+remove .beads/
+kbt bead-migrate --dry-run  # preview (imports into a throwaway db, verifies, mutates nothing)
+kbt bead-migrate --keep-beads   # migrate but leave .beads/ in place
+```
+
+It aborts without writing the marker or touching `.beads/` if the export is
+truncated or fidelity does not match the live dolt issue count.
 
 `kbt` must be **on PATH** (install step 4) — agents and the lifecycle hooks call
 it by name. It needs no live embedding server: issue create/list/close work
