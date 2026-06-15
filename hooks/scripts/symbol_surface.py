@@ -26,6 +26,7 @@ import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'lib'))
 from _seen import filter_unseen  # noqa: E402
 from _state import kb_project_for_path  # noqa: E402
+from _db import kb_db_path  # noqa: E402
 
 _SCAN_EXTENSIONS = {
     '.lean', '.py', '.tex', '.md', '.txt', '.output', '.json',
@@ -276,7 +277,7 @@ def main() -> None:
     if not content or len(content) < 50:
         sys.exit(0)
 
-    db = os.path.expanduser('~/.cache/kb/knowledge.db')
+    db = kb_db_path()
     if not os.path.exists(db):
         sys.exit(0)
 

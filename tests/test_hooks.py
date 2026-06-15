@@ -21,6 +21,20 @@ import pytest
 SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks", "scripts")
 
 
+# --------------------------------------------------------------------------
+# lib/_db.kb_db_path — hooks must honor KB_DB (kb-05n)
+# --------------------------------------------------------------------------
+def test_kb_db_path_honors_env_and_default(monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_db", os.path.join(SCRIPTS, "lib", "_db.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setenv("KB_DB", "/tmp/custom-kb.db")
+    assert mod.kb_db_path() == "/tmp/custom-kb.db"
+    monkeypatch.delenv("KB_DB", raising=False)
+    assert mod.kb_db_path().endswith("/.cache/kb/knowledge.db")
+
+
 def _run(argv, stdin="", env=None):
     e = dict(os.environ)
     if env:

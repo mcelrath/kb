@@ -16,6 +16,7 @@ import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'lib'))
 from _seen import filter_unseen  # noqa: E402
 from _state import kb_project_for_path  # noqa: E402
+from _db import kb_db_path  # noqa: E402
 try:
     from ash_health import ash_down, STOP_LINE
 except Exception:
@@ -618,7 +619,7 @@ def main() -> None:
             "hookEventName": "PreToolUse", "additionalContext": STOP_LINE}}))
         sys.exit(0)
 
-    db = os.path.expanduser('~/.cache/kb/knowledge.db')
+    db = kb_db_path()
     if not os.path.exists(db):
         sys.exit(0)
 

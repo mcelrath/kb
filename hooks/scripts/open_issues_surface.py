@@ -27,6 +27,7 @@ import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'lib'))
 from _seen import filter_unseen  # noqa: E402
 from _state import kb_project_for_path  # noqa: E402
+from _db import kb_db_path  # noqa: E402
 try:
     from ash_health import ash_down
 except Exception:
@@ -39,7 +40,7 @@ _VECTOR_K = 15             # KNN candidates before project/status filter
 
 
 def _db_path() -> str:
-    return os.path.expanduser(os.environ.get('KB_DB', '~/.cache/kb/knowledge.db'))
+    return kb_db_path()  # shared resolver (kb-05n)
 
 
 def _current_project() -> str | None:
