@@ -9,7 +9,7 @@ Layer A: GLOBAL `kb configure` (interactive + non-interactive flags)
     model/dim changed vs an existing index.
 
 Layer B: `kb configure --project <tag>` (non-interactive)
-  - Sets project tag; with --enable-tracker writes .beads/config.yaml backend:kb.
+  - Sets project tag; with --enable-tracker writes .kbt/config.toml [tracker] backend:kb.
   - Writes optional per-project KB_DB to the project's .claude/settings.json (merge).
   - Applies the same gitignore+check-ignore guard if --key is supplied.
 
@@ -694,12 +694,16 @@ def run_project_configure(
     project_dir = project_dir.resolve()
 
     # ------------------------------------------------------------------
-    # A. .beads/config.yaml (backend: kb) — merge, don't clobber
+    # A. per-project kb-native marker .kbt/config.toml [tracker] backend = kb
+    #    (NOT .beads/config.yaml — the migration target is a beadless host;
+    #    resolve_backend reads this marker above the legacy .beads path. kb-sg0.16)
     # ------------------------------------------------------------------
     if enable_tracker:
-        beads_yaml = project_dir / ".beads" / "config.yaml"
-        _merge_beads_config(beads_yaml, {"backend": "kb"})
-        print(f"Written .beads/config.yaml backend:kb to {beads_yaml}")
+        marker_dir = project_dir / ".kbt"
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        marker = marker_dir / "config.toml"
+        marker.write_text('[tracker]\nbackend = "kb"\n')
+        print(f"Written .kbt/config.toml backend:kb to {marker}")
 
     # ------------------------------------------------------------------
     # B. Per-project KB_DB to .claude/settings.json (merge)
@@ -726,32 +730,6 @@ def run_project_configure(
 
     print(f"Project configure done (project={project_tag}, tracker={enable_tracker})")
     return 0
-
-
-def _merge_beads_config(beads_yaml: Path, updates: dict[str, Any]) -> None:
-    """Merge key-value updates into a YAML file (simple key: value pairs only)."""
-    beads_yaml.parent.mkdir(parents=True, exist_ok=True)
-    existing: dict[str, Any] = {}
-    if beads_yaml.exists():
-        try:
-            import yaml  # type: ignore[import-untyped]
-            existing = yaml.safe_load(beads_yaml.read_text()) or {}
-        except (ImportError, Exception):
-            # Minimal YAML parser: read "key: value" lines
-            for line in beads_yaml.read_text().splitlines():
-                if ":" in line and not line.strip().startswith("#"):
-                    k, _, v = line.partition(":")
-                    existing[k.strip()] = v.strip()
-
-    existing.update(updates)
-
-    try:
-        import yaml  # type: ignore[import-untyped]
-        beads_yaml.write_text(yaml.dump(existing, default_flow_style=False))
-    except ImportError:
-        # Write minimal YAML without pyyaml
-        lines = [f"{k}: {v}" for k, v in existing.items()]
-        beads_yaml.write_text("\n".join(lines) + "\n")
 
 
 # ---------------------------------------------------------------------------
