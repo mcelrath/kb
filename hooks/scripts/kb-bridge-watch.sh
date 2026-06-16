@@ -53,12 +53,17 @@ BASE="${BASE//\/\/127.0.0.1:/\/\/${HOSTALIAS}:}"
 # No session id / no cursors -> LAST="" -> fresh tail (unchanged legacy behavior; a brand
 # new session must not replay ancient history).
 INJ_STATE="${KB_STATE_DIR:-/tmp/claude-kb-state}"
+mkdir -p "$INJ_STATE" 2>/dev/null   # post-reboot the dir may not exist yet
 WOKEN_CURSOR=""
 LAST=0
 if [ -n "$SESSION_ID" ]; then
-    _inj=$(tr -dc '0-9' < "$INJ_STATE/${SESSION_ID}-bridge-injected" 2>/dev/null)
+    # `cat … 2>/dev/null | tr` — NOT `tr < file`: a `< missing-file` redirect failure is
+    # emitted by the SHELL to stderr and is NOT caught by tr's 2>/dev/null, so it leaked as
+    # a Stop-hook error when the cursor files didn't exist yet (post-reboot). cat owns the
+    # missing-file error and 2>/dev/null suppresses it.
+    _inj=$(cat "$INJ_STATE/${SESSION_ID}-bridge-injected" 2>/dev/null | tr -dc '0-9')
     WOKEN_CURSOR="$INJ_STATE/${SESSION_ID}-bridge-woken"
-    _wok=$(tr -dc '0-9' < "$WOKEN_CURSOR" 2>/dev/null)
+    _wok=$(cat "$WOKEN_CURSOR" 2>/dev/null | tr -dc '0-9')
     LAST=${_inj:-0}
     [ "${_wok:-0}" -gt "$LAST" ] 2>/dev/null && LAST=$_wok
 fi
