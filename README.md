@@ -277,7 +277,6 @@ behind a trusted network.
 | `/kb/finding/{id}` · `/finding/{id}` | one finding |
 | `/issues` · `/issues/{id}` | kbt issue reads |
 | `/search` · `/` · `/ws` | web UI + websocket |
-| `/moim` | **deprecated** — legacy goose ContextProvider feed. Current goose (Phase B adapter) instead calls `/bridge/messages` + `/kb/search` directly and gets zero traffic here; the route is retained only until goose's config marker is repointed (kb-a7694e). |
 | `/bridge/agents` | live agent registry |
 | `/bridge/messages` · `/bridge/send` | mailbox read / send |
 | `/bridge/watch[?since=N]` (SSE) | live message stream |
