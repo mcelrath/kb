@@ -126,8 +126,15 @@ def main():
     wrapped = f"BRIDGE_UPDATE (new peer messages):\n{body_text}\n(end bridge messages)"
 
     if is_claude and event in ("PreToolUse", "UserPromptSubmit"):
+        notice = _notice(fresh)
+        # OSC 9 desktop notification (prefix-free, for terminals that support it:
+        # iTerm2/kitty/WezTerm/Ghostty). Strip control chars so they can't break the
+        # escape. systemMessage still carries the in-transcript line (renderer prepends
+        # "<event> says:" — not suppressible; the OSC popup is the prefix-free path).
+        osc_text = "".join(c for c in notice if c not in ("\x1b", "\x07", "\n", "\r"))
         sys.stdout.write(json.dumps({
-            "systemMessage": _notice(fresh),
+            "systemMessage": notice,
+            "terminalSequence": f"\x1b]9;{osc_text}\x07",
             "hookSpecificOutput": {
                 "hookEventName": event,
                 "additionalContext": wrapped,
