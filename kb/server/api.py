@@ -87,10 +87,11 @@ def make_api_handlers(kb):
     """Return (kb_search, kb_recent, issues_list, issue_get) bound to kb."""
 
     async def kb_search(request: Request) -> JSONResponse:
-        """GET /kb/search?q=<query>&limit=N
+        """GET /kb/search?q=<query>&limit=N&project=<tag>
 
         Returns a JSON array of findings from hybrid search.
-        Default limit=20, max 500.
+        Default limit=20, max 500. Optional ?project=<tag> scopes results to one
+        project (e.g. a per-agent ContextProvider scoping its injection surface).
         """
         query = request.query_params.get("q", "").strip()
         if not query:
@@ -100,7 +101,11 @@ def make_api_handlers(kb):
         except ValueError:
             limit = 20
         limit = max(1, min(limit, 500))
-        results = kb.search(query, limit=limit)
+        kw: dict = {"limit": limit}
+        project = request.query_params.get("project", "").strip()
+        if project:
+            kw["project"] = project
+        results = kb.search(query, **kw)
         return _json(results)
 
     async def kb_recent(request: Request) -> JSONResponse:
