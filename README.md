@@ -138,6 +138,23 @@ Hooks invoke kb/kbt via the `~/.local/bin` wrappers (or, internally,
 > it the bridge hooks degrade gracefully — you still get findings surfacing and
 > kbt; you just don't get cross-agent messaging.
 
+## Skills & commands (plugin)
+
+Installing the plugin adds these skills (invoke as `/<name>` in Claude Code) and one
+scaffolding agent. They are **not** standalone CLI commands — they only exist inside a
+harness with the plugin loaded.
+
+| Skill / agent | What it does |
+|---|---|
+| **`/persona`** | List or adopt a session persona. The persona name **is** your bridge identity; adopting one claims the bridge id and loads a binding operating role that the `session-persona` hook re-injects each SessionStart (survives compaction). Personas live at `<project>/.claude/agents/personas/<name>.md`. |
+| **`/dispatch <epic-id>`** | Execute an approved **kbt** epic autonomously: claim ready child tasks, spawn implementation agents in waves, verify every diff, close tasks, and commit. |
+| **`/kb-setup`** | Guided `kb configure` — embedding provider/model/dim/format/url, summary mode, per-project tracker enablement, `embed-status`, `reembed`. |
+| **`/kb-usage`** | How to record/search findings — the type/tag taxonomy, the `--summary` discipline, project scoping, search-first rule. |
+| **project-setup** (agent) | Scaffolds a new repo for kb-driven work: `reviewers.yaml`, agent preamble, per-project kb embedding config, and the grep-replacement code-exploration stack. Auto-suggested when `reviewers.yaml` is missing. |
+
+> `/expert-review` is **not** part of this plugin — it's a separate review agent some
+> setups install globally. The `/dispatch` workflow expects an already-reviewed epic.
+
 ## Configuration
 
 `kb configure` is the supported path. The resolver precedence is **env vars →
