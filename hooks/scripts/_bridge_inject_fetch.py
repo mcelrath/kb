@@ -43,7 +43,7 @@ def _notice(fresh: list) -> str:
     if len(joined) > 160:
         joined = joined[:157] + "…"
     n = len(fresh)
-    prefix = "📨 bridge: " if n == 1 else f"📨 bridge ({n}): "
+    prefix = "Peer message received: " if n == 1 else f"Peer messages received ({n}): "
     return prefix + joined
 
 
