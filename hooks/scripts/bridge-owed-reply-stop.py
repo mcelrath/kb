@@ -135,11 +135,9 @@ def main():
     suppressed = [m for m in owed if not sender_online(m.get("sender"))]
     owed = [m for m in owed if sender_online(m.get("sender"))]
     if not owed:
-        if suppressed:
-            # Don't silently swallow: one summary line, not the full stale list.
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": "Stop",
-                  "additionalContext": f"({len(suppressed)} owed reply(ies) to "
-                  "currently-offline peers suppressed — re-surface when they reconnect)"}}))
+        # All owed replies are to offline peers -> nothing actionable. Stay SILENT
+        # (printing a "(N suppressed)" note every Stop is itself spam); the count is
+        # still appended below when there ARE live owed replies to act on.
         return
 
     deferred = {}

@@ -31,13 +31,20 @@ set -u
 # bounded curl-SSE with no trap holds correctly (verified: 305s sandboxed, 109s
 # not). curl's own --max-time gives the clean quiet-timeout exit; let it be.
 ID="${1:?usage: kb-bridge-watch.sh <agent-id>}"
-BASE="${KB_SERVER_URL:-http://ash:8765}"
-# This watcher runs inside the Bash-tool sandbox, whose loopback is namespaced —
-# host 127.0.0.1/localhost is UNREACHABLE here even though hooks (harness-side)
-# reach it fine. The kb-server binds 0.0.0.0, so rewrite a loopback base to the
-# `ash` host alias (sandbox-proxied + allowlisted). Non-loopback bases pass through.
-BASE="${BASE//\/\/localhost:/\/\/ash:}"
-BASE="${BASE//\/\/127.0.0.1:/\/\/ash:}"
+# Resolve the LOCAL host alias. This watcher runs inside the Bash-tool sandbox,
+# whose loopback is namespaced — host 127.0.0.1/localhost is UNREACHABLE here even
+# though harness-side hooks reach it fine. The LOCAL kb-server (bound 0.0.0.0) IS
+# reachable via the host's OWN hostname alias (sandbox-proxied + allowlisted).
+# Use $(hostname) so this is HOST-PORTABLE — ash->ash:8765, tardis->tardis:8765.
+# Hardcoding `ash` sent every other host's watcher to ASH's server, subscribing to
+# the WRONG bridge while local POSTs hit the LOCAL server -> sends never woke it
+# (mis-read as a send<->watch wiring gap; it was a cross-host mismatch).
+# REQUIREMENT: the local kb-server must bind 0.0.0.0 (not 127.0.0.1-only) so
+# <hostname>:8765 is reachable from the sandbox.
+HOSTALIAS="$(hostname)"
+BASE="${KB_SERVER_URL:-http://${HOSTALIAS}:8765}"
+BASE="${BASE//\/\/localhost:/\/\/${HOSTALIAS}:}"
+BASE="${BASE//\/\/127.0.0.1:/\/\/${HOSTALIAS}:}"
 URL="$BASE/bridge/watch?id=$ID"
 
 # LAUNCH THIS WITH run_in_background:true AND THE timeout PARAMETER OMITTED.

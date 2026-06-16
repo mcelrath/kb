@@ -177,7 +177,8 @@ def test_owed_reply_offline_sender_suppressed(tmp_path):
                  env={"AGENT_ID": "me", "KB_SERVER_URL": url, "CLAUDE_STATE_DIR": str(tmp_path),
                       "AGENT_BRIDGE_DIR": str(tmp_path / "empty"), "BRIDGE_OWED_HARD_BLOCK": "1"})
     assert p.returncode == 0, "offline-sender owed must NOT hard-block"
-    assert "#1" not in p.stdout and "suppressed" in p.stdout
+    # all-offline -> silent (no nag, no per-Stop spam)
+    assert "#1" not in p.stdout and "BRIDGE_OWED_REPLIES" not in p.stdout
 
 
 def test_owed_reply_hard_block(tmp_path):
@@ -218,11 +219,14 @@ def test_owed_reply_defer_clears_block(tmp_path):
     ("http://tardis:9510", "tardis"),
 ])
 def test_watch_loopback_rewrite(given, expect_host):
-    # Replicate the script's two rewrite expansions and assert the resolved host.
+    # Replicate the script's HOST-RELATIVE rewrite: loopback -> $(hostname). The
+    # test host's hostname stands in for the local kb-server alias; the parametrized
+    # 'ash' expectations hold because the suite runs on ash. A non-loopback base
+    # (ash/tardis) passes through unchanged.
     snippet = (
-        f'BASE="{given}"; '
-        'BASE="${BASE//\\/\\/localhost:/\\/\\/ash:}"; '
-        'BASE="${BASE//\\/\\/127.0.0.1:/\\/\\/ash:}"; '
+        f'BASE="{given}"; H="$(hostname)"; '
+        'BASE="${BASE//\\/\\/localhost:/\\/\\/$H:}"; '
+        'BASE="${BASE//\\/\\/127.0.0.1:/\\/\\/$H:}"; '
         'echo "$BASE"'
     )
     p = _run(["bash", "-c", snippet])
@@ -232,12 +236,11 @@ def test_watch_loopback_rewrite(given, expect_host):
 
 
 def test_watch_script_has_rewrite():
-    # Drift guard: the parametrized test above replicates the rewrite expansions;
-    # assert the real script still carries both, so they can't diverge silently.
+    # Drift guard: the real script must carry the host-relative rewrite (loopback ->
+    # $(hostname), NOT a hardcoded peer host).
     src = open(os.path.join(SCRIPTS, "kb-bridge-watch.sh")).read()
-    # The script escapes the slashes in the bash expansion (\/\/localhost:), so
-    # match the host tokens that must appear in the rewrite, not literal slashes.
-    assert "localhost:" in src and "127.0.0.1:" in src and "ash:" in src
+    assert "localhost:" in src and "127.0.0.1:" in src and "HOSTALIAS" in src
+    assert "hostname" in src
 
 
 # --------------------------------------------------------------------------
