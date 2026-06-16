@@ -8,6 +8,15 @@
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
+# This SSE watcher is the CLAUDE Code idle-wake mechanism. goose has its OWN background
+# bridge poller (session/mod.rs) for wake AND ignores a detached asyncRewake hook's exit
+# code — so under goose the watcher is pure overhead (a redundant multi-day SSE connection
+# per idle session). Run it only under Claude (CLAUDE_SESSION_ID / CLAUDE_PLUGIN_ROOT set);
+# exit 0 on goose (PLUGIN_ROOT-only env). kb-d0m.
+if [ -z "${CLAUDE_SESSION_ID:-}" ] && [ -z "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+    exit 0
+fi
+
 INPUT=$(cat 2>/dev/null)
 SID=$(printf '%s' "$INPUT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
 [ -z "$SID" ] && SID="${CLAUDE_SESSION_ID:-}"
