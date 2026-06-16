@@ -304,6 +304,9 @@ def test_watcher_is_asyncrewake_exit2():
     assert "exit 2" in src and "flock" in src
     assert "done < <(" in src, "must read in the main shell (process subst) so exit 2 propagates"
     assert "Last-Event-ID" in src and "BRIDGE_PING" not in src
+    # the curl child MUST close the flock fd (9>&-) or an orphaned curl holds the lock
+    # forever -> flock dedup blocks every relaunch -> agent never wakes again.
+    assert "9>&-" in src, "curl must close fd 9 so the lock releases when the watcher exits"
 
 
 def test_rewake_launcher_resolves_id_and_execs_watcher():

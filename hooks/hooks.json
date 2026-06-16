@@ -43,7 +43,7 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/bridge-watch-rewake.sh\"",
             "asyncRewake": true,
-            "timeout": 21600
+            "timeout": 604800
           }
         ]
       }
@@ -194,7 +194,7 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/bridge-watch-rewake.sh\"",
             "asyncRewake": true,
-            "timeout": 21600
+            "timeout": 604800
           },
           {
             "type": "command",

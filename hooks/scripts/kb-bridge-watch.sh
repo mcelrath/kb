@@ -56,7 +56,12 @@ while true; do
                 exit 2
                 ;;
         esac
-    done < <(curl -sN --no-buffer --max-time 604800 "${HDR[@]}" "$BASE/bridge/watch?id=$ID" 2>/dev/null)
+    done < <(curl -sN --no-buffer --max-time 604800 "${HDR[@]}" "$BASE/bridge/watch?id=$ID" 2>/dev/null 9>&-)
+    # ^ 9>&- closes the flock fd in the curl CHILD: process substitution otherwise lets
+    # curl inherit fd 9, and an orphaned curl (after the script exits 2 / is timeout-killed)
+    # would keep the lock HELD forever -> flock -n fails on every relaunch -> no watcher ->
+    # the agent never wakes again. Closing fd 9 in curl releases the lock the moment the
+    # script process exits. (kb-ee7 stale-lock-no-process regression.)
     # curl ended with no directed message (benign close / restart / --max-time) -> reconnect.
     sleep 2
 done
