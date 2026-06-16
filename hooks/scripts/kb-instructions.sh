@@ -24,6 +24,10 @@ MARK="$STATE_DIR/${SESSION_ID//[^A-Za-z0-9_-]/_}-instructions-injected"
 [ -f "$MARK" ] && exit 0
 : > "$MARK" 2>/dev/null
 
+# SINGLE SOURCE of the operational kb/bridge instructions across all harnesses (kb-asf.8).
+# This is the condensed runtime mirror of AGENTS.md's "## Knowledge base" + "## Agent bridge"
+# sections — keep the two in sync. Per-project AGENTS.md files must NOT copy this block
+# (kb-40c): the plugin injects it everywhere, so there is exactly one operational source.
 cat <<'INSTRUCTIONS'
 === kb conventions ===
 SEARCH FIRST then ADD. kb search "topic" (unfiltered first; then narrow with -p PROJECT).
