@@ -53,7 +53,8 @@ ASKING → VERIFY (user provides guidance)
    - Run `kbt children <id>` to see child tasks and their status
 2. Check `{project_root}/reviewers.yaml` exists
    - If missing → ERROR: "No reviewers.yaml at {project_root}/reviewers.yaml. Run project-setup agent first: Task(subagent_type=\"project-setup\", model=\"sonnet\", run_in_background=True, prompt=\"Setup project at: {project_root}\")"
-3. Auto-select reviewer panel (see AUTO-SELECT below)
+3. Load the reviewer panel from `reviewers.yaml` → `composite_panels.default_review`
+   (see Panel Selection below) — the SAME curated panel expert-review uses.
 4. Load checks from MULTIPLE sources (cumulative, earlier wins on id collision):
    a. `{project_root}/checks/*.yaml` (domain-specific, if exist)
    b. `{project_root}/.claude/rules/*.md` (project rules, if directory exists — parse all anti-pattern tables)
@@ -66,59 +67,41 @@ ASKING → VERIFY (user provides guidance)
    for format details.
 5. → GATHER
 
-### AUTO-SELECT: Automatic Panel Selection
+### Panel Selection (from reviewers.yaml composite_panels)
 
-When `reviewer_persona` and `reviewer_personas` are BOTH missing from context.yaml:
+The panel comes from `reviewers.yaml` — the SAME single source of truth expert-review uses,
+so a plan and its implementation are judged by the same experts. No per-run Haiku selection.
 
-1. Get context for selection:
-   - Run `git diff --stat HEAD~1` to see changed files
-   - Read first 100 lines of largest changed file
-   - Check project_root for domain hints (directory layout, languages, dependencies)
-2. Spawn Haiku agent to select panel:
+1. **Explicit override wins.** If `context.yaml` already sets `reviewer_persona` (string) or
+   `reviewer_personas` (list), use that and skip the rest (the caller pinned a panel).
+2. **Otherwise load `composite_panels.default_review`** from `reviewers.yaml`:
    ```
-   Task(subagent_type="general-purpose", model="haiku", prompt="""
-   Read {project_root}/reviewers.yaml and select the most appropriate reviewer panel.
-   If {project_root}/reviewers.yaml does not exist, ERROR with:
-   "No project-specific reviewers.yaml found at {project_root}/reviewers.yaml"
-
-   CHANGED FILES:
-   {git diff --stat output}
-
-   SAMPLE CODE:
-   {first 100 lines of largest changed file}
-
-   PROJECT PATH: {project_root}
-
-   TASK: Select 2-3 reviewers from reviewers.yaml that best match this code's domain.
-   Consider the code's domain (e.g. data/numeric, web/API, systems, tests) and pick
-   reviewers whose expertise matches.
-
-   ALWAYS include Claude for anti-pattern detection.
-
-   Return ONLY valid JSON:
-   {
-     "panel": [
-       {"name": "Reviewer Name", "domain": "their specialty", "focus": ["key", "areas"]},
-       {"name": "Claude", "domain": "anti-pattern detection", "focus": ["CLAUDE.md violations"]}
-     ],
-     "reason": "one sentence why these reviewers"
-   }
-   """)
+   python3 -c "import yaml; d=yaml.safe_load(open('reviewers.yaml')); \
+     names=d['composite_panels']['default_review']['personas']; \
+     idx={p['short_name']: p for p in d['personas']}; \
+     [print(p['name']+':', ', '.join(e['name'] for e in p['experts'])) \
+       for p in (idx.get(n) or next((x for x in d['personas'] if x['name']==n), None) for n in names) if p]"
    ```
-3. Parse Haiku response, set `reviewer_personas` from `panel` array
-4. Write updated context.yaml with selected panel
-5. Continue
+   Each persona in the panel contributes its experts (name + `association`) as a reviewer.
+   The mandatory `architecture` persona (project-setup always puts it in `default_review`) means
+   architecture concerns are reviewed here too. Set these as `reviewer_personas`.
+3. **Always include Claude** for anti-pattern detection (append if not already in the panel).
 
-**Fallback**: If Haiku fails or returns invalid JSON, use default panel:
-```yaml
-reviewer_personas:
-  - name: "Prof. Donald Knuth"
-    domain: "code correctness"
-    focus: ["algorithms", "documentation"]
-  - name: "Claude"
-    domain: "anti-pattern detection"
-    focus: ["CLAUDE.md violations", "debug code"]
-```
+**Fallbacks** (in order) when `composite_panels.default_review` is absent:
+- Use ALL `personas` in `reviewers.yaml` as the panel.
+- If `reviewers.yaml` has no personas at all, use the generic default panel:
+  ```yaml
+  reviewer_personas:
+    - name: "Prof. Donald Knuth"
+      domain: "code correctness"
+      focus: ["algorithms", "documentation"]
+    - name: "Senior Software Architect"
+      domain: "architecture"
+      focus: ["module boundaries", "coupling", "trade-offs"]
+    - name: "Claude"
+      domain: "anti-pattern detection"
+      focus: ["CLAUDE.md violations", "debug code"]
+  ```
 
 ### Default Checks (always applied)
 
