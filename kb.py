@@ -968,6 +968,28 @@ def main():
              "Launch with run_in_background:true and NO timeout.")
     bridge_watch_parser.add_argument("agent_id", help="Your bridge agent id")
 
+    bridge_send_parser = bridge_sub.add_parser("send",
+        help="Send a bridge message via the kb-server (canonical send path).")
+    bridge_send_parser.add_argument("to", help="Recipient id (or comma-list)")
+    bridge_send_parser.add_argument("subject", nargs="?", default="", help="Subject")
+    bridge_send_parser.add_argument("--body", default=None, help="Body (default: read stdin)")
+    bridge_send_parser.add_argument("--reply", type=int, metavar="ID", help="reply_to message id")
+    bridge_send_parser.add_argument("--needs-reply", action="store_true", dest="needs_reply",
+        help="Mark this message as owed a reply")
+    bridge_send_parser.add_argument("--from", dest="from_id", default=None,
+        help="Sender id (default: AGENT_ID env / persona pin)")
+
+    bridge_recv_parser = bridge_sub.add_parser("recv",
+        help="Drain unread messages for this agent via the kb-server (usually auto-injected).")
+    bridge_recv_parser.add_argument("agent_id", nargs="?", default=None,
+        help="Your id (default: AGENT_ID env)")
+    bridge_recv_parser.add_argument("-n", "--limit", type=int, default=50, help="Max messages")
+
+    bridge_announce_parser = bridge_sub.add_parser("announce",
+        help="Announce/join the bridge registry (presents the registry backend under kb bridge).")
+    bridge_announce_parser.add_argument("rest", nargs=argparse.REMAINDER,
+        help="Flags passed through to the registry backend (--role/--focus/... + stdin)")
+
     # Reconcile command
     reconcile_parser = _add_parser("reconcile", "Reconcile KB with source document", user_visible=False)
     reconcile_parser.add_argument("document", type=Path, help="Source document to reconcile against")

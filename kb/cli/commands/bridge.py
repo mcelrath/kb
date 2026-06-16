@@ -142,8 +142,102 @@ def run_bridge(kb, args, bridge_parser) -> None:
         _run_promote(kb, args)
     elif cmd == "watch":
         _run_watch(args)
+    elif cmd == "send":
+        _run_send(args)
+    elif cmd == "recv":
+        _run_recv(args)
+    elif cmd == "announce":
+        _run_announce(args)
     else:
         bridge_parser.print_help()
+
+
+def _server_url() -> str:
+    import os
+    return os.environ.get("KB_SERVER_URL", "http://127.0.0.1:8765").rstrip("/")
+
+
+def _self_id(args) -> str:
+    """Resolve THIS agent's bridge id: --from, else AGENT_ID env."""
+    import os
+    return (getattr(args, "from_id", None) or os.environ.get("AGENT_ID", "")).strip()
+
+
+def _run_send(args) -> None:
+    """kb bridge send <to> <subject> [--body T|stdin] [--reply N] [--needs-reply] [--from ID]
+    POSTs to the kb-server /bridge/send — the canonical send path (NOT the binary)."""
+    import json
+    import urllib.request
+    sender = _self_id(args)
+    if not sender:
+        print("kb bridge send: no sender id — pass --from <id> or set AGENT_ID "
+              "(/persona pins it).", file=sys.stderr)
+        sys.exit(1)
+    body = args.body
+    if body is None:
+        body = sys.stdin.read() if not sys.stdin.isatty() else ""
+    payload = {"from": sender, "to": args.to, "subject": args.subject or "", "body": body}
+    if getattr(args, "reply", None):
+        payload["reply_to"] = args.reply
+    if getattr(args, "needs_reply", False):
+        payload["needs_reply"] = True
+    req = urllib.request.Request(
+        f"{_server_url()}/bridge/send", data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            resp = json.loads(r.read())
+    except Exception as e:
+        print(f"kb bridge send: kb-server unreachable ({e})", file=sys.stderr)
+        sys.exit(1)
+    if resp.get("ok"):
+        print(f"sent: id={resp.get('id')} to={args.to}")
+    else:
+        print(f"kb bridge send failed: {resp.get('error')}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _run_recv(args) -> None:
+    """kb bridge recv [<id>] — drain unread for this agent via the kb-server.
+    (Normally unnecessary: peer messages auto-inject every turn; this is an
+    explicit on-demand read.)"""
+    import json
+    import os
+    import urllib.request
+    rid = (getattr(args, "agent_id", None) or os.environ.get("AGENT_ID", "")).strip()
+    if not rid:
+        print("kb bridge recv: no id — pass <id> or set AGENT_ID.", file=sys.stderr)
+        sys.exit(1)
+    limit = getattr(args, "limit", 50) or 50
+    url = f"{_server_url()}/bridge/messages?recipient={rid}&limit={limit}"
+    try:
+        with urllib.request.urlopen(url, timeout=8) as r:
+            msgs = json.loads(r.read())
+    except Exception as e:
+        print(f"kb bridge recv: kb-server unreachable ({e})", file=sys.stderr)
+        sys.exit(1)
+    if not msgs:
+        print("(no messages)")
+        return
+    for m in msgs:
+        print(f"[#{m.get('id')}] from {m.get('sender')}: {m.get('subject', '')}")
+        b = (m.get("body") or "").strip()
+        if b:
+            print(f"    {b[:400]}")
+
+
+def _run_announce(args) -> None:
+    """kb bridge announce [...] — registry/identity write. There is no kb-server
+    registry-write endpoint yet (full migration is deferred), so this presents the
+    existing registry binary UNDER `kb bridge` so agents never invoke it directly.
+    All flags/heredoc stdin pass straight through via execvp."""
+    import os
+    binp = os.path.expanduser("~/.agent-bridge/bridge")
+    if not os.path.exists(binp):
+        print("kb bridge announce: registry backend not found at "
+              f"{binp}", file=sys.stderr)
+        sys.exit(1)
+    os.execvp(binp, [binp, "announce"] + list(getattr(args, "rest", []) or []))
 
 
 def _run_watch(args) -> None:
