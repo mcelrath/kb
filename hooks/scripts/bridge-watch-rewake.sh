@@ -29,4 +29,4 @@ if [ -z "$ID" ] && [ -x "$HOME/.agent-bridge/bridge" ]; then
 fi
 [ -z "$ID" ] && exit 0   # no id -> no watcher this idle; re-armed at the next Stop
 
-exec bash "$HERE/kb-bridge-watch.sh" "$ID"
+exec bash "$HERE/kb-bridge-watch.sh" "$ID" "$SID"

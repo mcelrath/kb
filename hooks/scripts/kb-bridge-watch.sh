@@ -17,10 +17,11 @@
 # Single-instance via flock (kb-ee7 review B1): a second invocation (rapid Stops)
 # fails to acquire the per-id lock and exits 0. `pgrep` would be a TOCTOU race.
 #
-# Usage:  kb-bridge-watch.sh <agent-id>
-# Env:    KB_SERVER_URL (default http://<hostname>:8765), CLAUDE_STATE_DIR
+# Usage:  kb-bridge-watch.sh <agent-id> [session-id]
+# Env:    KB_SERVER_URL (default http://<hostname>:8765), CLAUDE_STATE_DIR, KB_STATE_DIR
 set -u
-ID="${1:?usage: kb-bridge-watch.sh <agent-id>}"
+ID="${1:?usage: kb-bridge-watch.sh <agent-id> [session-id]}"
+SESSION_ID="${2:-}"
 
 # --- atomic single-instance: hold a per-id lock for the process lifetime ---
 STATE_DIR="${CLAUDE_STATE_DIR:-$HOME/.claude/state}"
@@ -38,7 +39,30 @@ BASE="${KB_SERVER_URL:-http://${HOSTALIAS}:8765}"
 BASE="${BASE//\/\/localhost:/\/\/${HOSTALIAS}:}"
 BASE="${BASE//\/\/127.0.0.1:/\/\/${HOSTALIAS}:}"
 
-LAST=""   # last-seen message id; replayed via Last-Event-ID so a reconnect misses nothing
+# Initial Last-Event-ID: REPLAY unseen backlog so a directed message that arrived during
+# the SessionStart->idle->connect window still wakes. The SSE endpoint starts a fresh
+# subscriber at the TAIL (delivers only post-connect messages), so without a seed a
+# backlogged message is missed -> no wake until the next prompt (the bug the user hit).
+# Seed from the HIGHER of two per-session cursors:
+#   <session>-bridge-injected : advanced by bridge-inject (messages already shown while
+#       active) — leave it UNTOUCHED here so bridge-inject still delivers the user-visible
+#       notice on the woken turn.
+#   <session>-bridge-woken    : advanced HERE on each wake — so a relaunched watcher does
+#       NOT re-wake the same id (no wake loop on pure-text replies that never advance the
+#       inject cursor).
+# No session id / no cursors -> LAST="" -> fresh tail (unchanged legacy behavior; a brand
+# new session must not replay ancient history).
+INJ_STATE="${KB_STATE_DIR:-/tmp/claude-kb-state}"
+WOKEN_CURSOR=""
+LAST=0
+if [ -n "$SESSION_ID" ]; then
+    _inj=$(tr -dc '0-9' < "$INJ_STATE/${SESSION_ID}-bridge-injected" 2>/dev/null)
+    WOKEN_CURSOR="$INJ_STATE/${SESSION_ID}-bridge-woken"
+    _wok=$(tr -dc '0-9' < "$WOKEN_CURSOR" 2>/dev/null)
+    LAST=${_inj:-0}
+    [ "${_wok:-0}" -gt "$LAST" ] 2>/dev/null && LAST=$_wok
+fi
+[ "$LAST" = "0" ] && LAST=""
 while true; do
     HDR=()
     [ -n "$LAST" ] && HDR=(--header "Last-Event-ID: $LAST")
@@ -51,6 +75,10 @@ while true; do
                 payload="${line#data: }"
                 event=$(printf '%s' "$payload" | python3 -c "import sys,json; print((json.load(sys.stdin).get('event') or '').strip())" 2>/dev/null)
                 [ "$event" = "announce" ] && continue
+                # Record the woken id so a relaunched watcher won't re-wake it (LAST holds
+                # the current message id from the preceding `id:` frame). Inject cursor is
+                # left untouched so bridge-inject still shows the notice on the woken turn.
+                [ -n "$WOKEN_CURSOR" ] && { mkdir -p "$INJ_STATE" 2>/dev/null; printf '%s' "$LAST" > "$WOKEN_CURSOR" 2>/dev/null; }
                 # Real directed message -> WAKE: JSON to stderr (asyncRewake injects it), exit 2.
                 printf 'BRIDGE_WAKE %s\n' "$payload" >&2
                 exit 2
