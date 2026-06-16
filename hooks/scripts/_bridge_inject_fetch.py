@@ -111,12 +111,9 @@ def main():
         lines.append(f"[#{m.get('id')}] from={sender}{nr}{rt}  {subj}\n{body}")
     body_text = "\n---\n".join(lines)
 
-    # On goose these events CANNOT deliver: SessionStart = emit() (stdout discarded),
-    # PreToolUse = emit_blocking() (no additionalContext channel). Return BEFORE advancing
-    # the cursor — otherwise we'd consume the message (mark it injected) without ever
-    # showing it = LOST mail on every goose restart. goose receives via UserPromptSubmit
-    # (emit_collect) + its own /moim poller, which carry their own cursors.
-    if event in ("PreToolUse", "SessionStart") and not is_claude:
+    # goose PreToolUse = emit_blocking: no additionalContext channel -> stay silent
+    # (return BEFORE advancing the cursor so we never consume an undeliverable message).
+    if event == "PreToolUse" and not is_claude:
         return
 
     # Advance the cursor only after a successful build (never past undelivered msgs).
@@ -129,7 +126,7 @@ def main():
 
     wrapped = f"BRIDGE_UPDATE (new peer messages):\n{body_text}\n(end bridge messages)"
 
-    if is_claude and event in ("PreToolUse", "UserPromptSubmit", "SessionStart"):
+    if is_claude and event in ("PreToolUse", "UserPromptSubmit"):
         notice = _notice(fresh)
         # OSC 9 desktop notification (prefix-free, for terminals that support it:
         # iTerm2/kitty/WezTerm/Ghostty). Strip control chars so they can't break the
