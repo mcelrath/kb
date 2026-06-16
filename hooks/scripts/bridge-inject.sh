@@ -25,16 +25,16 @@ ID=""
 [ -f "$AGENTS" ] && ID=$(jq -r --arg sid "$SESSION_ID" '.agents[] | select(.session_id == $sid) | .id' "$AGENTS" 2>/dev/null | head -n1)
 case "$ID" in ""|"("*|"null") exit 0 ;; esac
 
-# Refresh this agent's LIVENESS mtime so `bridge agents` reports it ONLINE while
-# it is actively running turns. `bridge:_agent_status` derives liveness from the
-# mtime of ~/.agent-bridge/<id>.cursor (fresh <120s = online). The old
-# bridge-watcher-check.sh refreshed it on every PreToolUse/UserPromptSubmit, but
-# injection migrated to the kb-server and nothing touched the file — so every
-# active agent read 'offline:stale' despite delivering/receiving every turn.
-# This hook fires on the SAME events, so it is the correct place to restore it.
-# `touch` bumps mtime (preserves content for an existing legacy cursor; an empty
-# create is harmless since reads now go through the kb-server cursor, not this file).
-touch "$HOME/.agent-bridge/${ID}.cursor" 2>/dev/null || true
+# Refresh this agent's LIVENESS each turn AND record WHICH session holds the id.
+# `bridge:_agent_status` derives online/offline from the mtime of
+# ~/.agent-bridge/<id>.cursor (fresh <120s = online) — writing the file bumps mtime,
+# so presence still works (filename UNCHANGED — the binary reads exactly `<id>.cursor`).
+# kb-72f717.3 F1: write THIS session_id as the cursor CONTENT (not a bare `touch`), so
+# persona identity resolution can tell whether a DIFFERENT live session currently holds
+# this bridge id (content=other session_id + fresh mtime ⇒ a live collision). A renamed
+# per-session file (<id>.<sid>.cursor) would break `_agent_status` (no glob) — content is
+# the only variant that preserves presence AND makes liveness per-session-decidable.
+printf '%s' "$SESSION_ID" > "$HOME/.agent-bridge/${ID}.cursor" 2>/dev/null || true
 
 # NOTE (kb-ee7): no watcher teardown here anymore. The watcher is now an asyncRewake
 # Stop hook (bridge-watch-rewake.sh) launched/owned by the harness; its flock keeps a

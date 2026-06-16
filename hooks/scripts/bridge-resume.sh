@@ -43,34 +43,47 @@ except: pass" 2>/dev/null)
 fi
 [[ -z "$AGENT_ID" ]] && exit 0
 
-# kb-86r: persist the resolved identity as the AUTHORITATIVE session pin if none
-# exists yet. Reaching here means a CLEAN resolve — the whoami theft-guard above
-# already REFUSED (exit 0) any registry entry whose session_id isn't ours — so we
-# never pin a stolen identity. Without this, an agent that was announced but never
-# ran /persona has no pin, and resolution falls through to the last-writer-wins
-# registry: the identity-collision root cause (kb-86r). Writing the pin makes THIS
-# session's identity stable regardless of later registry stomps.
-if [[ -n "${CLAUDE_SESSION_ID:-}" && ! -f "$PIN_DIR/session-$CLAUDE_SESSION_ID" ]]; then
-    mkdir -p "$PIN_DIR" 2>/dev/null \
-        && printf '%s\n' "$AGENT_ID" > "$PIN_DIR/session-$CLAUDE_SESSION_ID" 2>/dev/null \
-        && echo "BRIDGE RESUME [$AGENT_ID]: wrote authoritative session pin (kb-86r — resolution no longer falls back to the last-writer registry)."
+# --- QUALIFY-ON-CONFLICT (kb-72f717.3) — replaces the blind --steal flapping engine ---
+# This SessionStart re-announce is the AUTOMATIC path and NEVER --steals. (Explicit takeover
+# lives at the action site: the /persona command and goose POST /bridge/identity do
+# `announce --steal` themselves.) If a DIFFERENT, LIVE session currently holds this bridge id
+# — detected via the per-session CONTENT cursor (~/.agent-bridge/<id>.cursor holds the
+# holder's session_id; mtime <120s = live, written each turn by bridge-inject) — we QUALIFY
+# to <id>#<shortsid> and repin instead of stealing (kb-86r D1 lower-session-id-keeps-bare
+# convergence, D2 no-reclaim). A stale/dead holder -> keep the bare name (D3 refined: qualify
+# only against a LIVE distinct session). BARE_ID is preserved for the registry role lookup
+# (a freshly-qualified id has no registry entry yet).
+BARE_ID="$AGENT_ID"
+SHORT_SID="${CLAUDE_SESSION_ID:0:8}"
+_cursor="$HOME/.agent-bridge/${BARE_ID}.cursor"
+_hold=$(cat "$_cursor" 2>/dev/null | tr -d '[:space:]')
+_age=$(( $(date +%s) - $(stat -c %Y "$_cursor" 2>/dev/null || echo 0) ))
+if [[ -n "$_hold" && -n "${CLAUDE_SESSION_ID:-}" && "$_hold" != "$CLAUDE_SESSION_ID" && "$_age" -lt 120 ]]; then
+    AGENT_ID="${BARE_ID}#${SHORT_SID}"
+    echo "BRIDGE RESUME: bare id '$BARE_ID' is held by a LIVE session (${_hold:0:8}, ${_age}s ago) — qualified to '$AGENT_ID' (no steal; kb-86r). Run /persona explicitly to take it over."
 fi
 
-# Re-announce (registry op) to refresh session_id after compaction.
+# Persist the (possibly-qualified) id as the authoritative session pin (kb-86r — stops
+# resolution falling through to the last-writer registry).
+if [[ -n "${CLAUDE_SESSION_ID:-}" ]]; then
+    mkdir -p "$PIN_DIR" 2>/dev/null \
+        && printf '%s\n' "$AGENT_ID" > "$PIN_DIR/session-$CLAUDE_SESSION_ID" 2>/dev/null
+fi
+
+# Re-announce (registry refresh after compaction) — NEVER --steal here. Role is looked up by
+# the BARE id (the qualified id has no prior entry); the announce registers the resolved id.
 AGENTS_JSON="$HOME/.agent-bridge/agents.json"
 if [[ -f "$AGENTS_JSON" ]]; then
     read -r ROLE FOCUS OFFERING < <(python3 -c "
 import json
 try:
     d=json.load(open('$AGENTS_JSON'))
-    a=next((x for x in d.get('agents',[]) if x.get('id')=='$AGENT_ID'),{})
+    a=next((x for x in d.get('agents',[]) if x.get('id')=='$BARE_ID'),{})
     print(a.get('role','-'), a.get('focus','-'), a.get('offering','-'))
 except: print('- - -')" 2>/dev/null)
-    STEAL_FLAG=""; [[ -n "$PIN_FILE" && -f "$PIN_FILE" ]] && STEAL_FLAG="--steal"
     [[ "$ROLE" != "-" && -n "$ROLE" ]] && "$BRIDGE" announce --id "$AGENT_ID" --role "$ROLE" \
         --focus "resumed after compaction" --offering "${OFFERING#-}" \
-        --directed "checking the bridge for missed messages" $STEAL_FLAG </dev/null 2>/dev/null
-
+        --directed "checking the bridge for missed messages" </dev/null 2>/dev/null
 fi
 
 echo "BRIDGE RESUME [$AGENT_ID]: announced. Idle reachability is automatic (asyncRewake Stop hook) — no watcher to launch."
