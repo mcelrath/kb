@@ -38,9 +38,19 @@ else
 fi
 
 # Fast no-op check: venv exists + python binary present + hash unchanged
+ROOT_FILE="${VENV_DIR}/.kb-src-root"
 if [ -f "${VENV_PYTHON}" ] && [ -f "${HASH_FILE}" ]; then
     STORED_HASH=$(cat "${HASH_FILE}")
     if [ "${CURRENT_HASH}" = "${STORED_HASH}" ]; then
+        # Requirements unchanged — but re-run editable install if the plugin root
+        # changed (e.g. plugin updated to a new versioned directory).
+        STORED_ROOT=""
+        [ -f "${ROOT_FILE}" ] && STORED_ROOT=$(cat "${ROOT_FILE}")
+        if [ "${STORED_ROOT}" != "${PLUGIN_ROOT}" ]; then
+            echo "kb-plugin setup-venv: plugin root changed (${STORED_ROOT} -> ${PLUGIN_ROOT}); re-installing editable package" >&2
+            "${VENV_DIR}/bin/pip" install --quiet -e "${PLUGIN_ROOT}"
+            echo "${PLUGIN_ROOT}" > "${ROOT_FILE}"
+        fi
         # Venv is up-to-date; emit no output (SessionStart must be non-blocking)
         exit 0
     fi
@@ -81,5 +91,50 @@ fi
 
 # Store the hash so the next run is a no-op
 echo "${CURRENT_HASH}" > "${HASH_FILE}"
+
+# Install kb as an editable package so <venv>/bin/kb exists and is importable.
+# Record the installed root so we can detect plugin-version changes on future runs.
+# (ROOT_FILE already declared above for the fast-path check.)
+"${VENV_DIR}/bin/pip" install --quiet -e "${PLUGIN_ROOT}"
+echo "${PLUGIN_ROOT}" > "${ROOT_FILE}"
+
+# Install ~/.local/bin/kb wrapper (stable: references venv path, not versioned root).
+_install_wrapper() {
+    local local_bin="${HOME}/.local/bin"
+    local wrapper="${local_bin}/kb"
+    local venv_kb="${VENV_DIR}/bin/kb"
+
+    [ -d "${local_bin}" ] || return 0   # ~/.local/bin absent — skip silently
+
+    # Check ~/.local/bin is on PATH (advisory only; don't fail).
+    case ":${PATH}:" in
+        *":${local_bin}:"*) ;;
+        *)
+            echo "kb-plugin setup-venv: NOTE — ${local_bin} is not on PATH; add it to your shell profile so \`kb\` resolves by name." >&2
+            ;;
+    esac
+
+    # If a wrapper already exists and points at the same venv kb, leave it.
+    if [ -f "${wrapper}" ]; then
+        if grep -qF "${venv_kb}" "${wrapper}" 2>/dev/null; then
+            return 0   # already correct
+        fi
+        # Check it's ours (not some unrelated kb binary) before overwriting.
+        if ! grep -qF "kb-plugin" "${wrapper}" 2>/dev/null && ! grep -qF "${HOME}/.cache/kb" "${wrapper}" 2>/dev/null && ! grep -qF "CLAUDE_PLUGIN_DATA" "${wrapper}" 2>/dev/null; then
+            echo "kb-plugin setup-venv: ${wrapper} exists and does not look like a kb-plugin wrapper — skipping." >&2
+            return 0
+        fi
+    fi
+
+    cat > "${wrapper}" << WRAPPER_EOF
+#!/usr/bin/env bash
+# kb wrapper — written by kb-plugin setup-venv.sh
+# Stable: references the plugin venv, not the versioned CLAUDE_PLUGIN_ROOT.
+exec "${venv_kb}" "\$@"
+WRAPPER_EOF
+    chmod +x "${wrapper}"
+    echo "kb-plugin setup-venv: installed ${wrapper}" >&2
+}
+_install_wrapper
 
 echo "kb-plugin setup-venv: venv ready (${VENV_PYTHON})" >&2

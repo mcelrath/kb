@@ -1,0 +1,21 @@
+[project]
+name = "kb"
+version = "0.1.0"
+description = "Knowledge Base CLI"
+requires-python = ">=3.11"
+
+[project.scripts]
+kb = "kb_entry:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# kb_entry.py is a top-level MODULE (the console-script shim) — packages.find only finds the
+# kb/ package, so it must be declared here or `kb = kb_entry:main` can't import it.
+py-modules = ["kb_entry"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["kb*"]
