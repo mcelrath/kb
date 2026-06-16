@@ -55,7 +55,14 @@ low-level systems work), incorporate them — they supplement the general roster
 
 ## Protocol
 
-1. **If `<project_root>/reviewers.yaml` exists**, read it and incorporate project-specific experts into your analysis. The reviewers.yaml experts supplement (not replace) the associations above.
+1. **If `<project_root>/reviewers.yaml` exists**, load the persona with `short_name: architecture`
+   (project-setup always creates a "Senior Software Architect" persona under that short_name) and
+   think with its expert `association` strings — that persona is the project's curated architecture
+   roster and supplements (not replaces) the associations above. Also fold in any other
+   domain-specific experts relevant to the change. Load the index by short_name:
+   ```
+   python3 -c "import yaml; d=yaml.safe_load(open('reviewers.yaml')); [print(p['short_name']+':', ', '.join(e['name'] for e in p['experts'])) for p in d['personas']]"
+   ```
 
 2. **Survey** the codebase: CLAUDE.md, README, directory structure, recent git log. Max 15 tool calls for survey.
 

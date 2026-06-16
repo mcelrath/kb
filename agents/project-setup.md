@@ -136,9 +136,35 @@ For each selected expert, answer in your response text (not tool calls):
 
 3. **Domain match**: Does this person's actual work address what the project needs reviewed?
 
+### Always include a software-architecture persona (MANDATORY)
+
+Regardless of the detected domains, ALWAYS create one persona named exactly:
+
+```yaml
+- name: "Senior Software Architect"
+  short_name: architecture
+  trigger_paths: ["**/*"]            # broad: architecture concerns cut across the tree
+  experts:
+    - name: "Martin Fowler"
+      association: "..."
+    - name: "Robert C. Martin (Uncle Bob)"
+      association: "..."
+    - name: "Eric Evans"
+      association: "..."
+    - name: "John Ousterhout"
+      association: "..."
+    # add Nygard / Newman / Hohpe / Kleppmann when the project has resilience,
+    # service-decomposition, messaging, or data-intensive concerns respectively.
+```
+
+This persona is the single source of architecture experts consumed by the
+`software-architect` agent (which loads `short_name: architecture` by convention) AND is
+the persona the panel rule adds on large changes ("add Senior Software Architect" below).
+It MUST be present in every reviewers.yaml. Add it to `composite_panels.default_review`.
+
 ### Selecting the Right Number of Personas
 
-- 3-5 personas total is typical
+- 3-5 personas total is typical (the mandatory `architecture` persona counts as one)
 - Each persona needs a clear trigger: which files/paths trigger this reviewer?
 - Prefer overlap on critical paths (e.g., consensus code might trigger Cryptographer,
   Adversarial Reviewer, AND Graph Theory Expert)
