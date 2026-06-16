@@ -144,36 +144,60 @@ OWED_MSGS = [
 ]
 
 
+def _online_bridge_dir(tmp_path, *senders):
+    """Make `senders` read ONLINE: a fresh <sender>.cursor in an isolated bridge dir."""
+    bd = tmp_path / "bridge"
+    bd.mkdir(exist_ok=True)
+    for s in senders:
+        (bd / f"{s}.cursor").write_text("")
+    return str(bd)
+
+
 def test_owed_reply_advisory(tmp_path):
     # Isolate CLAUDE_STATE_DIR so the live ~/.claude/state/owed-hard-block flag
-    # (if present) can't turn this advisory case into a hard block.
+    # (if present) can't turn this advisory case into a hard block. `peer` is
+    # marked online so its owed reply is not suppressed by the presence filter.
+    bdir = _online_bridge_dir(tmp_path, "peer")
     with _MockServer(OWED_MSGS) as url:
         p = _run(["python3", os.path.join(SCRIPTS, "bridge-owed-reply-stop.py")],
                  stdin='{"session_id":"x"}',
                  env={"AGENT_ID": "me", "KB_SERVER_URL": url, "CLAUDE_STATE_DIR": str(tmp_path),
-                      "BRIDGE_OWED_HARD_BLOCK": ""})  # clear inherited live-session hard-block
+                      "AGENT_BRIDGE_DIR": bdir, "BRIDGE_OWED_HARD_BLOCK": ""})
     assert p.returncode == 0
     # #1 owed (unanswered to me); #2 answered by #3; #4 to someone else
     assert "#1" in p.stdout and "BRIDGE_OWED_REPLIES" in p.stdout
     assert "#2" not in p.stdout and "not-mine" not in p.stdout
 
 
-def test_owed_reply_hard_block(tmp_path):
+def test_owed_reply_offline_sender_suppressed(tmp_path):
+    # peer is NOT online (no cursor) -> its owed replies are suppressed, not nagged.
     with _MockServer(OWED_MSGS) as url:
         p = _run(["python3", os.path.join(SCRIPTS, "bridge-owed-reply-stop.py")],
                  stdin='{"session_id":"x"}',
-                 env={"AGENT_ID": "me", "KB_SERVER_URL": url,
+                 env={"AGENT_ID": "me", "KB_SERVER_URL": url, "CLAUDE_STATE_DIR": str(tmp_path),
+                      "AGENT_BRIDGE_DIR": str(tmp_path / "empty"), "BRIDGE_OWED_HARD_BLOCK": "1"})
+    assert p.returncode == 0, "offline-sender owed must NOT hard-block"
+    assert "#1" not in p.stdout and "suppressed" in p.stdout
+
+
+def test_owed_reply_hard_block(tmp_path):
+    bdir = _online_bridge_dir(tmp_path, "peer")
+    with _MockServer(OWED_MSGS) as url:
+        p = _run(["python3", os.path.join(SCRIPTS, "bridge-owed-reply-stop.py")],
+                 stdin='{"session_id":"x"}',
+                 env={"AGENT_ID": "me", "KB_SERVER_URL": url, "AGENT_BRIDGE_DIR": bdir,
                       "BRIDGE_OWED_HARD_BLOCK": "1", "CLAUDE_STATE_DIR": str(tmp_path)})
     assert p.returncode == 2, f"hard-block expected exit 2, got {p.returncode}"
 
 
 def test_owed_reply_defer_clears_block(tmp_path):
     import time
+    bdir = _online_bridge_dir(tmp_path, "peer")
     (tmp_path / "owed-deferred").write_text(f"{int(time.time())} 1 testing\n")
     with _MockServer(OWED_MSGS) as url:
         p = _run(["python3", os.path.join(SCRIPTS, "bridge-owed-reply-stop.py")],
                  stdin='{"session_id":"x"}',
-                 env={"AGENT_ID": "me", "KB_SERVER_URL": url,
+                 env={"AGENT_ID": "me", "KB_SERVER_URL": url, "AGENT_BRIDGE_DIR": bdir,
                       "BRIDGE_OWED_HARD_BLOCK": "1", "CLAUDE_STATE_DIR": str(tmp_path)})
     # only owed id is #1, and it's deferred -> no blocking item -> exit 0
     assert p.returncode == 0, f"defer should clear the block, got {p.returncode}"

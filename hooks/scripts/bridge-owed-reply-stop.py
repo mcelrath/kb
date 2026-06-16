@@ -20,12 +20,39 @@ import time
 import urllib.request
 
 BASE = os.environ.get("KB_SERVER_URL", "http://127.0.0.1:8765")
-AGENTS = os.path.expanduser("~/.agent-bridge/agents.json")
+BRIDGE_DIR = os.environ.get("AGENT_BRIDGE_DIR", os.path.expanduser("~/.agent-bridge"))
+AGENTS = os.path.join(BRIDGE_DIR, "agents.json")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from _state import STATE_DIR  # noqa: E402
 
 DEFER_FILE = os.path.join(STATE_DIR, "owed-deferred")
 DEFER_TTL = 6 * 3600
+# A reply is only "owed" to a sender currently ONLINE. A peer whose session has
+# ended can't receive the reply, so its owed-reply must not nag/block — it would
+# pile up forever (e.g. 82 stale owed replies to archie/carl after their physics
+# sessions ended). Liveness mirrors bridge:_agent_status: a live watcher pid OR a
+# cursor mtime fresher than this window. Suppressed owed replies re-surface the
+# moment that peer reconnects (recomputed every Stop). (presence-aware owed)
+ONLINE_WINDOW = 300
+
+
+def sender_online(sender: str) -> bool:
+    if not sender:
+        return False
+    pidf = os.path.join(BRIDGE_DIR, f"{sender}.watcher.pid")
+    try:
+        pid = int(open(pidf).read().strip())
+        if os.path.exists(f"/proc/{pid}"):
+            return True
+    except Exception:
+        pass
+    cur = os.path.join(BRIDGE_DIR, f"{sender}.cursor")
+    try:
+        if time.time() - os.path.getmtime(cur) <= ONLINE_WINDOW:
+            return True
+    except OSError:
+        pass
+    return False
 
 
 def my_id(stdin_payload) -> str:
@@ -102,7 +129,17 @@ def main():
         if mid in replied or mid in superseded:
             continue
         owed.append(m)
+
+    # Drop owed replies to peers who are NOT currently online — you cannot owe a
+    # reply to a session that has ended. These re-surface if the peer reconnects.
+    suppressed = [m for m in owed if not sender_online(m.get("sender"))]
+    owed = [m for m in owed if sender_online(m.get("sender"))]
     if not owed:
+        if suppressed:
+            # Don't silently swallow: one summary line, not the full stale list.
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "Stop",
+                  "additionalContext": f"({len(suppressed)} owed reply(ies) to "
+                  "currently-offline peers suppressed — re-surface when they reconnect)"}}))
         return
 
     deferred = {}
@@ -145,6 +182,8 @@ def main():
     lines = [f"⚠ BRIDGE_OWED_REPLIES ({len(owed)}) — peer --needs-reply messages you "
              f"have NOT answered. Close with a reply (--reply <id>):"]
     lines += [fmt(m) for m in owed]
+    if suppressed:
+        lines.append(f"({len(suppressed)} more to currently-offline peers suppressed)")
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "Stop", "additionalContext": "\n".join(lines)}}))
     sys.exit(0)
