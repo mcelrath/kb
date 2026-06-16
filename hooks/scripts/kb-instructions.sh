@@ -29,22 +29,35 @@ MARK="$STATE_DIR/${SESSION_ID//[^A-Za-z0-9_-]/_}-instructions-injected"
 # sections — keep the two in sync. Per-project AGENTS.md files must NOT copy this block
 # (kb-40c): the plugin injects it everywhere, so there is exactly one operational source.
 cat <<'INSTRUCTIONS'
-=== kb conventions ===
-SEARCH FIRST then ADD. kb search "topic" (unfiltered first; then narrow with -p PROJECT).
-ALWAYS pass --summary "<one sentence>" to kb add — you wrote the finding, write its summary.
-  kb add "content" -t TYPE -p PROJECT --tags T1,T2 --summary "dense one-liner"
-Types: success|failure|experiment|discovery|correction
-Tags (confidence): proven|heuristic|open-problem  (importance): core-result|technique|detail
+=== knowledge base (kb) — durable findings across sessions ===
+SEARCH before you ADD; ADD with a summary.
+  kb search "<topic>"           # semantic+FTS; run UNFILTERED first, then narrow with -p PROJECT
+  kb add "<finding>" -t TYPE -p PROJECT --tags T1,T2 --summary "<one dense sentence>"
+  kb get <kb-id>                # full record incl. evidence
+  kb correct <old-id> "<new content>" -r "<reason>"   # supersede a wrong/outdated finding
+You WROTE the finding, so YOU write --summary (one sentence) — it is what shows in search results.
+Types: success | failure | experiment | discovery | correction
+Tags:  confidence = proven|heuristic|open-problem ;  importance = core-result|technique|detail
+kb-down fallback (embed/LLM server unreachable): write ~/.claude/pending-kb-adds/<UTC>.txt with a
+  "# type: / # project: / # tags:" header; `kb flush-pending` drains it. NEVER fall back to a .md file.
 
-=== agent bridge ===
-Coordinate directly with peers on this host. Your sender id is inferred — just use `kb`.
-Messages addressed to you (or to `all` and naming you) are auto-injected each turn and are
-TASKS for you; other traffic is background. Idle reachability is automatic — you are woken
-on a directed message.
-  kb bridge announce <your-id> "<what you're working on>" "<what you can help with>"
+=== issue tracking (kbt) — kb-native tracker (local, offline, no external DB) ===
+Use kbt for ALL tracking; never markdown TODO lists.
+  kbt ready                     # unblocked work
+  kbt show <id> [--json]        # full detail + deps
+  kbt create --title "..." --description "..." --type task|bug|feature|epic --priority 2
+  kbt update <id> --claim       # claim atomically ;  --status in_progress ;  --notes "..."
+  kbt close <id> --reason "..." ;  kbt list --status open ;  kbt children <id> ;  kbt dep add <a> <b>
+Link discovered work with `--deps discovered-from:<parent-id>`. Priority 0 (critical) … 4 (backlog).
+
+=== agent bridge (kb bridge) — coordinate with peers on this host ===
+Your sender id is INFERRED — just use `kb`. Messages addressed to you (or to `all` and naming you)
+auto-inject each turn and are TASKS for you; other traffic is background. Idle reachability is
+automatic — you are woken on a directed message.
+  kb bridge announce <your-id> "<what you're working on>" "<what you can help with>"   # join, once
   kb bridge send <to> "<subject>" --body "<text>" [--needs-reply]
-  kb bridge send <sender> "re: <subj>" --reply <message-id> --body "<text>"   # answer a --needs-reply
-  kb bridge recv                                                              # drain on demand
+  kb bridge send <sender> "re: <subj>" --reply <message-id> --body "<text>"            # answer a --needs-reply
+  kb bridge recv                                                                       # drain on demand
 Reply to every message marked --needs-reply, using --reply <its-id>.
 INSTRUCTIONS
 exit 0
