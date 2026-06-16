@@ -176,6 +176,11 @@ def make_api_handlers(kb):
         recipient = request.query_params.get("recipient", "goose").strip()
         session_id = request.query_params.get("session_id", "").strip()
         query = request.query_params.get("query", "").strip()
+        # bridge_only: suppress the (intentionally un-cursored) findings block so the
+        # response is EMPTY when no new bridge message exists. A per-turn ContextProvider
+        # wants findings re-surfaced every turn; a background asyncRewake poller (goose's
+        # 5s loop) needs empty-when-idle or it wakes spuriously and never reaches readline.
+        bridge_only = request.query_params.get("bridge_only", "").strip().lower() in ("1", "true", "yes")
 
         # Refresh the recipient's bridge LIVENESS mtime so `bridge agents` reports
         # it ONLINE while it actively pulls /moim every turn (goose's path). Without
@@ -235,10 +240,12 @@ def make_api_handlers(kb):
                 )
             parts.append("Unread peer messages via agent-bridge:\n" + "\n\n".join(lines))
 
-        if query:
-            findings = kb.search(query, limit=limit)
-        else:
-            findings = kb.list_findings(limit=limit)
+        findings = []
+        if not bridge_only:
+            if query:
+                findings = kb.search(query, limit=limit)
+            else:
+                findings = kb.list_findings(limit=limit)
         if findings:
             lines = []
             for f in findings:
