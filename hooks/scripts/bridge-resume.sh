@@ -6,31 +6,14 @@
 # announce/whoami/identity) stays on the bridge binary — it's the agent directory,
 # not the message channel, and there is no kb-server registry-write endpoint.
 #
-# Invariants at session start: (1) agent announced (session_id refreshed),
-# (2) the BRIDGE PROTOCOL injected (now points at the kb SSE watcher), (3) a single
-# kb SSE watcher running (launched by the agent via run_in_background; the Stop
-# launcher reminds). Draining is handled by bridge-inject (kb-server) on the first
-# tool call — no recv here.
+# Invariants at session start (SIDE EFFECTS ONLY — this is a SessionStart hook, whose
+# stdout is injected on Claude but NOT on goose): (1) agent announced (session_id
+# refreshed), (2) authoritative session pin written. The BRIDGE PROTOCOL instruction
+# text moved to kb-instructions.sh (UserPromptSubmit, once-per-session) so it injects on
+# BOTH harnesses (kb-d0m). Draining is handled by bridge-inject (kb-server) per turn.
 BRIDGE="$HOME/.agent-bridge/bridge"
 [[ ! -x "$BRIDGE" ]] && exit 0
 HERE="$(dirname "$(readlink -f "$0")")"
-
-# BRIDGE PROTOCOL — main session only (SessionStart does not fire for sub-agents).
-cat <<BRIDGEDOC
-BRIDGE PROTOCOL (main session only — sub-agents never run bridge commands):
-- Peer messages are AUTO-INJECTED at every tool call + user prompt via the kb-SERVER
-  (GET /bridge/messages, cursor-tracked) — this is your delivery path while WORKING.
-- IDLE reachability is AUTOMATIC: a native asyncRewake Stop hook holds the SSE while you
-  are idle and wakes you on a directed peer message. You do NOT launch or relaunch any
-  watcher — the harness owns it. (`kb bridge watch <id>` still exists as a manual escape
-  hatch but is not something you need to run.)
-- SEND via `kb bridge send <to> "<subject>" --needs-reply` (body on stdin or --body).
-  This is the canonical send path.
-- JOIN/announce via `kb bridge announce …`; drain explicitly with `kb bridge recv` (rarely
-  needed — peer messages auto-inject every turn).
-- Owed replies (inbound --needs-reply you haven't answered) are surfaced at Stop from the
-  kb-server feed; close one with `kb bridge send <peer> "<re>" --reply <id>`.
-BRIDGEDOC
 
 # Resolve agent id: persona pin (authoritative) -> whoami (theft-guarded).
 AGENT_ID=""
