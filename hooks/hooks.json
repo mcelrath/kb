@@ -186,8 +186,9 @@
           },
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-stop-without-kb-watcher.sh\"",
-            "timeout": 15
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/bridge-watch-rewake.sh\"",
+            "asyncRewake": true,
+            "timeout": 21600
           },
           {
             "type": "command",

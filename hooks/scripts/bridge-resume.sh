@@ -19,24 +19,11 @@ HERE="$(dirname "$(readlink -f "$0")")"
 cat <<BRIDGEDOC
 BRIDGE PROTOCOL (main session only — sub-agents never run bridge commands):
 - Peer messages are AUTO-INJECTED at every tool call + user prompt via the kb-SERVER
-  (GET /bridge/messages, cursor-tracked) — you do NOT need the watcher while WORKING.
-- The kb SSE WATCHER is for IDLE reachability ONLY. Launch it as its OWN Bash call with
-  run_in_background:true and NO timeout parameter — OMIT timeout entirely. An omitted
-  timeout runs it UNBOUNDED, so it holds for DAYS. Do NOT pass timeout:N — that caps the
-  bg task at N (<=10min) and the harness kills it ('failed' exit 144); that cap-kill was
-  the old 144 bug, NOT the SSE.
-      kb bridge watch <your-id>
-  It holds the SSE for days until a REAL peer message — then it prints 'BRIDGE_WAKE <json>'
-  and EXITS (the task-exit notification wakes you) → relaunch ONE. It also exits (empty) if
-  the kb-server closes the connection (e.g. a server restart) → relaunch ONE. Relaunch is
-  rare (only on a wake or a server restart), NOT a ~9-min cycle.
-  It connects to the kb-server SSE and starts at the tail (only NEW messages wake).
-  It IGNORES event:announce frames (peers joining — non-actionable, surfaced by
-  injection instead), so it wakes ONLY for real directed/actionable messages. It is
-  torn down automatically when you go active (a user prompt) and relaunched at the
-  next Stop, so it is alive — and can only wake — while you are IDLE.
-  Relaunch at session start, after compaction, and after a real wake — NOT every turn.
-  Detect liveness by the kb-bridge-watch.sh process; keep exactly ONE live.
+  (GET /bridge/messages, cursor-tracked) — this is your delivery path while WORKING.
+- IDLE reachability is AUTOMATIC: a native asyncRewake Stop hook holds the SSE while you
+  are idle and wakes you on a directed peer message. You do NOT launch or relaunch any
+  watcher — the harness owns it. (`kb bridge watch <id>` still exists as a manual escape
+  hatch but is not something you need to run.)
 - SEND via `kb bridge send <to> "<subject>" --needs-reply` (body on stdin or --body).
   This is the canonical send path.
 - JOIN/announce via `kb bridge announce …`; drain explicitly with `kb bridge recv` (rarely
@@ -103,4 +90,4 @@ except: print('- - -')" 2>/dev/null)
 
 fi
 
-echo "BRIDGE RESUME [$AGENT_ID]: announced. Launch the kb SSE watcher via run_in_background:true on first tool call (Stop launcher reminds): kb bridge watch $AGENT_ID"
+echo "BRIDGE RESUME [$AGENT_ID]: announced. Idle reachability is automatic (asyncRewake Stop hook) — no watcher to launch."

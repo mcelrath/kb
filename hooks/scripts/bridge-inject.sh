@@ -36,12 +36,10 @@ case "$ID" in ""|"("*|"null") exit 0 ;; esac
 # create is harmless since reads now go through the kb-server cursor, not this file).
 touch "$HOME/.agent-bridge/${ID}.cursor" 2>/dev/null || true
 
-# A user prompt = Claude is ACTIVE again. The idle SSE watcher's only job is to
-# re-engage an IDLE agent; while working, THIS injection is the delivery path. So
-# tear the watcher down now — it stays dead through the work turn and is relaunched
-# at the next Stop (block-stop-without-kb-watcher nags), so it is alive ONLY at idle
-# and can only ever wake at a Stop condition. (kb-2os: watcher-idle-only.)
-[ "$EVENT" = "UserPromptSubmit" ] && pkill -f "kb-bridge-watch.sh ${ID}\b" 2>/dev/null
+# NOTE (kb-ee7): no watcher teardown here anymore. The watcher is now an asyncRewake
+# Stop hook (bridge-watch-rewake.sh) launched/owned by the harness; its flock keeps a
+# single instance, and an exit-2 while ACTIVE just queues to the next turn (harmless).
+# While working, THIS per-turn injection is the delivery path regardless.
 
 # Fetch unread via the kb-server (cursor-tracked, injects once).
 UNREAD=$(KB_SERVER_URL="$BASE" python3 "$HERE/_bridge_inject_fetch.py" "$ID" "$SESSION_ID" 2>/dev/null)

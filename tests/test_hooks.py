@@ -290,8 +290,23 @@ def test_watch_no_trap_and_long_holdtime():
         f"watcher --max-time must be a long backstop (>=1h), got {m and m.group(1)}"
 
 
-def test_inject_kills_watcher_on_userprompt():
-    # Drift guard: bridge-inject tears the watcher down on UserPromptSubmit so it
-    # is alive only at idle (relaunched at the next Stop).
+def test_inject_no_longer_kills_watcher(kb_ee7=True):
+    # kb-ee7: the watcher is now a harness-owned asyncRewake Stop hook, so bridge-inject
+    # must NOT pkill it on UserPromptSubmit (the old idle-only teardown is gone).
     src = open(os.path.join(SCRIPTS, "bridge-inject.sh")).read()
-    assert 'UserPromptSubmit' in src and 'pkill' in src and 'kb-bridge-watch.sh' in src
+    assert "pkill" not in src, "bridge-inject must not tear down the asyncRewake watcher"
+
+
+def test_watcher_is_asyncrewake_exit2():
+    # kb-ee7: watcher wakes via SCRIPT exit 2 (asyncRewake), reads in the main shell
+    # (process substitution), guards single-instance with flock, and drops BRIDGE_PING.
+    src = open(os.path.join(SCRIPTS, "kb-bridge-watch.sh")).read()
+    assert "exit 2" in src and "flock" in src
+    assert "done < <(" in src, "must read in the main shell (process subst) so exit 2 propagates"
+    assert "Last-Event-ID" in src and "BRIDGE_PING" not in src
+
+
+def test_rewake_launcher_resolves_id_and_execs_watcher():
+    src = open(os.path.join(SCRIPTS, "bridge-watch-rewake.sh")).read()
+    assert "kb-bridge-watch.sh" in src and "exec " in src
+    assert "session_id" in src  # resolves the agent id before launching
