@@ -241,30 +241,13 @@ def _self_id(args=None) -> str:
                 return v
         except OSError:
             pass
-    # goose: the agent's id is already declared in its kb-moim ContextProvider
-    # recipient (config.yaml url …/moim?recipient=<id>). Read it so goose agents
-    # send/recv with NO AGENT_ID and NO --from. Gated on NOT being a Claude session
-    # (goose doesn't set CLAUDE_SESSION_ID), so a Claude agent on a host that also
-    # runs goose never mis-reads the goose config.
-    if not os.environ.get("CLAUDE_SESSION_ID"):
-        import re
-        # PER-INSTANCE config first ($GOOSE_PATH_ROOT/config/config.yaml), then the global
-        # ~/.config/goose/config.yaml. Without the per-instance read, every goose instance on
-        # a host resolves the SAME global recipient (the goose-4/goose-5 multi-instance bug:
-        # both read recipient=goose-2). The recipient lives in a ContextProvider extension
-        # url (.../moim?recipient=<id>), so a regex over the file content suffices.
-        cfgs = []
-        gpr = os.environ.get("GOOSE_PATH_ROOT", "").strip()
-        if gpr:
-            cfgs.append(os.path.join(gpr, "config", "config.yaml"))
-        cfgs.append(os.path.expanduser("~/.config/goose/config.yaml"))
-        for cfg in cfgs:
-            try:
-                m = re.search(r"recipient=([A-Za-z0-9_-]+)", open(cfg).read())
-                if m:
-                    return m.group(1)
-            except OSError:
-                continue
+    # NO config-file step. Bridge identity is RUNTIME/DYNAMIC and lives in the registry
+    # (agents.json, written by `bridge announce --id <id>`), NOT in any config file. Reading
+    # a shared per-host config (~/.config/goose/config.yaml) was the ROOT of the multi-instance
+    # collision: two goose sessions on one host shared the file and both resolved the same
+    # recipient (goose-4/goose-5 -> goose-2). Removed per goose-dev #5926 / user clarification.
+    # A goose agent declares its id via `bridge announce --id <id>` (or the launcher sets
+    # AGENT_ID); `bridge whoami` then resolves it from agents.json by session/process.
     binp = os.path.expanduser("~/.agent-bridge/bridge")
     if os.path.exists(binp):
         try:
@@ -316,7 +299,6 @@ def _run_recv(args) -> None:
     (Normally unnecessary: peer messages auto-inject every turn; this is an
     explicit on-demand read.)"""
     import json
-    import os
     import urllib.request
     rid = (getattr(args, "agent_id", None) or "").strip() or _self_id(args)
     if not rid:
