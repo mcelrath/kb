@@ -27,6 +27,9 @@ from _state import STATE_DIR  # noqa: E402
 
 DEFER_FILE = os.path.join(STATE_DIR, "owed-deferred")
 DEFER_TTL = 6 * 3600
+# PERMANENT clear set (written by `kb bridge clear-owed`): ids here are never owed
+# again — a bulk way to drop a stale backlog from ended peer sessions.
+CLEARED_FILE = os.path.join(STATE_DIR, "owed-cleared")
 # A reply is only "owed" to a sender currently ONLINE. A peer whose session has
 # ended can't receive the reply, so its owed-reply must not nag/block — it would
 # pile up forever (e.g. 82 stale owed replies to archie/carl after their physics
@@ -116,6 +119,15 @@ def main():
         if sup not in (None, "None", ""):
             superseded.add(str(sup))
 
+    cleared = set()
+    try:
+        for line in open(CLEARED_FILE):
+            s = line.strip()
+            if s:
+                cleared.add(s)
+    except FileNotFoundError:
+        pass
+
     owed = []
     for m in msgs:
         nr = m.get("needs_reply")
@@ -126,7 +138,7 @@ def main():
         if me not in parse_to(m.get("to")):
             continue
         mid = str(m.get("id"))
-        if mid in replied or mid in superseded:
+        if mid in replied or mid in superseded or mid in cleared:
             continue
         owed.append(m)
 

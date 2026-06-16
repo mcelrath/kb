@@ -990,6 +990,11 @@ def main():
     bridge_announce_parser.add_argument("rest", nargs=argparse.REMAINDER,
         help="Optional bare <id> first, then --role/--focus/... flags (+ heredoc stdin)")
 
+    bridge_clear_owed_parser = bridge_sub.add_parser("clear-owed",
+        help="Clear ALL owed --needs-reply messages for this agent (stale backlog).")
+    bridge_clear_owed_parser.add_argument("agent_id", nargs="?", default=None,
+        help="Your id (default: inferred from persona pin / AGENT_ID / whoami)")
+
     # Reconcile command
     reconcile_parser = _add_parser("reconcile", "Reconcile KB with source document", user_visible=False)
     reconcile_parser.add_argument("document", type=Path, help="Source document to reconcile against")

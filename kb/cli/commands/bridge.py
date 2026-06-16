@@ -148,8 +148,62 @@ def run_bridge(kb, args, bridge_parser) -> None:
         _run_recv(args)
     elif cmd in ("announce", "join"):
         _run_announce(args)
+    elif cmd == "clear-owed":
+        _run_clear_owed(args)
     else:
         bridge_parser.print_help()
+
+
+def _parse_to(s) -> list:
+    if isinstance(s, list):
+        return [str(x).strip() for x in s if str(x).strip()]
+    s = (str(s) if s is not None else "").strip().strip("[]")
+    return [p.strip().strip("'\"") for p in s.split(",") if p.strip().strip("'\"")]
+
+
+def _run_clear_owed(args) -> None:
+    """kb bridge clear-owed [<id>] — clear ALL owed --needs-reply messages for this
+    agent (stale backlog from ended peer sessions). Records the ids in a permanent
+    owed-cleared set the Stop hook honors; does NOT spam senders with stub replies."""
+    import json
+    import os
+    import urllib.request
+    me = (getattr(args, "agent_id", None) or "").strip() or _self_id(args)
+    if not me:
+        print("kb bridge clear-owed: could not infer your id — pass <id> or run /persona.",
+              file=sys.stderr)
+        sys.exit(1)
+    url = f"{_server_url()}/bridge/messages?recipient={me}&limit=500"
+    try:
+        with urllib.request.urlopen(url, timeout=8) as r:
+            msgs = json.loads(r.read())
+    except Exception as e:
+        print(f"kb bridge clear-owed: kb-server unreachable ({e})", file=sys.stderr)
+        sys.exit(1)
+    replied = {str(m["reply_to"]) for m in msgs
+               if m.get("sender") == me and m.get("reply_to") not in (None, "None", "")}
+    owed = []
+    for m in msgs:
+        nr = m.get("needs_reply")
+        if not (nr is True or str(nr) == "True"):
+            continue
+        if m.get("sender") == me:
+            continue
+        if me not in _parse_to(m.get("to")):       # explicit-to-me (not 'all' broadcasts)
+            continue
+        mid = str(m.get("id"))
+        if mid in replied:
+            continue
+        owed.append(mid)
+    if not owed:
+        print(f"kb bridge clear-owed: no owed replies for {me}.")
+        return
+    sd = _state_dir()
+    os.makedirs(sd, exist_ok=True)
+    with open(os.path.join(sd, "owed-cleared"), "a") as f:
+        for mid in owed:
+            f.write(mid + "\n")
+    print(f"kb bridge clear-owed: cleared {len(owed)} owed reply(ies) for {me}.")
 
 
 def _server_url() -> str:
@@ -157,10 +211,46 @@ def _server_url() -> str:
     return os.environ.get("KB_SERVER_URL", "http://127.0.0.1:8765").rstrip("/")
 
 
-def _self_id(args) -> str:
-    """Resolve THIS agent's bridge id: --from, else AGENT_ID env."""
+def _state_dir() -> str:
     import os
-    return (getattr(args, "from_id", None) or os.environ.get("AGENT_ID", "")).strip()
+    return os.environ.get("CLAUDE_STATE_DIR") or os.path.expanduser("~/.claude/state")
+
+
+def _self_id(args=None) -> str:
+    """Infer THIS agent's bridge id without --from. Resolution order (mirrors
+    bridge-resume.sh): explicit --from -> AGENT_ID env -> persona pin
+    (<git-root>/.claude/.persona/session-<CLAUDE_SESSION_ID>) -> `whoami`."""
+    import os
+    import subprocess
+    aid = (getattr(args, "from_id", None) if args else None) or os.environ.get("AGENT_ID", "")
+    aid = aid.strip()
+    if aid:
+        return aid
+    sid = os.environ.get("CLAUDE_SESSION_ID", "").strip()
+    if sid:
+        try:
+            root = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                                  capture_output=True, text=True).stdout.strip() or os.getcwd()
+        except Exception:
+            root = os.getcwd()
+        pin = os.path.join(root, ".claude", ".persona", f"session-{sid}")
+        try:
+            with open(pin) as f:
+                v = f.read().strip()
+            if v:
+                return v
+        except OSError:
+            pass
+    binp = os.path.expanduser("~/.agent-bridge/bridge")
+    if os.path.exists(binp):
+        try:
+            out = subprocess.run([binp, "whoami"], capture_output=True, text=True, timeout=5).stdout
+            for line in out.splitlines():
+                if line.startswith("Effective identity:"):
+                    return line.split(":", 1)[1].strip().split()[0]
+        except Exception:
+            pass
+    return ""
 
 
 def _run_send(args) -> None:
@@ -170,8 +260,8 @@ def _run_send(args) -> None:
     import urllib.request
     sender = _self_id(args)
     if not sender:
-        print("kb bridge send: no sender id — pass --from <id> or set AGENT_ID "
-              "(/persona pins it).", file=sys.stderr)
+        print("kb bridge send: could not infer your id (no --from, AGENT_ID, persona "
+              "pin, or whoami). Run /persona, or pass --from <id>.", file=sys.stderr)
         sys.exit(1)
     body = args.body
     if body is None:
@@ -204,9 +294,10 @@ def _run_recv(args) -> None:
     import json
     import os
     import urllib.request
-    rid = (getattr(args, "agent_id", None) or os.environ.get("AGENT_ID", "")).strip()
+    rid = (getattr(args, "agent_id", None) or "").strip() or _self_id(args)
     if not rid:
-        print("kb bridge recv: no id — pass <id> or set AGENT_ID.", file=sys.stderr)
+        print("kb bridge recv: could not infer your id — pass <id> or run /persona.",
+              file=sys.stderr)
         sys.exit(1)
     limit = getattr(args, "limit", 50) or 50
     url = f"{_server_url()}/bridge/messages?recipient={rid}&limit={limit}"
