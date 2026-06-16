@@ -248,13 +248,23 @@ def _self_id(args=None) -> str:
     # runs goose never mis-reads the goose config.
     if not os.environ.get("CLAUDE_SESSION_ID"):
         import re
-        cfg = os.path.expanduser("~/.config/goose/config.yaml")
-        try:
-            m = re.search(r"recipient=([A-Za-z0-9_-]+)", open(cfg).read())
-            if m:
-                return m.group(1)
-        except OSError:
-            pass
+        # PER-INSTANCE config first ($GOOSE_PATH_ROOT/config/config.yaml), then the global
+        # ~/.config/goose/config.yaml. Without the per-instance read, every goose instance on
+        # a host resolves the SAME global recipient (the goose-4/goose-5 multi-instance bug:
+        # both read recipient=goose-2). The recipient lives in a ContextProvider extension
+        # url (.../moim?recipient=<id>), so a regex over the file content suffices.
+        cfgs = []
+        gpr = os.environ.get("GOOSE_PATH_ROOT", "").strip()
+        if gpr:
+            cfgs.append(os.path.join(gpr, "config", "config.yaml"))
+        cfgs.append(os.path.expanduser("~/.config/goose/config.yaml"))
+        for cfg in cfgs:
+            try:
+                m = re.search(r"recipient=([A-Za-z0-9_-]+)", open(cfg).read())
+                if m:
+                    return m.group(1)
+            except OSError:
+                continue
     binp = os.path.expanduser("~/.agent-bridge/bridge")
     if os.path.exists(binp):
         try:
