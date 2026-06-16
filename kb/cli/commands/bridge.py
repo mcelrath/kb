@@ -241,6 +241,20 @@ def _self_id(args=None) -> str:
                 return v
         except OSError:
             pass
+    # goose: the agent's id is already declared in its kb-moim ContextProvider
+    # recipient (config.yaml url …/moim?recipient=<id>). Read it so goose agents
+    # send/recv with NO AGENT_ID and NO --from. Gated on NOT being a Claude session
+    # (goose doesn't set CLAUDE_SESSION_ID), so a Claude agent on a host that also
+    # runs goose never mis-reads the goose config.
+    if not os.environ.get("CLAUDE_SESSION_ID"):
+        import re
+        cfg = os.path.expanduser("~/.config/goose/config.yaml")
+        try:
+            m = re.search(r"recipient=([A-Za-z0-9_-]+)", open(cfg).read())
+            if m:
+                return m.group(1)
+        except OSError:
+            pass
     binp = os.path.expanduser("~/.agent-bridge/bridge")
     if os.path.exists(binp):
         try:
