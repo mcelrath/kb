@@ -428,12 +428,17 @@ def verify_fidelity(
                 f"design_file: expected={exp_repr!r} got={got_repr!r}"
             )
 
-        # dep edges: only the kept types
+        # dep edges: only the kept types, and only well-formed edges. MIRROR the importer's
+        # skip (line ~300: `if not dep_issue_id or not depends_on_id: continue`): a dep with an
+        # EMPTY depends_on_id is malformed in the source (e.g. a discovered-from with no parent)
+        # and is NOT imported, so it must NOT count as a fidelity discrepancy — otherwise a
+        # corrupt source dep aborts an otherwise-perfect migrate (am-rs: 8 such edges).
         expected_deps = set()
         for dep in issue.get("dependencies", []):
             dep_type = dep.get("type", "")
-            if dep_type in _KB_DEP_TYPES:
-                expected_deps.add((dep.get("depends_on_id", ""), dep_type))
+            depends_on_id = dep.get("depends_on_id", "")
+            if dep_type in _KB_DEP_TYPES and depends_on_id:
+                expected_deps.add((depends_on_id, dep_type))
 
         kb_dep_rows = conn.execute(
             "SELECT depends_on_id, type FROM issue_deps WHERE issue_id = ?",
