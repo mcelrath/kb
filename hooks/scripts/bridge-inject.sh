@@ -41,16 +41,14 @@ touch "$HOME/.agent-bridge/${ID}.cursor" 2>/dev/null || true
 # single instance, and an exit-2 while ACTIVE just queues to the next turn (harmless).
 # While working, THIS per-turn injection is the delivery path regardless.
 
-# Fetch unread via the kb-server (cursor-tracked, injects once).
-UNREAD=$(KB_SERVER_URL="$BASE" python3 "$HERE/_bridge_inject_fetch.py" "$ID" "$SESSION_ID" 2>/dev/null)
-[ -z "$UNREAD" ] && exit 0
-
-if [ "$EVENT" = "PreToolUse" ]; then
-    printf 'BRIDGE_UPDATE (new peer messages):\n%s\n(end bridge messages)' "$UNREAD" \
-        | python3 -c "import sys,json; print(json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','additionalContext':sys.stdin.read()}}))"
-    exit 0
-fi
-echo "BRIDGE_UPDATE (new peer messages since last user prompt):"
-echo "$UNREAD"
-echo "(end bridge messages)"
+# Fetch + FORMAT unread via the kb-server (cursor-tracked, injects once). The helper
+# emits the harness-appropriate hook output itself: Claude gets a JSON envelope carrying
+# BOTH a user-visible systemMessage ("📨 bridge: <sender> — <subject>") and the model
+# additionalContext; goose gets raw bodies on UserPromptSubmit (emit_collect) and nothing
+# on PreToolUse (emit_blocking has no context channel). Harness is detected here.
+CLAUDE=0
+{ [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] || [ -n "${CLAUDE_SESSION_ID:-}" ]; } && CLAUDE=1
+OUT=$(KB_SERVER_URL="$BASE" python3 "$HERE/_bridge_inject_fetch.py" "$ID" "$SESSION_ID" "$EVENT" "$CLAUDE" 2>/dev/null)
+[ -z "$OUT" ] && exit 0
+printf '%s' "$OUT"
 exit 0
