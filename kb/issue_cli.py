@@ -58,7 +58,7 @@ bd blocked --json element:
 ## design field: INLINE CONTENT (not a file path)
 
 `bd show --json` emits `.design` as the FULL PLAN TEXT (inline content).
-expert-review.md:31 does `bd show <epic> --json` → extract `.design` field
+expert-review reads `kbt show <epic> --json` → extracts the `.design` field
 and uses it as the plan content directly — NOT opening a file.
 The bd_import.py stores `design` content into `issues.design_file` column verbatim.
 Therefore: our `show --json` MUST emit `.design` = the content stored in

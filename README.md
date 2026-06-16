@@ -151,9 +151,14 @@ harness with the plugin loaded.
 | **`/kb-setup`** | Guided `kb configure` — embedding provider/model/dim/format/url, summary mode, per-project tracker enablement, `embed-status`, `reembed`. |
 | **`/kb-usage`** | How to record/search findings — the type/tag taxonomy, the `--summary` discipline, project scoping, search-first rule. |
 | **project-setup** (agent) | Scaffolds a new repo for kb-driven work: `reviewers.yaml`, agent preamble, per-project kb embedding config, and the grep-replacement code-exploration stack. Auto-suggested when `reviewers.yaml` is missing. |
+| **expert-review** (agent) | Reviews a *plan/epic* before work starts: a deferral/scope audit, a prior-work search of the kb, source-validation of every load-bearing claim, then a panel of parallel reviewers → APPROVED / REJECTED / INCOMPLETE. Requires `reviewers.yaml` (project-setup creates it). |
+| **implementation-review** (agent) | Reviews the *result* after coding: gathers the diff + test/build output and runs checks (tests pass, no debug code, no secrets, project rules) through a reviewer panel before control returns to you. |
+| **software-architect** (agent) | Architectural guidance for new work or refactors, grounded in a roster of named software-architecture experts; surveys the codebase, names the trade-offs, and outputs a phased plan against existing code. |
 
-> `/expert-review` is **not** part of this plugin — it's a separate review agent some
-> setups install globally. The `/dispatch` workflow expects an already-reviewed epic.
+Together these ship the full **plan → review → implement → review** loop: write a plan, gate it
+with `expert-review`, run it with `/dispatch`, and check the result with `implementation-review`.
+The reviewer agents use the **kbt** tracker. Plugin agents are addressable as `kb:expert-review`,
+`kb:implementation-review`, `kb:software-architect`, `kb:project-setup`.
 
 ## Configuration
 
