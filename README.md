@@ -12,11 +12,18 @@ plugin and an agent message bridge.
   full-text fallback when the embedding server is unreachable.
 - **LLM query expansion** (`--expand`) for improved recall (optional).
 - **Supersession chains** for correcting outdated findings.
-- **Claude Code plugin** — findings surfacing + conventions injection on every
-  SessionStart, no `CLAUDE.md` edits or permission all-listing required.
-- **`kbt` issue tracker** — kb-native, bd-compatible CLI; no external DB on a
-  fresh host.
-- **`kb-server`** — HTTP/SSE endpoints (kb/issue reads + an agent message bridge).
+- **Multi-harness plugin (Claude Code + goose)** — ONE repo, one shared
+  `hooks/hooks.json`. The plugin **injects the kb / kbt / bridge instructions into the
+  agent's context every session** and surfaces relevant findings per prompt — with **no
+  edits to `CLAUDE.md` / `.goosehints` / `AGENTS.md`** and no permission allow-listing.
+- **Installs `kb` on PATH for you** — the plugin builds a venv and `pip install -e`s kb
+  into it, then drops a `~/.local/bin/kb` wrapper, so the injected `kb …` instructions work
+  out of the box (it never clobbers an existing hand-written wrapper).
+- **`kbt` issue tracker** — kb-native (local SQLite, offline, no external DB), bd-compatible CLI.
+- **Agent bridge (`kb bridge`)** — host-local cross-agent messaging (announce / send /
+  reply / recv); peer messages auto-inject into your context, idle sessions are woken on a
+  directed message.
+- **`kb-server`** — HTTP/SSE endpoints (kb/issue reads + the bridge transport).
 
 There is **no MCP server** — all kb operations go through the `kb` CLI (and, inside
 Claude Code, the plugin hooks). References to `kb_mcp.py` or `mcp__knowledge-base__*`
@@ -53,29 +60,37 @@ uv venv --seed                      # uses your default python3 (needs 3.11+)
 # 3. (non-interactive only) install + start the kb-server systemd --user unit
 .venv/bin/python kb.py configure --install-server [--server-port 8765]
 
-# 4. Put `kb` AND `kbt` (the issue tracker) on PATH. Agents and the plugin's
-#    git/lifecycle hooks invoke `kbt` BY NAME — without it on PATH, issue
-#    tracking falls back to nothing on a host that also lacks `bd`.
-mkdir -p ~/.local/bin
-printf '#!/bin/bash\nexec %s %s "$@"\n' "$PWD/.venv/bin/python" "$PWD/kb.py" > ~/.local/bin/kb
-printf '#!/bin/bash\nexec %s %s "$@"\n' "$PWD/.venv/bin/python" "$PWD/kbt"   > ~/.local/bin/kbt
-chmod +x ~/.local/bin/kb ~/.local/bin/kbt
-case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo 'add ~/.local/bin to PATH' ;; esac
+# 4. Put `kb` AND `kbt` on PATH (~/.local/bin). Agents and the plugin's hooks call
+#    them BY NAME. This is one flag:
+.venv/bin/python kb.py configure --install-wrappers
+#    (it skips any existing hand-written wrapper, and warns if ~/.local/bin isn't on PATH.)
 ```
+
+> **If you use the Claude Code / goose plugin (below), you can skip steps 1 and 4** — the
+> plugin builds its own venv and installs the `kb`/`kbt` wrappers for you on first run. You
+> still want step 2 (`kb configure`) to point kb at your embedding endpoint.
 
 `kb configure` writes `~/.config/kb/config.toml` (the source of truth) and mirrors
 the non-secret values into the config dir's `settings.json`; any API key goes to
 `settings.local.json` (only after `git check-ignore` confirms it's ignored).
 
-## Claude Code plugin
+## Plugin (Claude Code + goose)
 
-The recommended way to use kb with Claude Code. The plugin's hooks inject kb
-conventions and surface findings on every SessionStart — no `CLAUDE.md` entries.
+The recommended way to use kb. **One repo is both a Claude Code plugin and a goose
+plugin**, sharing a single `hooks/hooks.json`. The hooks build a venv, put
+`kb`/`kbt` on PATH, inject the kb/kbt/bridge conventions, and surface findings —
+**with no edits to `CLAUDE.md`, `.goosehints`, or `AGENTS.md`**.
 
 ```bash
-# Add the local marketplace (the repo root, containing .claude-plugin/) + install
+# Claude Code: add the local marketplace (the repo root, containing .claude-plugin/) + install
 claude plugin marketplace add /path/to/kb
 claude plugin install kb@kb-local
+```
+
+```bash
+# goose: point goose at the same repo's shared hooks file
+#   ~/.config/goose/config.yaml  ->  hooks:  - /path/to/kb/hooks/hooks.json
+# Scripts use ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}, so the same hooks run under both harnesses.
 ```
 
 ### Isolating a test/fresh config from your real `~/.claude`
@@ -94,18 +109,29 @@ claude plugin install kb@kb-local
 cd <your-repo> && claude        # CLAUDE_CONFIG_DIR is honored
 ```
 
-### What happens on SessionStart
+### What the hooks do
 
-1. **setup-venv.sh** — builds a deps-only venv at `$CLAUDE_PLUGIN_DATA/venv`
-   (idempotent, hash-gated; needs pypi.org access on first run).
+On **SessionStart** (in order):
+
+1. **setup-venv.sh** — builds the deps venv at `$CLAUDE_PLUGIN_DATA/venv`, `pip
+   install -e`s the package, installs the `kb`/`kbt` wrappers (idempotent, hash-gated;
+   needs pypi.org on first run).
 2. **env-probe.sh** — confirms/injects `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA`.
-3. **kb-flush-pending.sh** — drains any queued offline kb-adds.
-4. **kb-context.sh** — injects kb conventions; emits a `KB-INFRA DOWN` warning and
-   falls back to FTS-only if the embedding server is unreachable.
-5. **scaffold-check.sh** — flags a missing `reviewers.yaml` and offers project setup.
+3. **session-persona.sh** — restores this session's bridge persona (durable identity).
+4. **kb-flush-pending.sh** — drains any queued offline kb-adds.
+5. **kb-context.sh** — surfaces recent findings + resume context; emits a `KB-INFRA
+   DOWN` warning and falls back to FTS-only if the embedding server is unreachable.
+6. **scaffold-check.sh** — flags a missing `reviewers.yaml` and offers project setup.
+7. **bridge-resume.sh** — re-attaches the bridge identity (qualifies on session conflict).
+8. **session-followups.sh** — surfaces open follow-ups from recently closed epics.
+9. **bridge-watch-rewake.sh** — restarts the idle-reachability watcher.
 
-Inside Claude Code the hooks invoke kb as
-`"${CLAUDE_PLUGIN_DATA}/venv/bin/python" "${CLAUDE_PLUGIN_ROOT}/kb.py" <command>`.
+The **kb/kbt/bridge conventions** themselves are injected by **kb-instructions.sh** on
+**UserPromptSubmit**, once per session (so a new session always has them, even after
+SessionStart context is trimmed). Relevant findings are surfaced per-prompt the same way.
+
+Hooks invoke kb/kbt via the `~/.local/bin` wrappers (or, internally,
+`"${CLAUDE_PLUGIN_DATA}/venv/bin/python" "${CLAUDE_PLUGIN_ROOT}/kb.py" <command>`).
 
 > The agent **message bridge** (cross-agent messaging) needs the external
 > `~/.agent-bridge/bridge` binary, which is **not shipped** in this repo. Without
@@ -171,6 +197,24 @@ kb --db /path/to/other.db <command>                         # override the datab
 Run `kb` with no args (or `kb --help`) for the command list. Set `KB_AGENT=0`
 for the colorized human-mode help.
 
+### Agent bridge — `kb bridge`
+
+Host-local cross-agent messaging. Peers see each other, send directed messages, and
+idle sessions are woken when addressed. Incoming mail auto-injects into your context
+each turn, so you rarely need `recv` by hand.
+
+```bash
+kb bridge announce <name> --role "..."     # join the bridge under a persona name
+kb bridge send <to> "subject" --body "..." # message a peer (body on stdin or --body)
+kb bridge send <to> "re: ..." --reply <id> # answer a message that needed a reply
+kb bridge recv                             # drain your mailbox
+```
+
+> The bridge **transport** (`/bridge/*` on kb-server) ships in this repo, but the
+> agent **registry** (announce/whoami) lives in the external `~/.agent-bridge/bridge`
+> binary that is **not** bundled. Without it, messaging stays dark while findings
+> surfacing and `kbt` keep working.
+
 ## Issue tracking — `kbt`
 
 `kbt` is a kb-native, bd-compatible issue tracker. On a host **without** `bd` it
@@ -204,10 +248,22 @@ kbt ready | list | create | show <id> | update <id> | close <id> | dep | blocked
 ## kb-server
 
 A small HTTP/SSE server (`kb serve`, or the systemd `--user` unit from
-`kb configure --install-server`) exposing kb/issue read endpoints and an agent
-message bridge (`/bridge/messages`, `/bridge/watch` SSE, `/bridge/send`). It binds
-**`127.0.0.1` by default** — the endpoints are unauthenticated, so only bind a
-non-loopback host (`KB_SERVER_HOST=0.0.0.0`) behind a trusted network.
+`kb configure --install-server`) exposing kb/issue read endpoints and the agent
+message bridge. It binds **`127.0.0.1` by default** — the endpoints are
+unauthenticated, so only bind a non-loopback host (`KB_SERVER_HOST=0.0.0.0`)
+behind a trusted network.
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/kb/search?q=…[&project=…]` | findings search (JSON) |
+| `/kb/recent` | recent findings |
+| `/kb/finding/{id}` · `/finding/{id}` | one finding |
+| `/issues` · `/issues/{id}` | kbt issue reads |
+| `/search` · `/` · `/ws` | web UI + websocket |
+| `/moim[?bridge_only=1]` | aggregated context feed (goose ContextProvider) |
+| `/bridge/agents` | live agent registry |
+| `/bridge/messages` · `/bridge/send` | mailbox read / send |
+| `/bridge/watch[?since=N]` (SSE) | live message stream |
 
 > These bridge **endpoints** ship, but the agent **registry** (announce/whoami,
 > which agents exist) lives in the external `~/.agent-bridge/bridge` binary that
