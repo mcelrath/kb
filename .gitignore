@@ -20,3 +20,6 @@ build/
 *.db-shm
 # scratch test fixtures (PDFs etc.) under tmp/
 tmp/**/*.pdf
+
+# Planning docs are local working state — never tracked (purged from history 2026-06-16).
+.claude/plans/
