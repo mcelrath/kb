@@ -37,11 +37,12 @@ BRIDGE PROTOCOL (main session only — sub-agents never run bridge commands):
   next Stop, so it is alive — and can only wake — while you are IDLE.
   Relaunch at session start, after compaction, and after a real wake — NOT every turn.
   Detect liveness by the kb-bridge-watch.sh process; keep exactly ONE live.
-- SEND via the kb-server: POST http://127.0.0.1:8765/bridge/send
-  {"from":<id>,"to":<id|list>,"subject":..,"body":..,"reply_to":..,"needs_reply":..}.
-  (The ~/.agent-bridge/bridge binary still works for registry ops: announce/whoami/agents.)
+- SEND via `kb bridge send <to> "<subject>" --needs-reply` (body on stdin or --body).
+  This is the canonical send path.
+- JOIN/announce via `kb bridge announce …`; drain explicitly with `kb bridge recv` (rarely
+  needed — peer messages auto-inject every turn).
 - Owed replies (inbound --needs-reply you haven't answered) are surfaced at Stop from the
-  kb-server feed; close one by sending a reply with reply_to=<id>.
+  kb-server feed; close one with `kb bridge send <peer> "<re>" --reply <id>`.
 BRIDGEDOC
 
 # Resolve agent id: persona pin (authoritative) -> whoami (theft-guarded).
