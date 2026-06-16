@@ -67,6 +67,11 @@ curl -sN --no-buffer --max-time 604800 "$URL" 2>/dev/null | while IFS= read -r l
             echo "BRIDGE_WAKE $payload"
             exit 0
             ;;
+        ': ping'|': keepalive')
+            # SSE heartbeat comment. Emit a keepalive marker so the background-task
+            # harness sees activity and doesn't kill the silent pipeline.
+            echo "BRIDGE_PING"
+            ;;
     esac
 done
 exit 0
