@@ -125,7 +125,7 @@ def main():
 
     wrapped = f"BRIDGE_UPDATE (new peer messages):\n{body_text}\n(end bridge messages)"
 
-    if is_claude and event in ("PreToolUse", "UserPromptSubmit"):
+    if is_claude and event in ("PreToolUse", "UserPromptSubmit", "SessionStart"):
         notice = _notice(fresh)
         # OSC 9 desktop notification (prefix-free, for terminals that support it:
         # iTerm2/kitty/WezTerm/Ghostty). Strip control chars so they can't break the
