@@ -174,11 +174,16 @@ async def bridge_agents(request: Request) -> JSONResponse:
 
 
 async def bridge_watch(request: Request) -> StreamingResponse | JSONResponse:
-    """GET /bridge/watch?id=<agent-id>
+    """GET /bridge/watch?id=<agent-id>[&since=N]
 
     SSE stream of bridge messages for the given agent id (plus 'all'
     broadcasts).  Honors the standard Last-Event-ID request header for
     reconnect/resume — only messages with numeric id > that value are sent.
+
+    Resume precedence: Last-Event-ID header > ?since=N query param > TAIL.
+    The ?since=N param exists for clients that CANNOT set Last-Event-ID on the
+    INITIAL connect (e.g. browser EventSource only auto-sends it on reconnect):
+    pass the last id you saw to replay missed backlog on the first connect.
 
     Frame format:
         id: <msg-id>\\ndata: <json>\\n\\n
@@ -190,14 +195,23 @@ async def bridge_watch(request: Request) -> StreamingResponse | JSONResponse:
     if not agent_id:
         return JSONResponse({"error": "?id=<agent-id> required"}, status_code=400)
 
-    # Parse Last-Event-ID header for resume
+    # Parse Last-Event-ID header for resume (SSE-standard reconnect).
     raw_lei = request.headers.get("last-event-id", "").strip()
     try:
         last_id: int | None = int(raw_lei) if raw_lei else None
     except ValueError:
         last_id = None
 
-    # Fresh subscriber (no Last-Event-ID): start at the CURRENT TAIL —
+    # No header -> honor an explicit ?since=N replay floor (initial-connect backlog).
+    if last_id is None:
+        raw_since = request.query_params.get("since", "").strip()
+        if raw_since:
+            try:
+                last_id = int(raw_since)
+            except ValueError:
+                last_id = None
+
+    # Fresh subscriber (no Last-Event-ID, no ?since): start at the CURRENT TAIL —
     # deliver only NEW messages, never replay history. Otherwise a
     # freshly-launched SSE client is flooded with every past 'all'
     # broadcast on connect (caught while exercising kb-jij.4). UIs that
