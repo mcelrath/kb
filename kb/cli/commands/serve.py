@@ -19,4 +19,10 @@ def run_serve(kb, args) -> None:
     app = create_app(kb)
     print(f"Starting KB server at http://{args.host}:{args.port}")
     print("WebSocket live updates enabled at /ws")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    # timeout_graceful_shutdown bounds SIGTERM handling: the bridge /watch SSE and
+    # /ws WebSocket are infinite streams that never drain on their own, so without
+    # a cap uvicorn waits forever on shutdown and `systemctl restart` hangs until
+    # the unit's TimeoutStopSec (90s) SIGKILLs it. 5s force-closes lingering
+    # streams (clients reconnect) so restart completes promptly.
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning",
+                timeout_graceful_shutdown=5)
