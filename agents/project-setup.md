@@ -605,6 +605,7 @@ Also binding: `agent-preamble.md`. No infrastructure-praise / meta-commentary.
 
 - Max 40 tool calls total
 - Max 3 files read per domain survey category
-- If CLAUDE.md is >500 lines, read first 200 + grep for key sections
+- If CLAUDE.md is >500 lines, read it in full top-down (the read-coverage gate pages large
+  files; do NOT grep source — use ast-grep / Read, per the source-search hook)
 - `"$KB_VENV_PYTHON" "$KB_TOOL" add` at end of Phase 1, Phase 2, Phase 6, and Phase 7
 - Do NOT spawn sub-agents — this agent IS the sub-agent

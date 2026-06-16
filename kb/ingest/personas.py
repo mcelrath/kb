@@ -361,7 +361,11 @@ def _run_check(kb: KnowledgeBase) -> int:
             if ry.exists():
                 current_ry_mtime = ry.stat().st_mtime
                 current_persona_mtime = fp.stat().st_mtime if fp.exists() else (file_mtime or 0)
-                if current_ry_mtime > current_persona_mtime:
+                # Round to whole seconds: co-generated files (project-setup writes
+                # reviewers.yaml then the personas within the same second) differ only in
+                # sub-second float and would ALL false-flag stale under a raw `>`. A genuine
+                # later edit still lands in a later second. (impl-review note 1.)
+                if int(current_ry_mtime) > int(current_persona_mtime):
                     reasons.append(
                         f"reviewers.yaml newer than persona "
                         f"(ry={datetime.fromtimestamp(current_ry_mtime).strftime('%Y-%m-%d %H:%M')}, "
