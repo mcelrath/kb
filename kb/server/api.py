@@ -12,6 +12,7 @@ factory pattern used in routes.py and live.py.
 
 import json
 import os
+import re
 from pathlib import Path
 
 from starlette.requests import Request
@@ -175,6 +176,21 @@ def make_api_handlers(kb):
         recipient = request.query_params.get("recipient", "goose").strip()
         session_id = request.query_params.get("session_id", "").strip()
         query = request.query_params.get("query", "").strip()
+
+        # Refresh the recipient's bridge LIVENESS mtime so `bridge agents` reports
+        # it ONLINE while it actively pulls /moim every turn (goose's path). Without
+        # this, goose reads 'offline:stale' despite fetching each turn — same root
+        # cause the Claude bridge-inject hook touch fixes for Claude sessions.
+        # recipient is a query param → charset-guard to block path traversal.
+        if re.fullmatch(r"[A-Za-z0-9_-]+", recipient):
+            try:
+                _cur = os.path.expanduser(f"~/.agent-bridge/{recipient}.cursor")
+                if os.path.exists(_cur):
+                    os.utime(_cur, None)
+                else:
+                    open(_cur, "a").close()
+            except OSError:
+                pass
         raw_since = request.query_params.get("since", "").strip()
         try:
             since: int | None = int(raw_since) if raw_since else None

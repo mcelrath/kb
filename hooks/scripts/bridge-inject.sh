@@ -25,6 +25,17 @@ ID=""
 [ -f "$AGENTS" ] && ID=$(jq -r --arg sid "$SESSION_ID" '.agents[] | select(.session_id == $sid) | .id' "$AGENTS" 2>/dev/null | head -n1)
 case "$ID" in ""|"("*|"null") exit 0 ;; esac
 
+# Refresh this agent's LIVENESS mtime so `bridge agents` reports it ONLINE while
+# it is actively running turns. `bridge:_agent_status` derives liveness from the
+# mtime of ~/.agent-bridge/<id>.cursor (fresh <120s = online). The old
+# bridge-watcher-check.sh refreshed it on every PreToolUse/UserPromptSubmit, but
+# injection migrated to the kb-server and nothing touched the file — so every
+# active agent read 'offline:stale' despite delivering/receiving every turn.
+# This hook fires on the SAME events, so it is the correct place to restore it.
+# `touch` bumps mtime (preserves content for an existing legacy cursor; an empty
+# create is harmless since reads now go through the kb-server cursor, not this file).
+touch "$HOME/.agent-bridge/${ID}.cursor" 2>/dev/null || true
+
 # A user prompt = Claude is ACTIVE again. The idle SSE watcher's only job is to
 # re-engage an IDLE agent; while working, THIS injection is the delivery path. So
 # tear the watcher down now — it stays dead through the work turn and is relaunched
