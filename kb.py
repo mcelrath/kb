@@ -938,6 +938,21 @@ def main():
     ingest_tex_parser.add_argument("--project", default="algebraic-genesis")
     ingest_tex_parser.add_argument("--dry-run", action="store_true")
 
+    ingest_personas_parser = ingest_sub.add_parser(
+        "personas",
+        help="Index persona .md files (<project>/.claude/agents/personas/*.md) + staleness check",
+    )
+    ingest_personas_parser.add_argument(
+        "roots", nargs="*", type=Path,
+        help="Project root directories to scan (default: git root of cwd)",
+    )
+    ingest_personas_parser.add_argument("--dry-run", action="store_true",
+        help="Show what would be indexed without writing")
+    ingest_personas_parser.add_argument("--check", action="store_true",
+        help="Report stale personas: file gone / reviewers.yaml newer / dir-count changed")
+    ingest_personas_parser.add_argument("-p", "--project", dest="project_filter",
+        help="Filter to a specific project name")
+
     # Bridge command group: ingest/search/promote agent bridge messages
     bridge_parser = _add_parser("bridge", "Ingest/search/promote agent bridge messages",
                                 agent_visible=True)

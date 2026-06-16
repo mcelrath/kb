@@ -444,6 +444,28 @@ SCHEMA_SQL = """
         VALUES (new.id, new.subject, new.body);
     END;
 
+    -- Persona index: structural metadata for staleness checks (content lives in findings)
+    -- Markdown is the source of truth; this is a derived index. Re-ingest on file change.
+    CREATE TABLE IF NOT EXISTS persona_index (
+        id TEXT PRIMARY KEY,         -- persona-<name>-<project>
+        name TEXT NOT NULL,          -- frontmatter name: == bridge id
+        project TEXT NOT NULL,       -- git-root basename of the project owning the file
+        role TEXT,                   -- frontmatter role:
+        file_path TEXT NOT NULL,     -- absolute path to the .md file
+        file_mtime REAL NOT NULL,    -- mtime of the .md at last ingest (epoch float)
+        content_hash TEXT NOT NULL,  -- SHA256 of file content (change detection)
+        reviewers_yaml_path TEXT,    -- absolute path to reviewers.yaml if referenced
+        reviewers_yaml_mtime REAL,   -- mtime of reviewers.yaml at last ingest
+        top_level_dir_count INTEGER, -- count of top-level dirs in the project root at ingest
+        finding_id TEXT,             -- FK to findings.id (the searchable entry)
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_persona_index_project ON persona_index(project);
+    CREATE INDEX IF NOT EXISTS idx_persona_index_name ON persona_index(name);
+    CREATE INDEX IF NOT EXISTS idx_persona_index_finding ON persona_index(finding_id);
+
     -- Embedding model metadata (single row; tracks configured model for reembed detection)
     CREATE TABLE IF NOT EXISTS embedding_meta (
         id INTEGER PRIMARY KEY CHECK(id=1),
@@ -649,6 +671,30 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
             CREATE INDEX IF NOT EXISTS idx_lwq_defer ON lean_work_queue(defer_reason);
             CREATE INDEX IF NOT EXISTS idx_lwq_readiness ON lean_work_queue(readiness);
             CREATE INDEX IF NOT EXISTS idx_lwq_divergence ON lean_work_queue(divergence_flag);
+        """)
+
+    # Schema migration: persona_index table
+    _pi_cols = {row[1] for row in conn.execute("PRAGMA table_info(persona_index)").fetchall()}
+    if not _pi_cols:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS persona_index (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                project TEXT NOT NULL,
+                role TEXT,
+                file_path TEXT NOT NULL,
+                file_mtime REAL NOT NULL,
+                content_hash TEXT NOT NULL,
+                reviewers_yaml_path TEXT,
+                reviewers_yaml_mtime REAL,
+                top_level_dir_count INTEGER,
+                finding_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_persona_index_project ON persona_index(project);
+            CREATE INDEX IF NOT EXISTS idx_persona_index_name ON persona_index(name);
+            CREATE INDEX IF NOT EXISTS idx_persona_index_finding ON persona_index(finding_id);
         """)
 
     conn.commit()

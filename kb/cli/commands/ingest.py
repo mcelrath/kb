@@ -66,5 +66,17 @@ def run_ingest(kb, args, ingest_parser) -> None:
         if rc:
             sys.exit(rc)
 
+    elif args.ingest_cmd == "personas":
+        from kb.ingest.personas import run
+        rc = run(
+            roots=getattr(args, "roots", None) or None,
+            dry_run=getattr(args, "dry_run", False),
+            check=getattr(args, "check", False),
+            project_filter=getattr(args, "project_filter", None),
+            db_path=args.db,
+        )
+        if rc:
+            sys.exit(rc)
+
     else:
         ingest_parser.print_help()
