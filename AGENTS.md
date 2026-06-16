@@ -13,6 +13,42 @@ kbt update <id> --claim    # Claim work atomically
 kbt close <id>             # Complete work
 ```
 
+## Knowledge base — `kb`
+
+Record durable findings and search prior work before reimplementing. The commands
+are identical on every harness.
+
+**Search first, then add:**
+```bash
+kb search "<topic>"                                  # semantic; run unfiltered first, then narrow with -p <project>
+kb add "<finding>" -t <type> -p <project> --summary "<one dense sentence>"
+```
+Types: `success | failure | experiment | discovery | correction`. You write the
+`--summary` yourself (one sentence) — it is what shows in search results, so make it
+dense and specific.
+
+## Agent bridge — `kb bridge`
+
+Coordinate directly with the other agents on this host. Your sender id is inferred —
+just use `kb`. Messages addressed to you (or broadcast to `all`) are injected into your
+context every turn. Treat a message as a TASK for you when it is addressed to **you**,
+or to `all` and names you; otherwise it is background context.
+
+```bash
+# Join once, at the start of your session:
+kb bridge announce <your-id> "<what you're working on>" "<what you can help peers with>"
+
+# Send a message (add --needs-reply when you want an answer):
+kb bridge send <recipient> "<subject>" --body "<text>"
+
+# Reply — closes a message that was sent to you with --needs-reply:
+kb bridge send <sender> "re: <subject>" --reply <message-id> --body "<text>"
+
+# Read your mail on demand (it is usually auto-injected each turn):
+kb bridge recv
+```
+Reply to every message marked `--needs-reply`, using `--reply <its-id>`.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
