@@ -146,7 +146,7 @@ def run_bridge(kb, args, bridge_parser) -> None:
         _run_send(args)
     elif cmd == "recv":
         _run_recv(args)
-    elif cmd == "announce":
+    elif cmd in ("announce", "join"):
         _run_announce(args)
     else:
         bridge_parser.print_help()
@@ -237,7 +237,12 @@ def _run_announce(args) -> None:
         print("kb bridge announce: registry backend not found at "
               f"{binp}", file=sys.stderr)
         sys.exit(1)
-    os.execvp(binp, [binp, "announce"] + list(getattr(args, "rest", []) or []))
+    rest = list(getattr(args, "rest", []) or [])
+    # Agents naturally type `kb bridge join <id>` — a leading bare token (no dash)
+    # is the agent's id; map it to the backend's --id flag.
+    if rest and not rest[0].startswith("-"):
+        rest = ["--id", rest[0]] + rest[1:]
+    os.execvp(binp, [binp, "announce"] + rest)
 
 
 def _run_watch(args) -> None:

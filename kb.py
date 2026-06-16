@@ -985,10 +985,10 @@ def main():
         help="Your id (default: AGENT_ID env)")
     bridge_recv_parser.add_argument("-n", "--limit", type=int, default=50, help="Max messages")
 
-    bridge_announce_parser = bridge_sub.add_parser("announce",
+    bridge_announce_parser = bridge_sub.add_parser("announce", aliases=["join"],
         help="Announce/join the bridge registry (presents the registry backend under kb bridge).")
     bridge_announce_parser.add_argument("rest", nargs=argparse.REMAINDER,
-        help="Flags passed through to the registry backend (--role/--focus/... + stdin)")
+        help="Optional bare <id> first, then --role/--focus/... flags (+ heredoc stdin)")
 
     # Reconcile command
     reconcile_parser = _add_parser("reconcile", "Reconcile KB with source document", user_visible=False)
