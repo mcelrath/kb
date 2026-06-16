@@ -111,8 +111,12 @@ def main():
         lines.append(f"[#{m.get('id')}] from={sender}{nr}{rt}  {subj}\n{body}")
     body_text = "\n---\n".join(lines)
 
-    # goose PreToolUse = emit_blocking: no additionalContext channel -> stay silent.
-    if event == "PreToolUse" and not is_claude:
+    # On goose these events CANNOT deliver: SessionStart = emit() (stdout discarded),
+    # PreToolUse = emit_blocking() (no additionalContext channel). Return BEFORE advancing
+    # the cursor — otherwise we'd consume the message (mark it injected) without ever
+    # showing it = LOST mail on every goose restart. goose receives via UserPromptSubmit
+    # (emit_collect) + its own /moim poller, which carry their own cursors.
+    if event in ("PreToolUse", "SessionStart") and not is_claude:
         return
 
     # Advance the cursor only after a successful build (never past undelivered msgs).
