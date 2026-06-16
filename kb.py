@@ -986,9 +986,10 @@ def main():
     bridge_recv_parser.add_argument("-n", "--limit", type=int, default=50, help="Max messages")
 
     bridge_announce_parser = bridge_sub.add_parser("announce", aliases=["join"],
-        help="Announce/join the bridge registry (presents the registry backend under kb bridge).")
-    bridge_announce_parser.add_argument("rest", nargs=argparse.REMAINDER,
-        help="Optional bare <id> first, then --role/--focus/... flags (+ heredoc stdin)")
+        help="Join the bridge: kb bridge announce <id> <focus> <offering>")
+    bridge_announce_parser.add_argument("id", help="your agent id")
+    bridge_announce_parser.add_argument("focus", help="what you're working on now")
+    bridge_announce_parser.add_argument("offering", help="what you can help peers with")
 
     bridge_clear_owed_parser = bridge_sub.add_parser("clear-owed",
         help="Clear ALL owed --needs-reply messages for this agent (stale backlog).")

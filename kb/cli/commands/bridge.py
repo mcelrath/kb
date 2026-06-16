@@ -328,12 +328,15 @@ def _run_announce(args) -> None:
         print("kb bridge announce: registry backend not found at "
               f"{binp}", file=sys.stderr)
         sys.exit(1)
-    rest = list(getattr(args, "rest", []) or [])
-    # Agents naturally type `kb bridge join <id>` — a leading bare token (no dash)
-    # is the agent's id; map it to the backend's --id flag.
-    if rest and not rest[0].startswith("-"):
-        rest = ["--id", rest[0]] + rest[1:]
-    os.execvp(binp, [binp, "announce"] + rest)
+    # `kb bridge announce <id> <focus> <offering>` — three positionals. The registry
+    # backend also wants role/directed, so reuse focus for them (informational fields).
+    argv = [binp, "announce", "--id", args.id, "--role", args.focus,
+            "--focus", args.focus, "--offering", args.offering, "--directed", args.focus]
+    # The backend reads an optional body from stdin; with an interactive tty (no piped
+    # body) it would BLOCK. Detach stdin so announce returns immediately.
+    if sys.stdin.isatty():
+        os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
+    os.execvp(binp, argv)
 
 
 def _run_watch(args) -> None:
