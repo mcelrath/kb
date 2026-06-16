@@ -16,6 +16,11 @@
           },
           {
             "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/session-persona.sh\"",
+            "timeout": 15
+          },
+          {
+            "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/kb-flush-pending.sh\"",
             "timeout": 30
           },
