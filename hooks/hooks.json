@@ -181,12 +181,17 @@
         ]
       },
       {
-        "matcher": "Write|Edit|developer__text_editor",
+        "matcher": "Write|Edit|MultiEdit|developer__text_editor",
         "hooks": [
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/block-followup-without-issue-id.sh\"",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/read-index-edit-gate.py\"",
+            "timeout": 10
           }
         ]
       }
@@ -205,6 +210,11 @@
     "Stop": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/read-index-stop.py\"",
+            "timeout": 12
+          },
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/kb-analysis-surface.py\"",
