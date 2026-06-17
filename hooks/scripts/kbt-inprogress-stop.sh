@@ -8,8 +8,12 @@
 # Mechanism: resolve the session's bridge persona; run `kbt list --status=in_progress
 # --assignee=<persona> --json`; if any items exist, block with exit 2 and echo the queue.
 #
-# Loop guard: uses stop_hook_active (same as block-unprompted-deferral.sh) — fires
-# once, then allows the stop so the agent isn't trapped forever. One warning is enough.
+# Loop guard (TWO layers): (1) stop_hook_active fast-path, same as
+# block-unprompted-deferral.sh; (2) a DURABLE per-session disk marker. Layer 2 exists
+# because some harnesses re-wake the agent into a FULL NEW TURN on exit-2, so the next
+# Stop is a fresh event with stop_hook_active=false — layer 1 alone then never trips and
+# the agent loops until its context is exhausted (observed: a physics persona burned its
+# whole context this way). The disk marker blocks AT MOST ONCE per session regardless.
 #
 # Why this matters: the IDLE RULE in persona files ("idle legitimate ONLY when kbt
 # in_progress shows nothing claimed by you") is instruction-level prose that the Stop
@@ -64,6 +68,16 @@ except Exception:
     print(0)
 " 2>/dev/null)
 [ "${COUNT:-0}" = "0" ] && exit 0
+
+# Durable loop guard: block AT MOST ONCE per session, independent of stop_hook_active.
+# A harness that re-wakes the agent into a fresh turn resets stop_hook_active to false
+# each time; this disk marker survives that and breaks the infinite Stop loop.
+STATE_DIR="${KB_STATE_DIR:-${CLAUDE_STATE_DIR:-$HOME/.cache/kb/state}}"
+mkdir -p "$STATE_DIR" 2>/dev/null
+GUARD_KEY="${SESSION_ID:-$PERSONA}"
+MARK="$STATE_DIR/${GUARD_KEY//[^A-Za-z0-9_-]/_}-kbt-inprogress-blocked"
+[ -f "$MARK" ] && exit 0
+: > "$MARK" 2>/dev/null
 
 IN_PROGRESS=$(kbt list --status=in_progress --assignee="$PERSONA" 2>/dev/null)
 
