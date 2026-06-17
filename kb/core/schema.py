@@ -269,7 +269,8 @@ SCHEMA_SQL = """
         parent_impl TEXT,          -- Rust: impl block label, e.g. 'Foo' or 'Greet for Foo'
         visibility TEXT,           -- Rust/TS: 'pub' | 'pub(crate)' | 'export' | '' etc.
         is_signature_only INTEGER DEFAULT 0,  -- 1 for signature-only pass chunks
-        node_type TEXT             -- tree-sitter node type, e.g. 'function_item', 'class_declaration'
+        node_type TEXT,            -- tree-sitter node type, e.g. 'function_item', 'class_declaration'
+        language TEXT              -- 'python' | 'typescript' | 'rust' | 'go' | ... (derived at ingest from file ext)
     );
 
     CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
@@ -631,6 +632,8 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
         conn.execute("ALTER TABLE symbols ADD COLUMN is_signature_only INTEGER DEFAULT 0")
     if "node_type" not in _ps_cols:
         conn.execute("ALTER TABLE symbols ADD COLUMN node_type TEXT")
+    if "language" not in _ps_cols:
+        conn.execute("ALTER TABLE symbols ADD COLUMN language TEXT")
 
     # Schema migration: structural_facts table (added 2026-06-07)
     try:

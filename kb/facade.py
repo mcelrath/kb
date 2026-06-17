@@ -35,6 +35,20 @@ from .entities.issues import IssuesRepository
 from .entities.bridge import BridgeMessagesRepository
 
 
+_LANG_BY_EXT = {
+    ".py": "python", ".pyi": "python", ".ts": "typescript", ".tsx": "typescript",
+    ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".jsx": "javascript",
+    ".rs": "rust", ".go": "go", ".c": "c", ".h": "c", ".cpp": "cpp", ".cc": "cpp",
+    ".cxx": "cpp", ".hpp": "cpp", ".hh": "cpp", ".java": "java", ".rb": "ruby",
+    ".tex": "tex", ".lean": "lean",
+}
+
+
+def _lang_from_file(path: str | None) -> str | None:
+    """Derive a symbol's language from its file extension (language-agnostic ingest)."""
+    return _LANG_BY_EXT.get(os.path.splitext(path or "")[1].lower())
+
+
 class KnowledgeBase:
     """SQLite + sqlite-vec knowledge base for findings.
 
@@ -2067,8 +2081,9 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         visibility: str | None = None,
         is_signature_only: bool = False,
         node_type: str | None = None,
+        language: str | None = None,
     ) -> dict[str, Any]:
-        """Add or update a Python symbol in the index.
+        """Add or update a symbol in the index (any language).
 
         Returns dict with 'id', 'is_new'.
         """
@@ -2087,6 +2102,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         ).fetchone()
 
         now = datetime.now().isoformat()
+        lang = language or _lang_from_file(file)
         lean_json = json.dumps(lean_citations or [])
         kb_json = json.dumps(kb_refs or [])
         also_json = json.dumps(also_in_modules or [])
@@ -2106,12 +2122,12 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
                     frame_hint=?, redirect_to=?, docstring_summary=?, lean_citations=?,
                     kb_refs=?, also_in_modules=?, file=?, line=?, project=?,
                     updated_at=?, embedding=?, content_hash=?, symbol_id=?,
-                    parent_impl=?, visibility=?, is_signature_only=?, node_type=?
+                    parent_impl=?, visibility=?, is_signature_only=?, node_type=?, language=?
                 WHERE id=?
             """, (kind, signature, status, int(is_lru_cached), frame_hint, redirect_to,
                   docstring_summary, lean_json, kb_json, also_json, file, line, project,
                   now, embedding, content_hash, symbol_id,
-                  parent_impl, visibility, int(is_signature_only), node_type,
+                  parent_impl, visibility, int(is_signature_only), node_type, lang,
                   sym_id))
             self.conn.execute("DELETE FROM symbols_vec WHERE id = ?", (sym_id,))
             self.conn.execute(
@@ -2128,13 +2144,13 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
                  frame_hint, redirect_to, docstring_summary, lean_citations,
                  kb_refs, also_in_modules, file, line, project, created_at, updated_at,
                  embedding, content_hash, symbol_id,
-                 parent_impl, visibility, is_signature_only, node_type)
+                 parent_impl, visibility, is_signature_only, node_type, language)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?)
         """, (sym_id, name, kind, module, signature, status, int(is_lru_cached),
               frame_hint, redirect_to, docstring_summary, lean_json, kb_json, also_json,
               file, line, project, now, now, embedding, content_hash, symbol_id,
-              parent_impl, visibility, int(is_signature_only), node_type))
+              parent_impl, visibility, int(is_signature_only), node_type, lang))
         self.conn.execute(
             "INSERT INTO symbols_vec (id, embedding) VALUES (?, ?)",
             (sym_id, embedding),
