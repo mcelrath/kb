@@ -31,7 +31,10 @@ SETUP → ERROR (if epic not found or persona missing)
       → GATHER
 
 GATHER → ERROR (if git status shows uncommitted AND no staged changes)
-       → VERIFY
+       → CONSOLIDATE
+
+CONSOLIDATE → VERIFY (no unaddressed reuse/refactor finding)
+            → ASKING (a new function reimplements existing code — needs human judgment)
 
 VERIFY → RECORD (all checks pass) [MANDATORY next step]
        → FIXING (check fails, fix possible)
@@ -142,7 +145,7 @@ Collect implementation artifacts:
    - `changed_files.txt`
    - `test_output.txt`
    - `build_output.txt` (if applicable)
-6. → VERIFY
+6. → CONSOLIDATE
 
 ### Detecting Test Runner
 
@@ -160,6 +163,33 @@ Auto-detect from project structure:
 - `Makefile` with build target → `make build`
 - Fallback: check context.yaml `build_command` field
 - If none found: skip build verification
+
+## CONSOLIDATE State
+
+**The mandated reuse/refactor hunt.** Its top target: a function elsewhere in the codebase that
+already does (half of) what this change just implemented — which would be a refactor toward
+smaller code. This is invisible to a diff and to the symbol graph (the overlap has a different
+name), so it is NOT diff-scoped and NOT an LSP query — it is semantic.
+
+1. **Read in full, not the diff.** For every touched file: read the WHOLE file, plus its
+   dependencies (imports/callees) and its downstream consumers (LSP `findReferences` /
+   `callHierarchy` on the changed symbols). The diff alone hides both the duplication and the
+   blast radius of a consolidation.
+2. **Semantic reuse search.** For each new/changed function, restate its BEHAVIOR in your own
+   words and run `kb surface --analysis "<that behavior>" -p <tag>` against the code-ingested
+   codebase (+ an alternative phrasing, since the existing function's name won't match). READ each
+   candidate IN FULL to confirm real overlap.
+3. **Output — refactor first.** Primary: `reimplements <file:line> — consume it` /
+   `extract shared helper from {new, existing}`. Secondary (ponytail line-cuts):
+   `L<n>: yagni|stdlib|native|delete|shrink <what>. <replacement>.` then `net: -<N> lines possible`,
+   or "Lean already. Ship." if nothing to cut.
+4. **Gate.** A new function that reimplements existing functionality → **ASKING** (propose the
+   consolidation; the human decides refactor-now vs. tracked follow-up). Pure line-level cuts are
+   IMPLEMENTATION-NOTEs, not blockers.
+5. Bound by the review's token budget; if you could not read every touched file + consumers, state
+   exactly what was not covered (no silent cap). If the project is not code-ingested, say so — the
+   hunt degrades to `ast-grep` shape-matching, which is weaker.
+6. → VERIFY
 
 ## VERIFY State
 

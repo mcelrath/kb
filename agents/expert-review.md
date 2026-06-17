@@ -108,6 +108,35 @@ This converts "the kb says X" / "the plan says X is done" into "I read the sourc
 
 Record in the verdict: `"source_validation": [{"claim": "...", "kb_id_or_plan_ref": "...", "file:line": "...", "confirmed": true|false, "is_placeholder_on_conditional": true|false, "counterexample_attempted": true|false, "counterexample_found": "<inputs or null>", "note": "..."}]`. A review that APPROVED while relying on a "done" claim it did not open the source for — or that left any `is_placeholder_on_conditional` entry with `counterexample_attempted: false` — is INCOMPLETE.
 
+### Consolidation Hunt (BOTH modes, MANDATORY — plan-time reuse check)
+
+**The plan must not propose BUILDING what the codebase already provides.** The most expensive
+mistake is shipping a sprawling reimplementation of behavior that already exists under a
+different name — and the cheapest place to catch it is here, before a line is written. This is a
+SEMANTIC question ("does anything already do this?"), so it uses semantic code search, NOT the
+symbol graph: `workspaceSymbol`/`findReferences` find exact names and their callers; they are
+blind to a function that does half of the proposed work under a different name.
+
+For each capability / function / module the plan proposes to BUILD:
+1. Restate its BEHAVIOR in your own words (1–2 sentences) and run
+   `kb surface --analysis "<that behavior>" -p <tag>` against the code-ingested codebase
+   (project-setup ingests it; the index is `python_symbols`). Also run an alternative-phrasing
+   query, since the existing function's name won't match yours.
+2. For each candidate it surfaces, READ the candidate IN FULL — confirm real behavioral overlap
+   (the summary is lossy), not a false positive.
+3. **Gate:** an existing function/API that already provides (part of) the proposed capability,
+   which the plan does not acknowledge and consume → DESIGN-BLOCKING: "consume `<X>` / refactor
+   toward `<X>` (file:line), do not rebuild." Prefer consolidation (route through X, or extract a
+   shared helper from {planned, X}) over a parallel implementation.
+
+If the codebase is NOT code-ingested (no `python_symbols` for this project), say so explicitly —
+the hunt then degrades to `ast-grep` shape-matching + reading the likely modules, which is
+name-sensitive and weaker; flag that coverage is reduced (no silent cap).
+
+Record in the verdict JSON:
+`"consolidation": [{"proposed": "...", "existing": "file:line|none", "action": "consume|extract|none", "note": "..."}]`.
+A review that proposes net-new code without having run the reuse search is INCOMPLETE.
+
 ### FULL MODE: Phase 1 — Ephemeral Teams + Pre-Extraction (ALWAYS)
 
 **Reviews are ALWAYS non-persistent.** Do NOT create tracker tasks for reviewers — results exist only in teammate inline output + `kb add` for durable findings.

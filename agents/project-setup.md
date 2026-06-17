@@ -291,7 +291,8 @@ Decision rule (LSP and ast-grep are complementary, not redundant):
 
 - Structural search (single file / repo): `ast-grep --lang {lang} --pattern '...'`
 - Symbols / definitions / references / callers: the LSP — workspaceSymbol, goToDefinition, findReferences, callHierarchy/incomingCalls ({project LSP, e.g. rust-analyzer / typescript-language-server / pyright / clangd})
-- Semantic codebase search: `"$KB_VENV_PYTHON" "$KB_TOOL" search "<concept>" -p {tag}` (once code-ingested, kb-asf.4)
+- Reuse search (does this already exist?): `"$KB_VENV_PYTHON" "$KB_TOOL" surface --analysis "<behavior>" -p {tag}` over the code-ingested symbol index (the Consolidation Hunt's discovery tool)
+- Semantic findings search: `"$KB_VENV_PYTHON" "$KB_TOOL" search "<concept>" -p {tag}`
 - Code map: {cargo doc --document-private-items / madge / /codemap}
 - Filenames / literal strings ONLY: `fd` (names), `rg` (literal strings in DATA/output — never source content)
 
@@ -396,12 +397,30 @@ Verify the language server; if absent, emit an install note (do not auto-install
 Cross-file/crate "who calls X" is LSP callHierarchy/incomingCalls — NOT ast-grep
 (which cannot span files) and NOT grep.
 
-### tree-sitter grammar (for kb semantic code-ingest — kb-asf.4)
+### Code-ingest the codebase (PREREQUISITE — run it, don't just name it)
 
-kb's semantic codebase search chunks via tree-sitter. Verify the grammar for each
-detected language is available (tree-sitter-rust / -typescript / -python). Once kb
-code-ingest lands (kb-asf.4), run it to populate the codebase index; thereafter
-agents `"$KB_VENV_PYTHON" "$KB_TOOL" search "<concept>" -p <tag>` over the CODE itself, not just findings.
+The review agents' **Consolidation Hunt** (expert-review + implementation-review) finds
+"something here already does half of this" by SEMANTIC code search over the ingested
+`python_symbols` table — so the index MUST be populated at setup time, or the hunt is blind.
+Actually RUN the ingest for each detected language (chunks via tree-sitter into `python_symbols`
+with embeddings):
+
+```bash
+# Python project:
+"$KB_VENV_PYTHON" "$KB_TOOL" ingest python --root "<project_root>" --no-notations --project "<tag>"
+# TypeScript/JS project:
+"$KB_VENV_PYTHON" "$KB_TOOL" ingest typescript --root "<project_root>" --project "<tag>"
+# Rust project: kb ingest rust is not wired yet (kb-a3ce86). Until it lands, emit:
+#   "Note: Rust code-ingest pending (kb-a3ce86); the consolidation hunt degrades to
+#    ast-grep shape-matching for Rust until then."
+```
+
+After ingest, the reuse-search the reviewers use is `kb surface --analysis "<behavior>"`
+(sim≥0.62 over the symbol index) — NOT `kb search` (findings) and NOT the LSP (LSP finds exact
+symbols/usages, not behavioral overlap under a different name). Record the symbol count in the
+Phase 7 report and the agent-preamble "Code Exploration" section so reviewers know the index
+exists and is the reuse target. If ingest errors (missing tree-sitter grammar, parse failure),
+say so explicitly and emit the install note — do NOT silently skip it.
 
 ### Code map (one-shot orientation) — RUN it, don't just name it
 
@@ -438,7 +457,7 @@ cross-crate symbol search is LSP workspaceSymbol/callHierarchy, not per-crate gr
 Fill the `agent-preamble.md` "Code Exploration" section with the detected, available
 tools so subagents reach for them instead of grep.
 
-`"$KB_VENV_PYTHON" "$KB_TOOL" add`: "Code-exploration tooling for {project}: langs={list}, LSP={present/missing}, ast-grep={y/n}, tree-sitter={y/n}, codemap={tool}"
+`"$KB_VENV_PYTHON" "$KB_TOOL" add`: "Code-exploration tooling for {project}: langs={list}, LSP={present/missing}, ast-grep={y/n}, code-ingested={y/n, N symbols}, codemap={tool}"
 
 ## Phase 6b: Generate Bridge Personas
 
