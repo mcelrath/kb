@@ -456,13 +456,18 @@ def run(
     project: str = "algebraic-genesis",
     dry_run: bool = False,
     db_path: Path | None = None,
-    no_notations: bool = False,
+    with_notations: bool = False,
 ) -> int:
-    """Ingest Python symbols in-process.  Returns 0 on success, 1 on fatal error."""
+    """Ingest Python symbols in-process.  Returns 0 on success, 1 on fatal error.
+
+    Generic by default: root=cwd, no physics extras. The secular-constraints corpus
+    layout (DEFAULT_SUBDIRS) enables physics_mode (retired-symbol injection); notations
+    are opt-in via with_notations.
+    """
     if db_path is None:
         db_path = DEFAULT_DB_PATH
     if root is None:
-        root = Path.home() / "Physics" / "secular-constraints"
+        root = Path.cwd()
 
     kb = KnowledgeBase(db_path=db_path)
 
@@ -477,6 +482,7 @@ def run(
     root = Path(root).expanduser().resolve()
 
     # Collect files to process
+    physics_mode = False
     if files:
         file_list = [Path(f).expanduser().resolve() for f in files]
     else:
@@ -488,6 +494,14 @@ def run(
                     if "__pycache__" in py.parts:
                         continue
                     file_list.append(py)
+        physics_mode = bool(file_list)  # secular-constraints corpus layout was found
+        if not file_list:
+            # Generic project: walk the root directly (no physics corpus subdirs present).
+            _SKIP = {"__pycache__", ".venv", "venv", ".git", "node_modules", "build", "dist", ".eggs"}
+            for py in root.rglob("*.py"):
+                if _SKIP & set(py.parts):
+                    continue
+                file_list.append(py)
 
     try:
         from tqdm import tqdm as _tqdm
@@ -603,14 +617,16 @@ def run(
     kb.conn.commit()
     print(f"New: {new_count}  Updated: {updated_count}  Skipped(unchanged): {skipped_count}  Multi-module: {multi_module_count}")
 
-    # Populate notations
-    if not no_notations:
+    # Populate notations (physics-specific; opt-in)
+    if with_notations:
         n = populate_notations_from_constants(kb, dry_run=False)
         print(f"Notations inserted/skipped: {n}")
 
-    # Populate retired symbols
-    r = populate_retired_symbols(kb, project=project, dry_run=dry_run)
-    print(f"Retired symbols inserted: {r}")
+    # Populate retired symbols (physics-specific RETIRED_SYMBOLS; only for the
+    # secular-constraints corpus — never inject these into a generic project's index)
+    if physics_mode:
+        r = populate_retired_symbols(kb, project=project, dry_run=dry_run)
+        print(f"Retired symbols inserted: {r}")
 
     return 0
 
@@ -650,9 +666,9 @@ def main() -> None:
         help="KB database path",
     )
     parser.add_argument(
-        "--no-notations",
+        "--with-notations",
         action="store_true",
-        help="Skip populating notations table",
+        help="Also populate the physics notations table (secular-constraints only; off by default)",
     )
     parser.add_argument(
         "--deleted",
@@ -668,7 +684,7 @@ def main() -> None:
         project=args.project,
         dry_run=args.dry_run,
         db_path=args.db,
-        no_notations=args.no_notations,
+        with_notations=args.with_notations,
     )
     sys.exit(rc)
 

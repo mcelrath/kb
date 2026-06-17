@@ -36,7 +36,7 @@ def run_ingest(kb, args, ingest_parser) -> None:
             project=args.project,
             dry_run=args.dry_run,
             db_path=args.db,
-            no_notations=getattr(args, "no_notations", False),
+            with_notations=getattr(args, "with_notations", False),
         )
         if rc:
             sys.exit(rc)

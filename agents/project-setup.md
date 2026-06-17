@@ -407,7 +407,7 @@ with embeddings):
 
 ```bash
 # Python project:
-"$KB_VENV_PYTHON" "$KB_TOOL" ingest python --root "<project_root>" --no-notations --project "<tag>"
+"$KB_VENV_PYTHON" "$KB_TOOL" ingest python --root "<project_root>" --project "<tag>"
 # TypeScript/JS project:
 "$KB_VENV_PYTHON" "$KB_TOOL" ingest typescript --root "<project_root>" --project "<tag>"
 # Rust project: kb ingest rust is not wired yet (kb-a3ce86). Until it lands, emit:

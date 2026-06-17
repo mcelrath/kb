@@ -910,23 +910,23 @@ def main():
     ingest_scripts_parser.add_argument("--dry-run", action="store_true")
     ingest_scripts_parser.add_argument("-n", "--limit", type=int, default=50)
 
-    ingest_python_parser = ingest_sub.add_parser("python", help="Index Python symbols from cl44/clifford_common")
-    ingest_python_parser.add_argument("--root", default=str(Path.home() / "Physics/secular-constraints"),
-        help="Root of secular-constraints (default: ~/Physics/secular-constraints)")
+    ingest_python_parser = ingest_sub.add_parser("python", help="Index Python symbols (.py) into the symbols table")
+    ingest_python_parser.add_argument("--root", default=str(Path.cwd()),
+        help="Root directory to walk for .py files (default: cwd)")
     ingest_python_parser.add_argument("--files", nargs="+", metavar="FILE",
         help="Incremental mode: process only these files")
     ingest_python_parser.add_argument("--project", default="algebraic-genesis")
     ingest_python_parser.add_argument("--dry-run", action="store_true")
-    ingest_python_parser.add_argument("--no-notations", action="store_true",
-        help="Skip populating notations table")
+    ingest_python_parser.add_argument("--with-notations", action="store_true",
+        help="Also populate the physics notations table (secular-constraints only; off by default)")
 
-    ingest_ts_parser = ingest_sub.add_parser("typescript", help="Index TypeScript/TSX symbols (.ts/.tsx) into python_symbols")
+    ingest_ts_parser = ingest_sub.add_parser("typescript", help="Index TypeScript/TSX symbols (.ts/.tsx) into symbols")
     ingest_ts_parser.add_argument("--root", default=str(Path.cwd()),
         help="Root directory to walk for .ts/.tsx files (default: cwd)")
     ingest_ts_parser.add_argument("--files", nargs="+", metavar="FILE",
         help="Incremental mode: process only these files")
     ingest_ts_parser.add_argument("--deleted", nargs="+", metavar="FILE",
-        help="Remove all python_symbols rows for these deleted/renamed files")
+        help="Remove all symbols rows for these deleted/renamed files")
     ingest_ts_parser.add_argument("--project", default="kb")
     ingest_ts_parser.add_argument("--dry-run", action="store_true")
 
