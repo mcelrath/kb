@@ -246,7 +246,7 @@ SCHEMA_SQL = """
     );
 
     -- Python symbol index
-    CREATE TABLE IF NOT EXISTS python_symbols (
+    CREATE TABLE IF NOT EXISTS symbols (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         kind TEXT NOT NULL,        -- 'function' | 'class'
@@ -272,10 +272,10 @@ SCHEMA_SQL = """
         node_type TEXT             -- tree-sitter node type, e.g. 'function_item', 'class_declaration'
     );
 
-    CREATE INDEX IF NOT EXISTS idx_python_symbols_name ON python_symbols(name);
-    CREATE INDEX IF NOT EXISTS idx_python_symbols_status ON python_symbols(status);
-    CREATE INDEX IF NOT EXISTS idx_python_symbols_module ON python_symbols(module);
-    CREATE INDEX IF NOT EXISTS idx_python_symbols_project ON python_symbols(project);
+    CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+    CREATE INDEX IF NOT EXISTS idx_symbols_status ON symbols(status);
+    CREATE INDEX IF NOT EXISTS idx_symbols_module ON symbols(module);
+    CREATE INDEX IF NOT EXISTS idx_symbols_project ON symbols(project);
 
     -- TeX annotation index
     CREATE TABLE IF NOT EXISTS tex_annotations (
@@ -513,6 +513,17 @@ SCHEMA_SQL = """
 
 def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
     """Initialize database schema."""
+    # Migration (read-index epic kb-3d347c / A1): rename python_symbols -> symbols.
+    # MUST run BEFORE executescript — otherwise CREATE TABLE IF NOT EXISTS symbols would
+    # create an empty table first and strand the legacy data. Main table renames in place
+    # (cheap, metadata-only); the vec0 copy happens after symbols_vec is created (below).
+    _names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "python_symbols" in _names and "symbols" not in _names:
+        conn.execute("ALTER TABLE python_symbols RENAME TO symbols")
+        for _old in ("idx_python_symbols_name", "idx_python_symbols_status",
+                     "idx_python_symbols_module", "idx_python_symbols_project"):
+            conn.execute(f"DROP INDEX IF EXISTS {_old}")
+
     _ = conn.executescript(SCHEMA_SQL)
 
     # Create vector table for embeddings
@@ -557,13 +568,22 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
     except sqlite3.OperationalError:
         _ = conn.execute("ALTER TABLE findings ADD COLUMN summary TEXT")
 
-    # Create vector table for python symbols
+    # Create vector table for symbols
     _ = conn.execute(f"""
-        CREATE VIRTUAL TABLE IF NOT EXISTS python_symbols_vec USING vec0(
+        CREATE VIRTUAL TABLE IF NOT EXISTS symbols_vec USING vec0(
             id TEXT PRIMARY KEY,
             embedding float[{embedding_dim}]
         )
     """)
+
+    # Migration (read-index epic kb-3d347c / A1): copy the legacy python_symbols_vec rows
+    # into the freshly-created symbols_vec (vec0 cannot be renamed), then drop the old one.
+    # Copy — NOT re-embed (keys on id, same dim). Idempotent: only while the legacy vec exists.
+    _allnames = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+    if "python_symbols_vec" in _allnames:
+        conn.execute("INSERT OR IGNORE INTO symbols_vec(id, embedding) "
+                     "SELECT id, embedding FROM python_symbols_vec")
+        conn.execute("DROP TABLE python_symbols_vec")
 
     # Create vector table for tex annotations
     _ = conn.execute(f"""
@@ -595,22 +615,22 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
     except sqlite3.OperationalError:
         _ = conn.execute("ALTER TABLE lean_theorems ADD COLUMN finding_id TEXT")
 
-    # Schema migration: add project column to python_symbols if not exists
+    # Schema migration: add project column to symbols if not exists
     try:
-        _ = conn.execute("SELECT project FROM python_symbols LIMIT 1")
+        _ = conn.execute("SELECT project FROM symbols LIMIT 1")
     except sqlite3.OperationalError:
-        _ = conn.execute("ALTER TABLE python_symbols ADD COLUMN project TEXT")
+        _ = conn.execute("ALTER TABLE symbols ADD COLUMN project TEXT")
 
-    # Schema migration: add chunker metadata columns to python_symbols (kb-asf.4.1)
-    _ps_cols = {row[1] for row in conn.execute("PRAGMA table_info(python_symbols)").fetchall()}
+    # Schema migration: add chunker metadata columns to symbols (kb-asf.4.1)
+    _ps_cols = {row[1] for row in conn.execute("PRAGMA table_info(symbols)").fetchall()}
     if "parent_impl" not in _ps_cols:
-        conn.execute("ALTER TABLE python_symbols ADD COLUMN parent_impl TEXT")
+        conn.execute("ALTER TABLE symbols ADD COLUMN parent_impl TEXT")
     if "visibility" not in _ps_cols:
-        conn.execute("ALTER TABLE python_symbols ADD COLUMN visibility TEXT")
+        conn.execute("ALTER TABLE symbols ADD COLUMN visibility TEXT")
     if "is_signature_only" not in _ps_cols:
-        conn.execute("ALTER TABLE python_symbols ADD COLUMN is_signature_only INTEGER DEFAULT 0")
+        conn.execute("ALTER TABLE symbols ADD COLUMN is_signature_only INTEGER DEFAULT 0")
     if "node_type" not in _ps_cols:
-        conn.execute("ALTER TABLE python_symbols ADD COLUMN node_type TEXT")
+        conn.execute("ALTER TABLE symbols ADD COLUMN node_type TEXT")
 
     # Schema migration: structural_facts table (added 2026-06-07)
     try:

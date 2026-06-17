@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Ingest TypeScript symbols from .ts/.tsx files into the KB python_symbols table.
+Ingest TypeScript symbols from .ts/.tsx files into the KB symbols table.
 
 Uses the tree-sitter chunker (kb/code_ingest/chunker.py) with TYPESCRIPT_CONFIG
 and TSX_CONFIG — no grep/text-search.  Extracts exported functions, classes,
 interfaces, type aliases, enums, and export-const declarations.  Persists each
-symbol via KnowledgeBase.add_python_symbol() with the TS metadata columns
+symbol via KnowledgeBase.add_symbol() with the TS metadata columns
 parent_impl / visibility / is_signature_only / node_type landed in kb-asf.4.1.
 """
 
@@ -57,7 +57,7 @@ def chunk_ts_file(
     file_path: Path,
     root: Path,
 ) -> list[dict[str, Any]]:
-    """Chunk a single .ts/.tsx file and return symbol dicts ready for add_python_symbol.
+    """Chunk a single .ts/.tsx file and return symbol dicts ready for add_symbol.
 
     Returns empty list on parse errors.
     """
@@ -108,7 +108,7 @@ def run(
     if deleted:
         for fpath in deleted:
             fpath_str = str(Path(fpath).expanduser().resolve())
-            n = kb.delete_python_symbols_for_file(fpath_str)
+            n = kb.delete_symbols_for_file(fpath_str)
             print(f"Deleted {n} rows for removed file: {fpath_str}", file=sys.stderr)
         return 0
 
@@ -172,7 +172,7 @@ def run(
     sym_iter = _tqdm(all_symbols, desc="insert", unit="sym", dynamic_ncols=True) if _tqdm else all_symbols
     try:
         for i, s in enumerate(sym_iter, 1):
-            result = kb.add_python_symbol(
+            result = kb.add_symbol(
                 name=s["name"],
                 kind=s["kind"],
                 module=s["module"],
@@ -219,7 +219,7 @@ def run(
             file_to_live[fpath_str].add((s["name"], s["module"]))
         for fpath in [str(Path(f).expanduser().resolve()) for f in files]:
             live = file_to_live.get(fpath, set())
-            n = kb.prune_python_symbols_for_file(fpath, live)
+            n = kb.prune_symbols_for_file(fpath, live)
             if n:
                 print(f"  Pruned {n} stale symbol(s) from {fpath}", file=sys.stderr)
             pruned_total += n
@@ -238,7 +238,7 @@ def run(
         also = [{"module": e["module"], "file": e["file"], "line": e["line"]} for e in entries]
         also_json = json.dumps(also)
         kb.conn.execute(
-            "UPDATE python_symbols SET also_in_modules = ? WHERE name = ?",
+            "UPDATE symbols SET also_in_modules = ? WHERE name = ?",
             (also_json, name),
         )
         multi_module_count += 1
@@ -255,7 +255,7 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Ingest TypeScript symbols (.ts/.tsx) into the KB python_symbols table"
+        description="Ingest TypeScript symbols (.ts/.tsx) into the KB symbols table"
     )
     parser.add_argument(
         "--root",
@@ -289,7 +289,7 @@ def main() -> None:
         "--deleted",
         nargs="+",
         metavar="FILE",
-        help="Remove all python_symbols rows for these deleted/renamed files",
+        help="Remove all symbols rows for these deleted/renamed files",
     )
     args = parser.parse_args()
     rc = run(

@@ -1540,10 +1540,10 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
         Covers ALL seven _vec tables:
           findings_vec, scripts_vec, lean_theorems_vec, concepts_vec, issues_vec,
-          python_symbols_vec, tex_annotations_vec.
+          symbols_vec, tex_annotations_vec.
 
-        For python_symbols and tex_annotations, BOTH the base-table `embedding BLOB`
-        column AND the _vec row are regenerated (mirroring add_python_symbol /
+        For symbols and tex_annotations, BOTH the base-table `embedding BLOB`
+        column AND the _vec row are regenerated (mirroring add_symbol /
         add_tex_annotation dual-write).
 
         Dim-change handling: if force_dim is provided (or stored dim != configured dim),
@@ -1590,7 +1590,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             "lean_theorems_vec",
             "concepts_vec",
             "issues_vec",
-            "python_symbols_vec",
+            "symbols_vec",
             "tex_annotations_vec",
         ]
 
@@ -1619,7 +1619,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             "lean_theorems": self.conn.execute("SELECT COUNT(*) FROM lean_theorems").fetchone()[0],
             "concepts": self.conn.execute("SELECT COUNT(*) FROM concepts").fetchone()[0],
             "issues": self.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0],
-            "python_symbols": self.conn.execute("SELECT COUNT(*) FROM python_symbols").fetchone()[0],
+            "symbols": self.conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0],
             "tex_annotations": self.conn.execute("SELECT COUNT(*) FROM tex_annotations").fetchone()[0],
         }
         grand_total = sum(counts.values())
@@ -1636,7 +1636,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
             base_blob_update: optional callable(conn, row_id, embedding_bytes) that
             also writes the embedding back to the base table's BLOB column.
-            Used for python_symbols and tex_annotations.
+            Used for symbols and tex_annotations.
             """
             t0 = time.monotonic()
             all_rows = self.conn.execute(select_sql).fetchall()
@@ -1741,9 +1741,9 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             lambda r: r["title"] + (" " + r["description"] if r["description"] else ""),
         )
 
-        # python_symbols: regenerate embed text as add_python_symbol does it,
+        # symbols: regenerate embed text as add_symbol does it,
         # and write BOTH the _vec row AND the base-table embedding BLOB.
-        def _python_symbols_text(row: Any) -> str:
+        def _symbols_text(row: Any) -> str:
             module = row["module"] or ""
             name = row["name"] or ""
             signature = row["signature"] or ""
@@ -1752,15 +1752,15 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
         def _update_python_symbol_blob(conn: Any, row_id: str, emb: bytes) -> None:
             conn.execute(
-                "UPDATE python_symbols SET embedding = ? WHERE id = ?",
+                "UPDATE symbols SET embedding = ? WHERE id = ?",
                 (emb, row_id),
             )
 
         _do_table(
-            "python_symbols",
-            "SELECT id, module, name, signature, docstring_summary FROM python_symbols",
-            "python_symbols_vec",
-            _python_symbols_text,
+            "symbols",
+            "SELECT id, module, name, signature, docstring_summary FROM symbols",
+            "symbols_vec",
+            _symbols_text,
             base_blob_update=_update_python_symbol_blob,
         )
 
@@ -1797,14 +1797,14 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
         # POST-REEMBED ASSERTION: each _vec must have >= base embedded-row count.
         # For findings/scripts/lean_theorems/concepts/issues: all rows should have a vec entry.
-        # For python_symbols/tex_annotations: rows with non-null embedding should match.
+        # For symbols/tex_annotations: rows with non-null embedding should match.
         assertion_checks = [
             ("findings_vec",        "SELECT COUNT(*) FROM findings"),
             ("scripts_vec",         "SELECT COUNT(*) FROM scripts"),
             ("lean_theorems_vec",   "SELECT COUNT(*) FROM lean_theorems"),
             ("concepts_vec",        "SELECT COUNT(*) FROM concepts"),
             ("issues_vec",          "SELECT COUNT(*) FROM issues"),
-            ("python_symbols_vec",  "SELECT COUNT(*) FROM python_symbols WHERE embedding IS NOT NULL"),
+            ("symbols_vec",  "SELECT COUNT(*) FROM symbols WHERE embedding IS NOT NULL"),
             ("tex_annotations_vec", "SELECT COUNT(*) FROM tex_annotations WHERE embedding IS NOT NULL"),
         ]
         assertion_errors = []
@@ -2034,19 +2034,19 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         """Add content_hash and symbol_id columns if they don't exist yet (idempotent)."""
         existing_cols = {
             row[1]
-            for row in self.conn.execute("PRAGMA table_info(python_symbols)").fetchall()
+            for row in self.conn.execute("PRAGMA table_info(symbols)").fetchall()
         }
         if "content_hash" not in existing_cols:
             self.conn.execute(
-                "ALTER TABLE python_symbols ADD COLUMN content_hash TEXT"
+                "ALTER TABLE symbols ADD COLUMN content_hash TEXT"
             )
         if "symbol_id" not in existing_cols:
             self.conn.execute(
-                "ALTER TABLE python_symbols ADD COLUMN symbol_id TEXT"
+                "ALTER TABLE symbols ADD COLUMN symbol_id TEXT"
             )
         self.conn.commit()
 
-    def add_python_symbol(
+    def add_symbol(
         self,
         name: str,
         kind: str,
@@ -2082,7 +2082,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
         existing = self.conn.execute(
             "SELECT id, content_hash "
-            "FROM python_symbols WHERE name = ? AND module = ?",
+            "FROM symbols WHERE name = ? AND module = ?",
             (name, module),
         ).fetchone()
 
@@ -2102,7 +2102,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         if existing:
             sym_id = existing["id"]
             self.conn.execute("""
-                UPDATE python_symbols SET kind=?, signature=?, status=?, is_lru_cached=?,
+                UPDATE symbols SET kind=?, signature=?, status=?, is_lru_cached=?,
                     frame_hint=?, redirect_to=?, docstring_summary=?, lean_citations=?,
                     kb_refs=?, also_in_modules=?, file=?, line=?, project=?,
                     updated_at=?, embedding=?, content_hash=?, symbol_id=?,
@@ -2113,9 +2113,9 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
                   now, embedding, content_hash, symbol_id,
                   parent_impl, visibility, int(is_signature_only), node_type,
                   sym_id))
-            self.conn.execute("DELETE FROM python_symbols_vec WHERE id = ?", (sym_id,))
+            self.conn.execute("DELETE FROM symbols_vec WHERE id = ?", (sym_id,))
             self.conn.execute(
-                "INSERT INTO python_symbols_vec (id, embedding) VALUES (?, ?)",
+                "INSERT INTO symbols_vec (id, embedding) VALUES (?, ?)",
                 (sym_id, embedding),
             )
             self.conn.commit()
@@ -2123,7 +2123,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
         sym_id = symbol_id
         self.conn.execute("""
-            INSERT INTO python_symbols
+            INSERT INTO symbols
                 (id, name, kind, module, signature, status, is_lru_cached,
                  frame_hint, redirect_to, docstring_summary, lean_citations,
                  kb_refs, also_in_modules, file, line, project, created_at, updated_at,
@@ -2136,7 +2136,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
               file, line, project, now, now, embedding, content_hash, symbol_id,
               parent_impl, visibility, int(is_signature_only), node_type))
         self.conn.execute(
-            "INSERT INTO python_symbols_vec (id, embedding) VALUES (?, ?)",
+            "INSERT INTO symbols_vec (id, embedding) VALUES (?, ?)",
             (sym_id, embedding),
         )
         self.conn.commit()
@@ -2149,15 +2149,15 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             "node_type": node_type,
         }
 
-    def prune_python_symbols_for_file(
+    def prune_symbols_for_file(
         self,
         file: str,
         live_names_modules: set[tuple[str, str]],
     ) -> int:
-        """Delete stale python_symbols rows for a file after re-ingest.
+        """Delete stale symbols rows for a file after re-ingest.
 
         Removes rows whose (name, module) is NOT in live_names_modules.
-        Also cleans python_symbols_vec.  Returns count of deleted rows.
+        Also cleans symbols_vec.  Returns count of deleted rows.
 
         Guard: if live_names_modules is empty, nothing is deleted (parse
         failure / empty file must not wipe existing rows).
@@ -2165,7 +2165,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         if not live_names_modules:
             return 0
         rows = self.conn.execute(
-            "SELECT id, name, module FROM python_symbols WHERE file = ?",
+            "SELECT id, name, module FROM symbols WHERE file = ?",
             (file,),
         ).fetchall()
         to_delete = [
@@ -2176,28 +2176,28 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         if not to_delete:
             return 0
         for sid in to_delete:
-            self.conn.execute("DELETE FROM python_symbols_vec WHERE id = ?", (sid,))
-            self.conn.execute("DELETE FROM python_symbols WHERE id = ?", (sid,))
+            self.conn.execute("DELETE FROM symbols_vec WHERE id = ?", (sid,))
+            self.conn.execute("DELETE FROM symbols WHERE id = ?", (sid,))
         self.conn.commit()
         return len(to_delete)
 
-    def delete_python_symbols_for_file(self, file: str) -> int:
-        """Remove ALL python_symbols rows for a deleted/removed file.
+    def delete_symbols_for_file(self, file: str) -> int:
+        """Remove ALL symbols rows for a deleted/removed file.
 
-        Also cleans python_symbols_vec. Returns count of deleted rows.
+        Also cleans symbols_vec. Returns count of deleted rows.
         """
         rows = self.conn.execute(
-            "SELECT id FROM python_symbols WHERE file = ?", (file,)
+            "SELECT id FROM symbols WHERE file = ?", (file,)
         ).fetchall()
         for row in rows:
-            self.conn.execute("DELETE FROM python_symbols_vec WHERE id = ?", (row["id"],))
+            self.conn.execute("DELETE FROM symbols_vec WHERE id = ?", (row["id"],))
         result = self.conn.execute(
-            "DELETE FROM python_symbols WHERE file = ?", (file,)
+            "DELETE FROM symbols WHERE file = ?", (file,)
         )
         self.conn.commit()
         return result.rowcount
 
-    def search_python_symbols(
+    def search_symbols(
         self,
         query: str,
         module: str | None = None,
@@ -2222,8 +2222,8 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
         vec_results = self.conn.execute(
             f"""SELECT v.id, v.distance
-                FROM python_symbols_vec v
-                JOIN python_symbols p ON p.id = v.id
+                FROM symbols_vec v
+                JOIN symbols p ON p.id = v.id
                 WHERE v.embedding MATCH ? AND k = ?
                 {"AND " + " AND ".join(conditions) if conditions else ""}
                 ORDER BY v.distance""",
@@ -2241,7 +2241,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             row = self.conn.execute(
                 """SELECT id, name, kind, module, signature, status, frame_hint,
                           docstring_summary, lean_citations, kb_refs, file, line, project
-                   FROM python_symbols WHERE id = ?""",
+                   FROM symbols WHERE id = ?""",
                 (sid,),
             ).fetchone()
             if row:

@@ -114,25 +114,25 @@ def _project_from_cwd() -> str | None:
 
 def query_db(conn: sqlite3.Connection, tokens: list[str], fracs: list[str],
              project: str | None = None) -> list[str]:
-    """Query python_symbols, notations, and findings for matches. Returns advisory lines."""
+    """Query symbols, notations, and findings for matches. Returns advisory lines."""
     advisories = []
     seen_names: set[str] = set()
 
     if not tokens and not fracs:
         return advisories
 
-    # --- python_symbols exact name match — project-scoped to prevent cross-project FPs ---
+    # --- symbols exact name match — project-scoped to prevent cross-project FPs ---
     placeholders = ','.join('?' * len(tokens))
     if project:
         rows = conn.execute(
             f'SELECT name, kind, status, module, file, line, redirect_to '
-            f'FROM python_symbols WHERE name IN ({placeholders}) AND project=? LIMIT 20',
+            f'FROM symbols WHERE name IN ({placeholders}) AND project=? LIMIT 20',
             tokens + [project],
         ).fetchall()
     else:
         rows = conn.execute(
             f'SELECT name, kind, status, module, file, line, redirect_to '
-            f'FROM python_symbols WHERE name IN ({placeholders}) LIMIT 20',
+            f'FROM symbols WHERE name IN ({placeholders}) LIMIT 20',
             tokens,
         ).fetchall()
     canonical_candidates: list[tuple[str, str]] = []

@@ -249,17 +249,17 @@ def test_line_numbers_correct():
     )
 
 
-def test_chunk_result_feeds_add_python_symbol():
-    """ChunkResult fields map cleanly to KnowledgeBase.add_python_symbol() kwargs."""
+def test_chunk_result_feeds_add_symbol():
+    """ChunkResult fields map cleanly to KnowledgeBase.add_symbol() kwargs."""
     chunks = _full_body_only(chunk_source(RUST_SAMPLE, "rust", module="mylib"))
-    # Verify the ChunkResult has all required fields for add_python_symbol
+    # Verify the ChunkResult has all required fields for add_symbol
     required = {"name", "kind", "module", "signature", "file", "line"}
     for chunk in chunks[:5]:
         missing = required - set(vars(chunk))
         assert not missing, (
-            f"ChunkResult for {chunk.name!r} missing fields required by add_python_symbol: {missing}"
+            f"ChunkResult for {chunk.name!r} missing fields required by add_symbol: {missing}"
         )
-        # kind must be one of the values accepted by python_symbols.kind
+        # kind must be one of the values accepted by symbols.kind
         assert chunk.kind in ("function", "class", "constant"), (
             f"ChunkResult.kind must be 'function'|'class'|'constant'; got {chunk.kind!r} for {chunk.name!r}"
         )
@@ -453,7 +453,7 @@ if __name__ == "__main__":
         test_doc_comment_extracted,
         test_visibility_extracted,
         test_line_numbers_correct,
-        test_chunk_result_feeds_add_python_symbol,
+        test_chunk_result_feeds_add_symbol,
         # TypeScript tests (kb-asf.4.2)
         test_ts_function_and_named_declarations_extracted,
         test_ts_import_excluded,

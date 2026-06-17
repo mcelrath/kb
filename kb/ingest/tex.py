@@ -193,7 +193,7 @@ def scan_tex_file(path: Path) -> list[dict]:
 
 
 def check_python_staleness(kb: KnowledgeBase, annotations: list[dict]) -> list[str]:
-    """For each python_ref, check if a python_symbols row exists.
+    """For each python_ref, check if a symbols row exists.
 
     Ref formats handled:
       cl44/module.py::func_name   — file + name (exact)
@@ -218,7 +218,7 @@ def check_python_staleness(kb: KnowledgeBase, annotations: list[dict]) -> list[s
                 # file::name — require both file suffix and name match
                 file_part, name = ref.split("::", 1)
                 row = kb.conn.execute(
-                    "SELECT id FROM python_symbols WHERE name = ? AND file LIKE ?",
+                    "SELECT id FROM symbols WHERE name = ? AND file LIKE ?",
                     (name.strip(), f"%{file_part.strip()}"),
                 ).fetchone()
             elif "/" in ref:
@@ -226,13 +226,13 @@ def check_python_staleness(kb: KnowledgeBase, annotations: list[dict]) -> list[s
                 if ref.endswith("/"):
                     # Directory: match any file inside it
                     row = kb.conn.execute(
-                        "SELECT id FROM python_symbols WHERE file LIKE ?",
+                        "SELECT id FROM symbols WHERE file LIKE ?",
                         (f"%{ref}%",),
                     ).fetchone()
                 else:
-                    # Specific file: suffix match in python_symbols
+                    # Specific file: suffix match in symbols
                     row = kb.conn.execute(
-                        "SELECT id FROM python_symbols WHERE file LIKE ?",
+                        "SELECT id FROM symbols WHERE file LIKE ?",
                         (f"%{ref}",),
                     ).fetchone()
                     # Fallback: file exists on disk (script with no extractable symbols)
@@ -246,14 +246,14 @@ def check_python_staleness(kb: KnowledgeBase, annotations: list[dict]) -> list[s
             else:
                 # Bare identifier — treat as symbol name
                 row = kb.conn.execute(
-                    "SELECT id FROM python_symbols WHERE name = ?",
+                    "SELECT id FROM symbols WHERE name = ?",
                     (ref,),
                 ).fetchone()
 
             if not row:
                 warnings.append(
                     f"STALE python_ref '{ref}' in {ann['file']}:{ann['line']} "
-                    f"-- no python_symbols row found (run: kb ingest python)"
+                    f"-- no symbols row found (run: kb ingest python)"
                 )
     return warnings
 

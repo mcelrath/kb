@@ -10,7 +10,7 @@ no exit-2.  The embed network call + DB reads are allowed (they are reads).
 Composed facades used:
   produce_prompt    -> kb.search(query, limit=8, project=None) [findings]
   produce_analysis  -> kb.search(query[:600], limit=8)        [findings]
-  produce_symbols   -> kb.conn (python_symbols + notations)   [direct SQL]
+  produce_symbols   -> kb.conn (symbols + notations)   [direct SQL]
   produce_open_issues -> kb._issues.search / conn (issues_vec + issues_fts)
   produce_bridge    -> kb._bridge.search / conn (bridge_messages)
 """
@@ -321,7 +321,7 @@ def produce_symbols(
     """RETIRED/NOTATION surface for a file or text content.
 
     Replicates symbol_surface.py's compute + query_symbols logic.
-    Reads python_symbols + notations tables directly via kb.conn.
+    Reads symbols + notations tables directly via kb.conn.
 
     filter_unseen is NOT applied here (hook-side); returns all advisories.
     """
@@ -389,18 +389,18 @@ def _query_symbols(
     seen: set[str] = set()
     ph = ','.join('?' * len(tokens)) if tokens else ''
 
-    # python_symbols — retired only (canonical suppressed on Read per hook logic)
+    # symbols — retired only (canonical suppressed on Read per hook logic)
     if tokens:
         if project:
             rows = conn.execute(
                 f'SELECT name, kind, status, module, file, line, redirect_to '
-                f'FROM python_symbols WHERE name IN ({ph}) AND project=? LIMIT 40',
+                f'FROM symbols WHERE name IN ({ph}) AND project=? LIMIT 40',
                 tokens + [project],
             ).fetchall()
         else:
             rows = conn.execute(
                 f'SELECT name, kind, status, module, file, line, redirect_to '
-                f'FROM python_symbols WHERE name IN ({ph}) LIMIT 40',
+                f'FROM symbols WHERE name IN ({ph}) LIMIT 40',
                 tokens,
             ).fetchall()
         for name, kind, status, module, fpath, line, redirect_to in rows:

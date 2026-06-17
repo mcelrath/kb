@@ -1,7 +1,7 @@
 """CLI handler for `kb surface` — unified multi-source semantic surfacing.
 
 Original --query mode composes three existing search methods:
-  1. kb.search_python_symbols(query, limit, project)  -> code symbols
+  1. kb.search_symbols(query, limit, project)  -> code symbols
   2. kb.search(query, limit, project)                 -> findings (hybrid vector+FTS)
   3. kb._bridge.search(query, limit)                  -> bridge memory messages
 
@@ -27,7 +27,7 @@ from typing import Any
 
 def _query_symbols(kb: Any, query: str, limit: int, project: str | None, min_sim: float) -> list[dict[str, Any]]:
     try:
-        raw = kb.search_python_symbols(query, limit=limit, project=project)
+        raw = kb.search_symbols(query, limit=limit, project=project)
         return [r for r in (raw or []) if r.get("similarity", 0) >= min_sim]
     except Exception:
         return []

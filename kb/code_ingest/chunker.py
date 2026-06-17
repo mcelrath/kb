@@ -40,15 +40,15 @@ config supplies knobs that DIVERGE across languages:
       falls back to _rust_signature.
 
 ChunkResult mirrors the dict shape returned by parse_python_file() in
-ingest_python.py so chunks feed directly into KnowledgeBase.add_python_symbol().
+ingest_python.py so chunks feed directly into KnowledgeBase.add_symbol().
 The 'kind' field maps: fn -> 'function', struct/enum/trait/type -> 'class',
 const/static -> 'constant'.
 
 Integration point
 -----------------
 Call chunk_file(path, language_name) → list[ChunkResult].
-Each ChunkResult can be forwarded to KnowledgeBase.add_python_symbol() with:
-    kb.add_python_symbol(
+Each ChunkResult can be forwarded to KnowledgeBase.add_symbol() with:
+    kb.add_symbol(
         name=r.name,
         kind=r.kind,
         module=r.module,
@@ -61,7 +61,7 @@ Each ChunkResult can be forwarded to KnowledgeBase.add_python_symbol() with:
     )
 
 The 'parent_impl' and 'visibility' metadata in ChunkResult.extra are not part of
-the current python_symbols schema; a schema extension (add columns
+the current symbols schema; a schema extension (add columns
 parent_container TEXT, visibility TEXT, language TEXT) is the follow-up tracked
 in kb-asf.4.  Until then, extra metadata is available on the result dict for
 callers that query it directly.

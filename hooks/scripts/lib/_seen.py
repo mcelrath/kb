@@ -5,7 +5,7 @@ filter_unseen() atomically reads existing keys, filters candidates, appends
 new ones, and returns the new-only subset.
 
 Key conventions (callers must use these prefixes):
-  sym:{name}        — python_symbols CANONICAL advisory (NOT retired — always surface)
+  sym:{name}        — symbols CANONICAL advisory (NOT retired — always surface)
   notation:{sym}    — notations table advisory
 
 Keys NOT deduplicated (context-specific, worth re-surfacing):

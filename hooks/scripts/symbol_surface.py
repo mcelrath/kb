@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A1: symbol-surface — after reading any file, surface CANONICAL/RETIRED status
-for python_symbols and notations mentioned in the file content.
+for symbols and notations mentioned in the file content.
 
 Fires PostToolUse/Read. Advisory only (exit 0 always).
 
@@ -8,7 +8,7 @@ Extraction strategy by file type:
   .py            — ast.walk() over parsed AST: Name + Attribute nodes only.
                    Zero false positives from comments/strings. No regex.
   .rs/.ts/.tsx   — regex identifier extraction (no Rust/TS AST in-hook), but
-                   treated as CODE: no math-fraction surfacing. python_symbols
+                   treated as CODE: no math-fraction surfacing. symbols
                    now holds Rust/TS symbols (scripts/ingest_python.py +
                    ingest_typescript.py), so RETIRED hazards surface the same way.
   other          — regex fallback for unstructured text (bridge output, .md, .lean, .tex).
@@ -30,7 +30,7 @@ from _db import kb_db_path  # noqa: E402
 
 _SCAN_EXTENSIONS = {
     '.lean', '.py', '.tex', '.md', '.txt', '.output', '.json',
-    '.rs', '.ts', '.tsx',  # Rust/TypeScript code (symbols in python_symbols)
+    '.rs', '.ts', '.tsx',  # Rust/TypeScript code (symbols in symbols)
     '',  # extensionless (bridge output, etc.)
 }
 
@@ -147,17 +147,17 @@ def query_symbols(
 
     ph = ','.join('?' * len(tokens))
 
-    # python_symbols exact name match — project-scoped to prevent cross-project FPs
+    # symbols exact name match — project-scoped to prevent cross-project FPs
     if project:
         rows = conn.execute(
             f'SELECT name, kind, status, module, file, line, redirect_to '
-            f'FROM python_symbols WHERE name IN ({ph}) AND project=? LIMIT 40',
+            f'FROM symbols WHERE name IN ({ph}) AND project=? LIMIT 40',
             tokens + [project],
         ).fetchall()
     else:
         rows = conn.execute(
             f'SELECT name, kind, status, module, file, line, redirect_to '
-            f'FROM python_symbols WHERE name IN ({ph}) LIMIT 40',
+            f'FROM symbols WHERE name IN ({ph}) LIMIT 40',
             tokens,
         ).fetchall()
     # On Read: only surface RETIRED (correctness hazard). CANONICAL is suppressed —
