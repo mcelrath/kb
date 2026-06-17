@@ -54,6 +54,19 @@ def run_ingest(kb, args, ingest_parser) -> None:
         if rc:
             sys.exit(rc)
 
+    elif args.ingest_cmd == "rust":
+        from kb.ingest.rust import run
+        rc = run(
+            root=Path(args.root) if args.root else None,
+            files=getattr(args, "files", None),
+            deleted=getattr(args, "deleted", None),
+            project=args.project,
+            dry_run=args.dry_run,
+            db_path=args.db,
+        )
+        if rc:
+            sys.exit(rc)
+
     elif args.ingest_cmd == "tex":
         from kb.ingest.tex import run
         rc = run(

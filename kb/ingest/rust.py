@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Ingest TypeScript/TSX symbols (.ts/.tsx) — thin wrapper over the generic code ingester.
+"""Ingest Rust symbols (.rs) — thin wrapper over the generic code ingester.
 
-All walk/chunk/insert/prune/also-in-modules logic lives in kb/ingest/code.py
-(ingest_code); this module only fixes the language + extensions.
+Uses the tree-sitter Rust chunker (kb/code_ingest/chunker.py RUST_CONFIG, kb-asf.4):
+fn / struct / enum / trait full-body, impl blocks split per-method, with
+parent_impl / visibility / node_type metadata. All walk/insert/prune logic lives
+in kb/ingest/code.py (ingest_code).
 """
 
 import sys
@@ -24,13 +26,13 @@ def run(
     dry_run: bool = False,
     db_path: Path | None = None,
 ) -> int:
-    return ingest_code("typescript", (".ts", ".tsx"), root, files, deleted, project, dry_run, db_path)
+    return ingest_code("rust", (".rs",), root, files, deleted, project, dry_run, db_path)
 
 
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Ingest TypeScript symbols (.ts/.tsx) into the symbols table")
+    parser = argparse.ArgumentParser(description="Ingest Rust symbols (.rs) into the symbols table")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="Root directory (default: cwd)")
     parser.add_argument("--files", nargs="+", metavar="FILE", help="Incremental mode: only these files")
     parser.add_argument("--project", default="kb", help="KB project name (default: kb)")

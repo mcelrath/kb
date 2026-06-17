@@ -930,6 +930,16 @@ def main():
     ingest_ts_parser.add_argument("--project", default="kb")
     ingest_ts_parser.add_argument("--dry-run", action="store_true")
 
+    ingest_rust_parser = ingest_sub.add_parser("rust", help="Index Rust symbols (.rs) into symbols")
+    ingest_rust_parser.add_argument("--root", default=str(Path.cwd()),
+        help="Root directory to walk for .rs files (default: cwd)")
+    ingest_rust_parser.add_argument("--files", nargs="+", metavar="FILE",
+        help="Incremental mode: process only these files")
+    ingest_rust_parser.add_argument("--deleted", nargs="+", metavar="FILE",
+        help="Remove all symbols rows for these deleted/renamed files")
+    ingest_rust_parser.add_argument("--project", default="kb")
+    ingest_rust_parser.add_argument("--dry-run", action="store_true")
+
     ingest_tex_parser = ingest_sub.add_parser("tex", help="Index Python/Lean/Epic annotation comment blocks from TeX files")
     ingest_tex_parser.add_argument("--root", default=str(Path.home() / "Physics/claude"),
         help="Root of tex corpus (default: ~/Physics/claude)")
