@@ -306,6 +306,9 @@ Decision rule (LSP and ast-grep are complementary, not redundant):
 2. Code > Comments > KB > Your assumptions.
 3. 5 rounds of kb-research, not 2.
 4. Verify, don't infer. Read/LSP/ast-grep for RESULTS, not TODO comments. (grep on source is blocked.)
+   The read-index gate ENFORCES this: it blocks editing or claiming about a file you have not read
+   this session. So reconcile claims against the actual source — never act on a sub-agent's or
+   memory's description of a file you haven't opened.
 5. State your evidence. Every claim cites file:line, kb-ID, or command output.
 6. `"$KB_VENV_PYTHON" "$KB_TOOL" add` before returning. Checkpoint every 10 tool uses.
 7. project="{project_tag}" for all kb add/kb search calls.
