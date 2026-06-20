@@ -577,18 +577,57 @@ def cmd_close(args: Any, kb: Any) -> int:
     return 0
 
 
+def _current_project_name() -> str | None:
+    """Resolve the current project from cwd for default kbt scoping:
+    git-root basename, else cwd basename. Issues group by id-prefix
+    (kb-, mathlib4-, spec-…) == project, so the cwd dir name is the scope key."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip():
+            return os.path.basename(r.stdout.strip())
+    except Exception:
+        pass
+    return os.path.basename(os.getcwd()) or None
+
+
+def _belongs_to_project(row: Any, name: str | None) -> bool:
+    """True if an issue row belongs to project `name`, matched by id-prefix
+    (the dominant grouping) OR the project column. name falsy => all."""
+    if not name:
+        return True
+    rid = str(row.get("id", ""))
+    prefix = rid.split("-", 1)[0] if "-" in rid else rid
+    return prefix == name or row.get("project") == name
+
+
+def _resolve_scope(args: Any) -> str | None:
+    """Scope key for list/ready/blocked: None if --all, else --project or cwd."""
+    if getattr(args, "all", False):
+        return None
+    return getattr(args, "project", None) or _current_project_name()
+
+
 def cmd_list(args: Any, kb: Any) -> int:
-    """kbt list [--status S] [--parent P] [--json]"""
+    """kbt list [--status S] [--parent P] [--json] [--all]"""
     status = getattr(args, "status", None)
     parent = getattr(args, "parent", None)
-    project = getattr(args, "project", None)
     itype = getattr(args, "type", None)
     assignee = getattr(args, "assignee", None)
     limit = getattr(args, "limit", None)
     as_json = getattr(args, "json", False)
+    scope = _resolve_scope(args)
 
-    rows = kb.issue_list(project=project, status=status, parent_id=parent,
-                         type=itype, assignee=assignee, limit=limit)
+    # When scoping, fetch unfiltered (the project COLUMN is mostly unset; grouping
+    # is by id-prefix) then post-filter, applying the limit after.
+    rows = kb.issue_list(project=None, status=status, parent_id=parent,
+                         type=itype, assignee=assignee,
+                         limit=(None if scope else limit))
+    if scope:
+        rows = [r for r in rows if _belongs_to_project(r, scope)]
+        if limit:
+            rows = rows[:limit]
 
     if as_json:
         # For list, we need the full row data for projection — list() returns summary rows
@@ -671,10 +710,12 @@ def cmd_children(args: Any, kb: Any) -> int:
 
 
 def cmd_ready(args: Any, kb: Any) -> int:
-    """kbt ready [--json]"""
-    project = getattr(args, "project", None)
+    """kbt ready [--json] [--all]"""
     as_json = getattr(args, "json", False)
-    rows = kb.issue_ready(project=project)
+    scope = _resolve_scope(args)
+    rows = kb.issue_ready(project=None)
+    if scope:
+        rows = [r for r in rows if _belongs_to_project(r, scope)]
 
     if as_json:
         out = []
@@ -694,10 +735,12 @@ def cmd_ready(args: Any, kb: Any) -> int:
 
 
 def cmd_blocked(args: Any, kb: Any) -> int:
-    """kbt blocked [--json]"""
-    project = getattr(args, "project", None)
+    """kbt blocked [--json] [--all]"""
     as_json = getattr(args, "json", False)
-    rows = kb.issue_blocked(project=project)
+    scope = _resolve_scope(args)
+    rows = kb.issue_blocked(project=None)
+    if scope:
+        rows = [r for r in rows if _belongs_to_project(r, scope)]
 
     if as_json:
         out = []
@@ -922,7 +965,10 @@ def build_parser():
         description="kb-native issue tracker (bd-compatible interface)",
     )
     parser.add_argument("--db", default=None, help="Override kb database path")
-    parser.add_argument("--project", default=None, help="Filter by project")
+    parser.add_argument("--project", default=None, help="Filter by project (list/ready/blocked)")
+    parser.add_argument("--all", action="store_true",
+                        help="list/ready/blocked: show ALL projects "
+                             "(default: scope to the current project derived from cwd)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     # create
