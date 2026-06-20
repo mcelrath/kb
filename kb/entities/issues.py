@@ -30,6 +30,7 @@ from typing import Any
 
 from .base import EntityRepository
 from ..core.embedding import EmbeddingService
+from ..core.retry import retry_on_locked
 
 
 ISSUE_TYPES = ("task", "bug", "feature", "epic", "chore", "spike", "decision")
@@ -46,6 +47,7 @@ class IssuesRepository(EntityRepository):
         super().__init__(conn)
         self.embedding_service = embedding_service
 
+    @retry_on_locked
     def _alloc_child_id(self, parent_id: str) -> str:
         """Allocate next child id for parent_id, atomically via child_counters.
 
@@ -71,6 +73,7 @@ class IssuesRepository(EntityRepository):
             raise
         return f"{parent_id}.{next_n}"
 
+    @retry_on_locked
     def create(
         self,
         title: str,
@@ -323,6 +326,7 @@ class IssuesRepository(EntityRepository):
     # Phase 2: dep management, comments, status transitions, ready/blocked, claim
     # ------------------------------------------------------------------
 
+    @retry_on_locked
     def add_dep(
         self,
         issue_id: str,
@@ -390,6 +394,7 @@ class IssuesRepository(EntityRepository):
             "incoming": [_row_to_dict(r) for r in incoming_rows],
         }
 
+    @retry_on_locked
     def add_comment(
         self,
         issue_id: str,
@@ -410,6 +415,7 @@ class IssuesRepository(EntityRepository):
         self.conn.commit()
         return {"id": cmt_id}
 
+    @retry_on_locked
     def set_status(
         self,
         issue_id: str,
@@ -569,6 +575,7 @@ class IssuesRepository(EntityRepository):
             results.append(d)
         return results
 
+    @retry_on_locked
     def claim(self, issue_id: str, assignee: str) -> dict[str, Any]:
         """Atomically claim an issue for an assignee.
 
@@ -587,7 +594,7 @@ class IssuesRepository(EntityRepository):
           {"claimed": False, "already": True,  "id": issue_id}      — wrong status
           {"claimed": False, "contended": True, "id": issue_id}     — SQLITE_BUSY
         """
-        self.conn.execute("PRAGMA busy_timeout = 5000")
+        self.conn.execute("PRAGMA busy_timeout = 120000")
         now = datetime.utcnow().isoformat()
         try:
             self.conn.execute("BEGIN IMMEDIATE")
