@@ -106,7 +106,72 @@ def run_reembed(kb, args) -> None:
 # flush-pending
 # ---------------------------------------------------------------------------
 
+def _discover_kb_lane_files() -> list[Path]:
+    """Discover per-project .kb/*.md files to drain via flush-pending.
+
+    Discovery rule: scan every git-tracked project root that contains a `.kb/`
+    subdirectory.  Project roots are located by walking the parent directories of
+    the queue dir's siblings AND a small hard-coded search base list
+    (~/.claude and ~/Projects) so that no external config file is needed.
+
+    Concrete steps:
+      1. Walk `~/Projects` and `~/.claude` up to depth 3 looking for directories
+         that contain both `.git` (or `.kbt`) and `.kb/`.
+      2. Collect all `<root>/.kb/*.md` files (non-recursive; only immediate children).
+      3. Skip files named `.flush.lock` or starting with `.`.
+
+    On-disk contract: the agent Writes `<project>/.kb/<slug>.md`; flush-pending
+    ingests it via `ingest_markdown_file` (doc_type='internal') and removes it on
+    success.  On failure the file is left in place for the next run (mirrors the
+    `.txt` no-delete-on-failure semantics).
+    """
+    search_bases = [
+        Path.home() / "Projects",
+        Path.home() / ".claude",
+    ]
+    results: list[Path] = []
+    seen: set[Path] = set()
+    # Glob ONLY for `.kb` directories at depths 0-3 (directory-name patterns
+    # expand level-by-level — no full recursive file walk; rglob("*") over
+    # ~/Projects would enumerate every file in llama.cpp/mathlib4/... on each run).
+    patterns = (".kb", "*/.kb", "*/*/.kb", "*/*/*/.kb")
+    for base in search_bases:
+        if not base.is_dir():
+            continue
+        for pat in patterns:
+            for kb_dir in base.glob(pat):
+                if not kb_dir.is_dir():
+                    continue
+                cand = kb_dir.parent
+                if not ((cand / ".git").exists() or (cand / ".kbt").is_dir()):
+                    continue
+                for md in sorted(kb_dir.glob("*.md")):
+                    if md.name.startswith("."):
+                        continue
+                    rp = md.resolve()
+                    if rp in seen:  # ~/.claude is a symlink into ~/Projects — dedup
+                        continue
+                    seen.add(rp)
+                    results.append(md)
+    return results
+
+
 def run_flush_pending(kb, args) -> None:
+    """Drain the pending-adds queue AND per-project .kb/*.md agent-report files.
+
+    Sources:
+      1. Global txt queue (``args.queue_dir/*.txt``): header (``# k: v``) +
+         blank line + body → one ``kb.add`` call per file.  On success the file
+         is deleted; on failure it is renamed back to ``.txt`` (no-delete-on-
+         failure).  Protected by an flock so concurrent runs are safe.
+
+      2. Per-project ``.kb/*.md`` lane: each ``<project-root>/.kb/<slug>.md``
+         file is ingested as a ``doc_type='internal'`` document via
+         ``kb.ingest.markdown.ingest_markdown_file``.  Discovery is performed by
+         ``_discover_kb_lane_files()``.  On success the file is removed; on
+         failure it is left in place.  The same health-gate and flock as the txt
+         source apply (both sources run inside the same lock).
+    """
     import fcntl
     from urllib.parse import urlsplit, urlunsplit
     from urllib.request import urlopen
@@ -129,8 +194,13 @@ def run_flush_pending(kb, args) -> None:
 
     os.environ.setdefault("KB_EMBED_TIMEOUT", "900")
 
-    files = sorted(qdir.glob("*.txt"))
-    if not files:
+    # --- Source 1: global *.txt queue ---
+    txt_files = sorted(qdir.glob("*.txt"))
+
+    # --- Source 2: per-project .kb/*.md files ---
+    kb_md_files = _discover_kb_lane_files()
+
+    if not txt_files and not kb_md_files:
         if not args.quiet:
             print("no pending entries")
         sys.exit(0)
@@ -142,12 +212,15 @@ def run_flush_pending(kb, args) -> None:
             if resp.status >= 400:
                 raise RuntimeError(f"health HTTP {resp.status}")
     except Exception as e:
+        total_pending = len(txt_files) + len(kb_md_files)
         if not args.quiet:
-            print(f"embedding server not healthy ({health_url}): {e}; leaving {len(files)} file(s) queued")
+            print(f"embedding server not healthy ({health_url}): {e}; leaving {total_pending} file(s) queued")
         sys.exit(0)
 
     ok = fail = 0
-    for f in files:
+
+    # --- Drain txt queue ---
+    for f in txt_files:
         claimed = f.with_suffix(f.suffix + ".flushing")
         try:
             f.rename(claimed)
@@ -201,5 +274,30 @@ def run_flush_pending(kb, args) -> None:
             if not args.quiet:
                 print(f"FAILED {f.name}: {e}")
 
-    print(f"flush-pending: {ok} ok, {fail} failed, {len(files)} total")
+    # --- Drain .kb/*.md lane ---
+    from kb.ingest.markdown import ingest_markdown_file
+    from kb.config import load_config
+
+    cfg = load_config()
+    db_path = cfg.db_path
+
+    for md_file in kb_md_files:
+        try:
+            doc_id, section_ids = ingest_markdown_file(
+                md_file,
+                db_path=db_path,
+                doc_type="internal",
+            )
+            md_file.unlink()
+            ok += 1
+            if not args.quiet:
+                print(f"flushed .kb/{md_file.name} -> {doc_id} ({len(section_ids)} sections)")
+        except Exception as e:
+            # No-delete-on-failure: leave the file in place for next run.
+            fail += 1
+            if not args.quiet:
+                print(f"FAILED .kb/{md_file.name}: {e}")
+
+    total = len(txt_files) + len(kb_md_files)
+    print(f"flush-pending: {ok} ok, {fail} failed, {total} total")
     sys.exit(0 if fail == 0 else 1)
