@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import kb.cli.output as output
+
 
 def _indent(level: int) -> str:
     return "  " * (level - 1)
@@ -53,7 +55,9 @@ def _run_list(kb: Any, args: Any) -> None:
         proj_tag = f" [{d['project']}]" if d.get("project") else ""
         type_tag = f" ({d['doc_type']})" if d.get("doc_type") else ""
         summary = f" — {d['summary'][:60]}" if d.get("summary") else ""
-        print(f"{d['id']}{proj_tag}{type_tag}  {d['title']}{summary}")
+        doc_id = output.c(str(d["id"]), "cyan")
+        title = output.c(str(d["title"]), "bold")
+        print(output.fit_line(f"{doc_id}{proj_tag}{type_tag}  {title}{summary}"))
 
 
 def _run_toc(kb: Any, args: Any) -> None:
@@ -89,8 +93,11 @@ def _run_toc(kb: Any, args: Any) -> None:
         heading = s["heading"] or "(no heading)"
         path = s["path"] or ""
         sid = s["id"]
-        prefix = _indent(level) + "#" * level
-        print(f"{prefix} {heading}  [{sid}]  path={path}")
+        indent = _indent(level)
+        hashes = output.c("#" * level, "blue")
+        heading_str = output.c(heading, "bold")
+        sid_str = output.c(f"[{sid}]", "dim")
+        print(output.fit_line(f"{indent}{hashes} {heading_str}  {sid_str}  path={path}"))
 
 
 def _run_get(kb: Any, args: Any) -> None:
@@ -139,8 +146,12 @@ def _run_get(kb: Any, args: Any) -> None:
         heading = s["heading"] or "(no heading)"
         sid = s["id"]
         kind = s["kind"]
-        prefix_str = _indent(level) + "#" * level
-        print(f"{prefix_str} {heading}  [{sid}]  kind={kind}  path={s['path']}")
+        indent = _indent(level)
+        hashes = output.c("#" * level, "blue")
+        heading_str = output.c(heading, "bold")
+        sid_str = output.c(f"[{sid}]", "dim")
+        # heading line: single-line, fit to width; body content below is multi-line, not truncated
+        print(f"{indent}{hashes} {heading_str}  {sid_str}  kind={kind}  path={s['path']}")
         if s.get("asset_path"):
             print(f"  asset_path: " + str(s.get("asset_path")))
         if s.get("content"):

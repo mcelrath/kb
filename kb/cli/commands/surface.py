@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import kb.cli.output as output
+
 
 # ---------------------------------------------------------------------------
 # Source queries for --query mode — each wrapped to return [] on error
@@ -62,7 +64,8 @@ def _fmt_symbol(r: dict[str, Any]) -> str:
     line = r.get("line", "")
     qualified = f"{module}.{name}" if module else name
     location = f"{fpath}:{line}" if fpath and line else (fpath or "")
-    return f"[CODE  ~{sim:.2f}] {qualified}  ({kind})  {location}"
+    tag = output.c(f"[CODE  ~{sim:.2f}]", output.sim_color(sim))
+    return f"{tag} {qualified}  ({kind})  {location}"
 
 
 def _fmt_finding(r: dict[str, Any]) -> str:
@@ -71,7 +74,8 @@ def _fmt_finding(r: dict[str, Any]) -> str:
     proj = r.get("project", "")
     summary = (r.get("summary") or r.get("content") or "")[:80]
     proj_tag = f" ({proj})" if proj else ""
-    return f"[FIND  ~{sim:.2f}] {fid}{proj_tag}: {summary}"
+    tag = output.c(f"[FIND  ~{sim:.2f}]", output.sim_color(sim))
+    return f"{tag} {fid}{proj_tag}: {summary}"
 
 
 def _fmt_bridge(r: dict[str, Any]) -> str:
@@ -79,7 +83,8 @@ def _fmt_bridge(r: dict[str, Any]) -> str:
     mid = r.get("id", "?")
     sender = r.get("sender", "?")
     subject = (r.get("subject") or r.get("body") or "")[:60]
-    return f"[BRIDGE ~{sim:.2f}] #{mid} {sender}: {subject}"
+    tag = output.c(f"[BRIDGE ~{sim:.2f}]", output.sim_color(sim))
+    return f"{tag} #{mid} {sender}: {subject}"
 
 
 # ---------------------------------------------------------------------------
@@ -260,11 +265,14 @@ def run_surface(kb: Any, args: Any) -> None:
         return
 
     if symbols:
+        print(output.c("=== Code Symbols ===", "bold"))
         for r in symbols:
-            print(_fmt_symbol(r))
+            print(output.fit_line(_fmt_symbol(r)))
     if findings:
+        print(output.c("=== Findings ===", "bold"))
         for r in findings:
-            print(_fmt_finding(r))
+            print(output.fit_line(_fmt_finding(r)))
     if bridge:
+        print(output.c("=== Bridge ===", "bold"))
         for r in bridge:
-            print(_fmt_bridge(r))
+            print(output.fit_line(_fmt_bridge(r)))

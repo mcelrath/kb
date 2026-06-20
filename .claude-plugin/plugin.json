@@ -1,6 +1,6 @@
 {
   "name": "kb",
-  "version": "0.1.127",
+  "version": "0.1.128",
   "description": "Knowledge Base findings system — surface, record, and search project findings across sessions. Hooks auto-inject kb conventions and surfacing on SessionStart.",
   "author": {
     "name": "Bob McElrath",
