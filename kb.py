@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 from kb.markdown import format_finding_markdown  # noqa: F401 (re-exported for CLI)
+from kb.cli import output as output
 
 
 def _is_agent_context() -> bool:
@@ -24,17 +25,11 @@ def _is_agent_context() -> bool:
       CLAUDECODE=1  — set by Claude Code in all subprocesses
       stdout isatty — fallback: pipe/subprocess = agent
     """
-    override = os.environ.get("KB_AGENT", "")
-    if override == "1":
-        return True
-    if override == "0":
-        return False
-    if os.environ.get("CLAUDECODE") == "1":
-        return True
-    return not sys.stdout.isatty()
+    return output.is_agent()
 
 
-AGENT_MODE = _is_agent_context()
+# Re-export so call-sites using `kb.AGENT_MODE` continue to work.
+AGENT_MODE = output.AGENT_MODE
 
 # Import from kb package
 from kb import (
@@ -329,11 +324,11 @@ def parse_script_findings(file_path: Path) -> list[dict]:
 
 
 _TYPE_COLORS = {
-    "success":    "\033[32m",   # green
-    "failure":    "\033[31m",   # red
-    "experiment": "\033[33m",   # yellow
-    "discovery":  "\033[36m",   # cyan
-    "correction": "\033[35m",   # magenta
+    "success":    "green",
+    "failure":    "red",
+    "experiment": "yellow",
+    "discovery":  "cyan",
+    "correction": "magenta",
 }
 _TYPE_ABBREV = {
     "success":    "SUC",
@@ -376,6 +371,7 @@ def _fmt_one_line(finding: dict) -> str:
     # Document-section hits (from ingested PDFs/markdown) have no finding `type`
     # (they carry result_type='section' + kind); render a DOC tag + path instead
     # of falling through to '???'.
+    RESET = output.RESET
     if finding.get("result_type") == "section":
         kind = finding.get("kind", "prose")
         tag = {"table": "DOC·tbl", "figure": "DOC·fig"}.get(kind, "DOC")
@@ -384,22 +380,17 @@ def _fmt_one_line(finding: dict) -> str:
         text = (finding.get("heading")
                 or (finding.get("content") or "").split("\n")[0][:100])
         proj = finding.get("project") or "?"
-        if AGENT_MODE:
+        if output.AGENT_MODE:
             sim_str = f" ({sim:.2f})" if sim is not None else ""
             return f"{finding['id']}{sim_str} [{tag} {path}] ({proj})  {text}"
-        dim = "\033[2m"; reset = "\033[0m"
-        if sim is not None:
-            sc = "\033[32m" if sim >= 0.7 else "\033[33m" if sim >= 0.5 else "\033[31m"
-            sim_str = f" {sc}({sim:.2f}){reset}"
-        else:
-            sim_str = ""
-        return (f"\033[36m[{tag} {path}]{reset} {dim}{finding['id']}{reset}"
-                f"{sim_str} {dim}({proj}){reset}  {text}")
+        sim_str = (f" {output.c(f'({sim:.2f})', output.sim_color(sim))}" if sim is not None else "")
+        return (f"{output.c(f'[{tag} {path}]', 'cyan')} {output.c(finding['id'], 'dim')}"
+                f"{sim_str} {output.c(f'({proj})', 'dim')}  {text}")
 
     text = finding.get("summary") or finding["content"].split("\n")[0][:100]
     sim = finding.get("similarity")
 
-    if AGENT_MODE:
+    if output.AGENT_MODE:
         sim_str = f" ({sim:.2f})" if sim is not None else ""
         type_abbr = _TYPE_ABBREV_AGENT.get(finding.get("type", ""), "???")
         age = _fmt_age(finding.get("created_at"))
@@ -412,21 +403,12 @@ def _fmt_one_line(finding: dict) -> str:
         meta = "[" + " ".join(meta_parts) + "]"
         return f"{finding['id']}{sim_str} {meta}  {text}"
 
-    dim   = "\033[2m"
-    reset = "\033[0m"
     color = _TYPE_COLORS.get(finding.get("type", ""), "")
     abbr  = _TYPE_ABBREV.get(finding.get("type", ""), "???")
-
-    if sim is not None:
-        if sim >= 0.7:   sim_color = "\033[32m"
-        elif sim >= 0.5: sim_color = "\033[33m"
-        else:            sim_color = "\033[31m"
-        sim_str = f" {sim_color}({sim:.2f}){reset}"
-    else:
-        sim_str = ""
-
-    proj = f" {dim}({finding['project']}){reset}" if finding.get("project") else ""
-    return f"{color}[{abbr}]{reset} {dim}{finding['id']}{reset}{sim_str}{proj}  {text}"
+    sim_str = (f" {output.c(f'({sim:.2f})', output.sim_color(sim))}" if sim is not None else "")
+    proj_str = f"({finding['project']})" if finding.get("project") else ""
+    proj = f" {output.c(proj_str, 'dim')}" if proj_str else ""
+    return f"{output.c(f'[{abbr}]', color)} {output.c(finding['id'], 'dim')}{sim_str}{proj}  {text}"
 
 
 def format_results(findings: list[dict]) -> str:
@@ -440,14 +422,10 @@ def format_results(findings: list[dict]) -> str:
     """
     if not findings:
         return ""
-    if AGENT_MODE:
+    if output.AGENT_MODE:
         return "\n".join(_fmt_one_line(f) for f in findings)
 
-    dim = "\033[2m"
-    reset = "\033[0m"
-
-    def _sim_color(s: float) -> str:
-        return "\033[32m" if s >= 0.7 else "\033[33m" if s >= 0.5 else "\033[31m"
+    RESET = output.RESET
 
     rows = []  # (tag_raw, tag_color, fid, sim, sim_raw, proj_raw, text)
     for f in findings:
@@ -457,7 +435,7 @@ def format_results(findings: list[dict]) -> str:
             kind = f.get("kind", "prose")
             tg = {"table": "DOC·tbl", "figure": "DOC·fig"}.get(kind, "DOC")
             tag_raw = f"[{tg} {f.get('path', '')}]"
-            tag_color = "\033[36m"  # cyan
+            tag_color = "cyan"
             proj_raw = f"({f.get('project') or '?'})"
             text = f.get("heading") or (f.get("content") or "").split("\n")[0][:100]
         else:
@@ -474,61 +452,48 @@ def format_results(findings: list[dict]) -> str:
 
     out = []
     for tag_raw, tag_color, fid, sim, sim_raw, proj_raw, text in rows:
-        cells = [f"{tag_color}{tag_raw:<{tagw}}{reset}", f"{dim}{fid:<{idw}}{reset}"]
+        cells = [output.c(f"{tag_raw:<{tagw}}", tag_color),
+                 output.c(f"{fid:<{idw}}", "dim")]
         if simw:
-            cells.append(f"{_sim_color(sim)}{sim_raw:<{simw}}{reset}"
+            cells.append(output.c(f"{sim_raw:<{simw}}", output.sim_color(sim))
                          if sim is not None else " " * simw)
         if projw:
-            cells.append(f"{dim}{proj_raw:<{projw}}{reset}" if proj_raw else " " * projw)
-        out.append(" ".join(cells) + f"  {text}")
+            cells.append(output.c(f"{proj_raw:<{projw}}", "dim") if proj_raw else " " * projw)
+        row = " ".join(cells) + f"  {text}"
+        out.append(output.fit_line(row))
     return "\n".join(out)
 
 
 def format_finding(finding: dict, verbose: bool = False) -> str:
     """Format a finding for terminal display (list/search output)."""
-    if AGENT_MODE:
-        dim = reset = ""
-        type_colors: dict = {}
-    else:
-        dim = "\033[2m"
-        reset = "\033[0m"
-        type_colors = {
-            "success": "\033[32m",
-            "failure": "\033[31m",
-            "experiment": "\033[33m",
-            "discovery": "\033[36m",
-            "correction": "\033[35m",
-        }
-
-    color = type_colors.get(finding["type"], "")
-    lines = [f"[{color}{finding['type'].upper()}{reset}] {dim}{finding['id']}{reset}"]
+    RESET = output.RESET
+    type_color = _TYPE_COLORS.get(finding["type"], "")
+    header = f"[{output.c(finding['type'].upper(), type_color)}] {output.c(finding['id'], 'dim')}"
 
     if finding.get("project"):
-        lines[0] += f" {dim}({finding['project']}){reset}"
+        proj_label = f"({finding['project']})"
+        header += f" {output.c(proj_label, 'dim')}"
 
     if finding.get("similarity") is not None:
         sim = finding["similarity"]
-        # Color code by similarity: green (>0.8), yellow (0.6-0.8), red (<0.6)
-        if sim >= 0.8:
-            sim_color = "\033[32m"  # green
-        elif sim >= 0.6:
-            sim_color = "\033[33m"  # yellow
-        else:
-            sim_color = "\033[31m"  # red
-        lines[0] += f" {sim_color}({sim:.2f}){reset}"
+        # Thresholds differ slightly here (0.8/0.6) vs sim_color (0.7/0.5) — preserve original
+        sc = "green" if sim >= 0.8 else "yellow" if sim >= 0.6 else "red"
+        header += f" {output.c(f'({sim:.2f})', sc)}"
 
-    lines.append(f"  {finding['content']}")
+    lines = [header, f"  {finding['content']}"]
 
     if verbose:
         if finding.get("evidence"):
-            lines.append(f"  {dim}Evidence: {finding['evidence'][:200]}...{reset}" if len(finding.get("evidence", "")) > 200 else f"  {dim}Evidence: {finding['evidence']}{reset}")
+            ev = finding["evidence"]
+            ev_text = f"{ev[:200]}..." if len(ev) > 200 else ev
+            lines.append("  " + output.c(f"Evidence: {ev_text}", "dim"))
         if finding.get("supersedes_id"):
-            lines.append(f"  {dim}Supersedes: {finding['supersedes_id']}{reset}")
+            lines.append("  " + output.c(f"Supersedes: {finding['supersedes_id']}", "dim"))
         if finding.get("tags"):
-            lines.append(f"  {dim}Tags: {', '.join(finding['tags'])}{reset}")
-        lines.append(f"  {dim}Created: {finding['created_at']}{reset}")
+            lines.append("  " + output.c(f"Tags: {', '.join(finding['tags'])}", "dim"))
+        lines.append("  " + output.c(f"Created: {finding['created_at']}", "dim"))
         if finding.get("similarity"):
-            lines.append(f"  {dim}Similarity: {finding['similarity']:.3f}{reset}")
+            lines.append("  " + output.c(f"Similarity: {finding['similarity']:.3f}", "dim"))
 
     return "\n".join(lines)
 
