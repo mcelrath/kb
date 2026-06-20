@@ -259,6 +259,27 @@ def test_ingest_ordinal_set(multi_md, tmp_db):
     assert ords == sorted(ords)
 
 
+def test_ingest_ordinals_unique_and_doc_ordered(multi_md, tmp_db):
+    """Regression: heading-nodes + leaves share ONE monotonic ordinal space
+    (the old code gave headings the section index and leaves a separate counter
+    -> collisions, jumbled toc/list order). Ordinals must be unique and follow
+    document order (== path order)."""
+    from kb.core.connection import DatabaseConnection
+    from kb.ingest.markdown import _doc_order_key
+    doc_id, _ = ingest_markdown_file(multi_md, db_path=tmp_db)
+    conn = DatabaseConnection(tmp_db).conn
+    rows = conn.execute(
+        "SELECT ordinal, path FROM document_sections "
+        "WHERE document_id = ? AND status = 'active'",
+        (doc_id,),
+    ).fetchall()
+    ords = [r[0] for r in rows]
+    assert len(ords) == len(set(ords)), f"duplicate ordinals: {sorted(ords)}"
+    by_ord = [r[1] for r in sorted(rows, key=lambda r: r[0])]
+    by_path = [r[1] for r in sorted(rows, key=lambda r: _doc_order_key(r[1]))]
+    assert by_ord == by_path, "ordinal order does not match document (path) order"
+
+
 def test_ingest_parent_section_id(multi_md, tmp_db):
     """Subsections (level > 1) have a non-NULL parent_section_id."""
     doc_id, _ = ingest_markdown_file(multi_md, db_path=tmp_db)

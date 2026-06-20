@@ -361,6 +361,30 @@ def _raw_section_paths(raw_sections: list[dict[str, Any]]) -> list[str]:
     return paths
 
 
+def _doc_order_key(path: str) -> tuple:
+    """Sortable document-order key for a section path.
+
+    Paths like '1', '1.1', '1.1.t1', '1.5.3.f2' sort in true reading order:
+    numeric parts compare as ints; table/part/figure suffixes (t/p/f) sort
+    after the prose of their section. Used to assign a single monotonic `ordinal`
+    across heading-nodes AND leaves so list/toc order is correct (the old code
+    gave heading-nodes the section index and leaves a separate counter, which
+    collided — 85 dup ordinals on RDNA3).
+    """
+    key: list[tuple] = []
+    for part in path.split("."):
+        if part.isdigit():
+            key.append((0, int(part), ""))
+        else:
+            key.append((1, 0, part))  # t1/p1/f1 etc. — after numeric siblings
+    return tuple(key)
+
+
+def _ordinal_map(paths) -> dict[str, int]:
+    """Map each (unique) section path to a 0-based document-order ordinal."""
+    return {p: i for i, p in enumerate(sorted(set(paths), key=_doc_order_key))}
+
+
 def _compute_paths(
     raw_sections: list[dict[str, Any]],
     intermediate: list[dict[str, Any]],
@@ -495,6 +519,13 @@ def ingest_markdown_file(
     # Map raw_section_idx -> section_id in DB
     raw_section_db_ids: dict[int, str] = {}
 
+    # One monotonic document-order ordinal across heading-nodes AND leaves
+    # (was: heading=ri, leaf=entry["ordinal"] — two spaces that collided).
+    _ord_map = _ordinal_map(
+        [raw_paths[i] for i, rs in enumerate(raw_sections) if rs["level"] != 0]
+        + [e["path"] for e in intermediate]
+    )
+
     for ri, rs in enumerate(raw_sections):
         if rs["level"] == 0:
             continue  # preamble has no heading node
@@ -511,7 +542,7 @@ def ingest_markdown_file(
             path=heading_path,
             content_hash=_content_hash(rs["heading"]),
             level=rs["level"],
-            ordinal=ri,
+            ordinal=_ord_map[heading_path],
             kind="prose",
             heading=rs["heading"],
             content=rs["heading"],
@@ -542,7 +573,7 @@ def ingest_markdown_file(
             path=entry["path"],
             content_hash=_content_hash(entry["content"] or ""),
             level=entry["level"],
-            ordinal=entry["ordinal"],
+            ordinal=_ord_map[entry["path"]],
             kind=entry["kind"],
             heading=entry["heading"] or None,
             content=entry["content"],

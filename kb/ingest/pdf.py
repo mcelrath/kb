@@ -17,6 +17,7 @@ run(file_path, db_path, project, doc_type, title, summary, dry_run)
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -40,6 +41,7 @@ from kb.ingest.markdown import (
     _linearize_table,
     _slug,
     _build_parent_map,
+    _ordinal_map,
 )
 
 
@@ -365,9 +367,14 @@ def _build_intermediate_pdf(
 
         # Tables
         for tbl in sec["tables"]:
-            table_counter += 1
             html = _table_to_html(tbl, doc)
             embed_text = _linearize_html_table(html) if html else ""
+            # Skip table-of-contents/index pages docling mis-detects as tables:
+            # their rows are dotted-leader entries ("Title .......... 12").
+            _lines = [l for l in embed_text.splitlines() if l.strip()]
+            if _lines and sum(1 for l in _lines if "...." in l) / len(_lines) >= 0.5:
+                continue
+            table_counter += 1
             path = f"{base_path}.t{table_counter}"
             intermediate.append({
                 "level": sec["level"],
@@ -443,6 +450,16 @@ def _build_intermediate_pdf(
                 except Exception:
                     pass  # rapidocr/onnxruntime unavailable or failed -- caption-only
 
+            # Drop content-free figures (logos/icons): no caption AND no OCR
+            # labels -> zero searchable info. Remove the orphan crop too.
+            if caption == '[figure]' and embed_text == 'Figure: [figure]':
+                if asset_path_str:
+                    try:
+                        os.remove(asset_path_str)
+                    except OSError:
+                        pass
+                continue
+
             intermediate.append({
                 "level": sec["level"],
                 "heading": sec["heading"],
@@ -490,6 +507,14 @@ def _persist_intermediate(
     raw_for_parent = [{"level": s["level"], "heading": s["heading"]} for s in all_sections]
     parent_map = _build_parent_map(raw_for_parent)
 
+    # One monotonic document-order ordinal across heading-nodes AND leaves
+    # (was: heading=si, leaf=entry["ordinal"] — two spaces that collided, 85 dup
+    # ordinals on RDNA3, jumbling kb doc toc / list_by_document order).
+    _ord_map = _ordinal_map(
+        [section_paths[i] for i, s in enumerate(all_sections) if s["level"] != 0]
+        + [e["path"] for e in intermediate]
+    )
+
     # Insert one heading node per real section (level >= 1)
     raw_section_db_ids: dict[int, str] = {}
     for si, sec in enumerate(all_sections):
@@ -504,7 +529,7 @@ def _persist_intermediate(
             path=heading_path,
             content_hash=_content_hash(sec["heading"]),
             level=sec["level"],
-            ordinal=si,
+            ordinal=_ord_map[heading_path],
             kind="prose",
             heading=sec["heading"],
             content=sec["heading"],
@@ -529,7 +554,7 @@ def _persist_intermediate(
             path=entry["path"],
             content_hash=_content_hash(entry["content"] or ""),
             level=entry["level"],
-            ordinal=entry["ordinal"],
+            ordinal=_ord_map[entry["path"]],
             kind=entry["kind"],
             heading=entry["heading"] or None,
             content=entry["content"],

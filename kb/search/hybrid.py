@@ -43,10 +43,13 @@ class HybridSearch:
         """
         from ..entities.document_sections import DocumentSectionsRepository
 
+        # Join the parent document so section hits carry the doc's project + title
+        # (surfacing shows project; was '(?)' without this).
         sql = """
-            SELECT ds.*, dsv.distance
+            SELECT ds.*, dsv.distance, d.project AS doc_project, d.title AS doc_title
             FROM document_sections ds
             JOIN document_sections_vec dsv ON ds.id = dsv.id
+            JOIN documents d ON ds.document_id = d.id
             WHERE dsv.embedding MATCH ?
             AND k = ?
         """
@@ -65,6 +68,8 @@ class HybridSearch:
                 "result_type": "section",
                 "id": row["id"],
                 "doc_id": row["document_id"],
+                "doc_title": row["doc_title"],
+                "project": row["doc_project"],
                 "path": row["path"],
                 "heading": row["heading"],
                 "kind": row["kind"],
