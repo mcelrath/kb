@@ -4,6 +4,8 @@ import os
 import sys
 from pathlib import Path
 
+import kb.cli.output as output
+
 
 # ---------------------------------------------------------------------------
 # stats
@@ -11,28 +13,30 @@ from pathlib import Path
 
 def run_stats(kb, args) -> None:
     stats = kb.stats()
-    print(f"Database: {stats['db_path']}")
-    print(f"Total findings: {stats['total']}")
-    print(f"  Current:    {stats['current']}")
-    print(f"  Superseded: {stats['superseded']}")
+    print(f"{output.c('Database:', 'bold')} {stats['db_path']}")
+    print(f"{output.c('Total findings:', 'bold')} {output.c(str(stats['total']), 'cyan')}")
+    print(f"  {output.c('Current:', 'dim')}    {stats['current']}")
+    print(f"  {output.c('Superseded:', 'dim')} {stats['superseded']}")
     no_sum = stats.get('no_summary', 0)
     no_emb = stats.get('no_embedding', 0)
-    print(f"  No summary: {no_sum}"
-          + (f"  (run: kb refresh -p PROJECT)" if no_sum else ""))
+    warn_sum = output.c(str(no_sum), 'yellow') if no_sum else str(no_sum)
+    print(f"  {output.c('No summary:', 'dim')} {warn_sum}"
+          + (f"  {output.c('(run: kb refresh -p PROJECT)', 'yellow')}" if no_sum else ""))
     if stats.get('no_summary_by_project'):
         for proj, cnt in stats['no_summary_by_project'].items():
-            print(f"    {proj}: {cnt}")
-    print(f"  No embed:   {no_emb}"
-          + (f"  (run: kb refresh --all -p PROJECT)" if no_emb else ""))
+            print(f"    {output.c(proj, 'dim')}: {cnt}")
+    warn_emb = output.c(str(no_emb), 'yellow') if no_emb else str(no_emb)
+    print(f"  {output.c('No embed:', 'dim')}   {warn_emb}"
+          + (f"  {output.c('(run: kb refresh --all -p PROJECT)', 'yellow')}" if no_emb else ""))
     if stats.get('no_embedding_by_project'):
         for proj, cnt in stats['no_embedding_by_project'].items():
-            print(f"    {proj}: {cnt}")
-    print("\nBy type:")
+            print(f"    {output.c(proj, 'dim')}: {cnt}")
+    print(f"\n{output.c('By type:', 'bold')}")
     for t, count in sorted(stats['by_type'].items()):
-        print(f"  {t}: {count}")
-    print("\nBy project:")
+        print(f"  {output.c(t, 'cyan')}: {count}")
+    print(f"\n{output.c('By project:', 'bold')}")
     for p, count in sorted(stats['by_project'].items()):
-        print(f"  {p}: {count}")
+        print(f"  {output.c(p, 'cyan')}: {count}")
 
 
 # ---------------------------------------------------------------------------
