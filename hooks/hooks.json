@@ -95,7 +95,7 @@
         ]
       },
       {
-        "matcher": "Read",
+        "matcher": "Read|developer__text_editor",
         "hooks": [
           {
             "type": "command",
@@ -115,7 +115,7 @@
         ]
       },
       {
-        "matcher": "Read|Task",
+        "matcher": "Read|Task|developer__text_editor",
         "hooks": [
           {
             "type": "command",
@@ -141,7 +141,7 @@
         ]
       },
       {
-        "matcher": "Task",
+        "matcher": "Task|developer__text_editor",
         "hooks": [
           {
             "type": "command",
@@ -210,6 +210,11 @@
     "Stop": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/kb-precompact.sh\"",
+            "timeout": 180
+          },
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/read-index-stop.py\"",
