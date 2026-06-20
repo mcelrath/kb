@@ -217,6 +217,36 @@ def test_ingest_paths_unique(multi_md, tmp_db):
     assert len(path_list) == len(set(path_list)), f"Duplicate paths in DB: {path_list}"
 
 
+def test_ingest_duplicate_sibling_headings_no_data_loss(tmp_db, tmp_path):
+    """Regression (kb-86b074): two same-level siblings with identical heading
+    text (e.g. two '## Notes') must get distinct paths and BOTH bodies must
+    survive — the old (level,heading) text-rematch collided them onto one path,
+    and upsert_by_path dropped the first. Common in .kb/ agent reports."""
+    md = (
+        "# A\n\nintro\n\n"
+        "## Notes\n\nalpha content\n\n"
+        "## Notes\n\nbeta content\n\n"
+        "## Example\n\nex content\n"
+    )
+    f = tmp_path / "dup.md"
+    f.write_text(md)
+    doc_id, _ = ingest_markdown_file(f, db_path=tmp_db)
+
+    from kb.core.connection import DatabaseConnection
+    conn = DatabaseConnection(tmp_db).conn
+    rows = conn.execute(
+        "SELECT path, content FROM document_sections "
+        "WHERE document_id = ? AND status = 'active'",
+        (doc_id,),
+    ).fetchall()
+    paths = [r[0] for r in rows]
+    blob = " ".join((r[1] or "") for r in rows)
+    assert len(paths) == len(set(paths)), f"duplicate paths: {paths}"
+    assert "alpha content" in blob, "first '## Notes' body was dropped (data loss)"
+    assert "beta content" in blob, "second '## Notes' body missing"
+    assert "ex content" in blob, "sibling after duplicates missing"
+
+
 def test_ingest_ordinal_set(multi_md, tmp_db):
     doc_id, section_ids = ingest_markdown_file(multi_md, db_path=tmp_db)
 

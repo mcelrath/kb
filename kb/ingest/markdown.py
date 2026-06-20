@@ -247,7 +247,7 @@ def _build_intermediate(
     intermediate: list[dict[str, Any]] = []
     ordinal = 0
 
-    for sec in sections:
+    for raw_idx, sec in enumerate(sections):
         level = sec["level"]
         heading = sec["heading"]
         body = sec["raw_body"]
@@ -278,6 +278,7 @@ def _build_intermediate(
                     "table_repr": None,
                     "is_interior": False,
                     "ordinal": ordinal,
+                    "raw_idx": raw_idx,
                 })
                 ordinal += 1
             else:
@@ -298,6 +299,7 @@ def _build_intermediate(
                             "is_interior": False,
                             "ordinal": ordinal,
                             "part": (part_idx + 1, n_parts),
+                            "raw_idx": raw_idx,
                         })
                         ordinal += 1
                 else:
@@ -311,6 +313,7 @@ def _build_intermediate(
                         "table_repr": None,
                         "is_interior": False,
                         "ordinal": ordinal,
+                        "raw_idx": raw_idx,
                     })
                     ordinal += 1
 
@@ -327,6 +330,7 @@ def _build_intermediate(
                 "table_repr": tb,
                 "is_interior": False,
                 "ordinal": ordinal,
+                "raw_idx": raw_idx,
             })
             ordinal += 1
 
@@ -337,60 +341,50 @@ def _build_intermediate(
 # Path computation
 # ---------------------------------------------------------------------------
 
+def _raw_section_paths(raw_sections: list[dict[str, Any]]) -> list[str]:
+    """Dotted-ordinal path per raw section (level-0 preamble -> '0').
+
+    Heading counters reset at deeper levels, so two same-level siblings get
+    distinct paths (1.1, 1.2) regardless of identical heading text.
+    """
+    level_counters: list[int] = [0] * 7  # index 0..6
+    paths: list[str] = []
+    for sec in raw_sections:
+        lvl = sec["level"]
+        if lvl == 0:
+            paths.append("0")
+            continue
+        level_counters[lvl] += 1
+        for sub in range(lvl + 1, 7):
+            level_counters[sub] = 0
+        paths.append(".".join(str(level_counters[l]) for l in range(1, lvl + 1)))
+    return paths
+
+
 def _compute_paths(
     raw_sections: list[dict[str, Any]],
     intermediate: list[dict[str, Any]],
 ) -> None:
     """Annotate each intermediate entry with a stable path string.
 
-    Strategy: dotted ordinal based on real heading counters at each level.
-    preamble (level 0) gets path '0'.
-    Multiple leaves from the same section get path '<section-path>.t<N>'
-    for tables, '<section-path>.p<part>' for windowed prose parts.
+    Paths are assigned via each entry's originating raw-section index
+    (`raw_idx`, set in _build_intermediate) — NOT by re-matching (level,
+    heading) text. The old text-match collided duplicate sibling headings
+    (two '## Notes') onto one path and dropped content via upsert_by_path
+    (kb-86b074). Tables get '<path>.t<N>', windowed prose parts '<path>.p<n>'.
     """
-    # We track the level→counter from the raw sections
-    level_counters: list[int] = [0] * 7  # index 0..6
-
-    # Build a map from ordinal → path for each raw section
-    raw_paths: list[str] = []
-    for sec in raw_sections:
-        lvl = sec["level"]
-        if lvl == 0:
-            raw_paths.append("0")
-            continue
-        level_counters[lvl] += 1
-        for sub in range(lvl + 1, 7):
-            level_counters[sub] = 0
-        raw_paths.append(".".join(str(level_counters[l]) for l in range(1, lvl + 1)))
-
-    # Match intermediate entries back to raw sections by heading + content
-    # We walk raw sections in order and assign paths
-    raw_sec_iter = iter(enumerate(raw_sections))
-    raw_idx, raw_sec = next(raw_sec_iter, (None, None))
-
-    # Build a simpler approach: group intermediate entries by (level, heading)
-    # in document order, mirroring raw_sections order.
-    # Since intermediate is built from raw_sections in order, we can do a
-    # single pass tracking which raw section we're in.
-    current_raw = -1
+    raw_paths = _raw_section_paths(raw_sections)
     table_counter: dict[int, int] = {}  # raw_idx -> count
 
     for entry in intermediate:
-        # Find which raw section this entry came from
-        # entries are emitted in raw_section order; find matching raw
-        for ri, rs in enumerate(raw_sections):
-            if rs["level"] == entry["level"] and rs["heading"] == entry["heading"]:
-                if ri >= current_raw:
-                    current_raw = ri
-                    break
-
-        base_path = raw_paths[current_raw] if current_raw >= 0 else "0"
+        ri = entry["raw_idx"]
+        base_path = raw_paths[ri] if 0 <= ri < len(raw_paths) else "0"
         kind = entry["kind"]
         part = entry.get("part")
 
         if kind == "table":
-            cnt = table_counter.get(current_raw, 0) + 1
-            table_counter[current_raw] = cnt
+            cnt = table_counter.get(ri, 0) + 1
+            table_counter[ri] = cnt
             entry["path"] = f"{base_path}.t{cnt}"
         elif part is not None:
             entry["path"] = f"{base_path}.p{part[0]}"
@@ -465,6 +459,7 @@ def ingest_markdown_file(
     intermediate = _build_intermediate(raw_sections)
     _compute_paths(raw_sections, intermediate)
     parent_map = _build_parent_map(raw_sections)
+    raw_paths = _raw_section_paths(raw_sections)  # per-raw-section path (index-keyed)
 
     # Open DB
     from kb.config import load_config
@@ -504,19 +499,9 @@ def ingest_markdown_file(
         parent_ri = parent_map.get(ri)
         parent_db_id = raw_section_db_ids.get(parent_ri) if parent_ri is not None else None
 
-        # Determine path for this heading node
-        # Re-derive using the same level counters as _compute_paths
-        # We read it from the first intermediate entry matching this raw section
-        heading_path = None
-        for entry in intermediate:
-            if entry["level"] == rs["level"] and entry["heading"] == rs["heading"]:
-                p = entry["path"]
-                # strip table/part suffixes
-                base = re.sub(r'\.(t\d+|p\d+)$', '', p)
-                heading_path = base
-                break
-        if heading_path is None:
-            continue  # no content, skip
+        # Path for this heading node = the raw section's own index-keyed path
+        # (index-based; no text re-match — kb-86b074).
+        heading_path = raw_paths[ri]
 
         # Insert a heading node (kind=prose, content=heading only if no leaf body)
         section_id, _ = secs_repo.upsert_by_path(
@@ -536,17 +521,10 @@ def ingest_markdown_file(
     # Now insert leaf sections (intermediate entries)
     section_ids: list[str] = []
 
-    # Find which raw_section each intermediate entry belongs to
-    current_ri = -1
-    table_counter2: dict[int, int] = {}
-
     for entry in intermediate:
-        # Find matching raw_section (same logic as _compute_paths)
-        for ri2, rs2 in enumerate(raw_sections):
-            if rs2["level"] == entry["level"] and rs2["heading"] == entry["heading"]:
-                if ri2 >= current_ri:
-                    current_ri = ri2
-                    break
+        # The originating raw section is carried on the entry (index-based;
+        # no text re-match — kb-86b074).
+        current_ri = entry["raw_idx"]
 
         parent_db_id: str | None = None
         if entry["level"] >= 1 and current_ri in raw_section_db_ids:
