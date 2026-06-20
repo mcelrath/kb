@@ -44,6 +44,14 @@ def main() -> int:
         d = json.load(sys.stdin)
     except Exception:
         return 0
+    # Recover session id from the stdin payload when CLAUDE_SESSION_ID is absent
+    # — hook subprocesses spawned after a live `claude plugin update` reload lose
+    # the env var, and the PPID fallback can miss; the payload always carries it.
+    if not os.environ.get("CLAUDE_SESSION_ID"):
+        _sid = d.get("session_id")
+        if _sid:
+            os.environ["CLAUDE_SESSION_ID"] = str(_sid)
+
     tool = d.get("tool_name")
 
     if tool == "Read":
