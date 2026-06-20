@@ -34,6 +34,7 @@ class DocumentSectionsRepository(EntityRepository):
         token_count: int | None = None,
         content_hash: str | None = None,
         parent_section_id: str | None = None,
+        asset_path: str | None = None,
     ) -> str:
         """Add a document section, returning the generated section id."""
         if kind not in VALID_KINDS:
@@ -46,11 +47,11 @@ class DocumentSectionsRepository(EntityRepository):
             """INSERT INTO document_sections
                (id, document_id, parent_section_id, level, ordinal, heading, path,
                 content, kind, table_repr, embed_text, summary, token_count,
-                content_hash, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)""",
+                content_hash, asset_path, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)""",
             (section_id, document_id, parent_section_id, level, ordinal, heading, path,
              content, kind, table_repr, embed_text, summary, token_count,
-             content_hash, now),
+             content_hash, asset_path, now),
         )
         self.conn.commit()
         return section_id

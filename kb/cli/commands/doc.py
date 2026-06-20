@@ -141,6 +141,8 @@ def _run_get(kb: Any, args: Any) -> None:
         kind = s["kind"]
         prefix_str = _indent(level) + "#" * level
         print(f"{prefix_str} {heading}  [{sid}]  kind={kind}  path={s['path']}")
+        if s.get("asset_path"):
+            print(f"  asset_path: " + str(s.get("asset_path")))
         if s.get("content"):
             # Print a short excerpt
             content = str(s["content"])

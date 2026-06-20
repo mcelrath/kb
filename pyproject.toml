@@ -9,7 +9,7 @@ kb = "kb_entry:main"
 kbt = "kbt_entry:main"
 
 [project.optional-dependencies]
-pdf = ["docling>=2.100", "pymupdf"]
+pdf = ["docling>=2.100", "pymupdf", "onnxruntime"]
 
 [build-system]
 requires = ["setuptools>=61"]

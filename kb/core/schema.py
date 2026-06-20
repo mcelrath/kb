@@ -483,6 +483,7 @@ SCHEMA_SQL = """
         summary TEXT,
         token_count INT,
         content_hash TEXT,
+        asset_path TEXT,         -- filesystem path to a stored figure image (NULL for non-figure leaves)
         status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded')),
         superseded_by TEXT REFERENCES document_sections(id),
         created_at TEXT NOT NULL
@@ -607,6 +608,12 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
         _ = conn.execute("SELECT source_hash FROM documents LIMIT 1")
     except sqlite3.OperationalError:
         _ = conn.execute("ALTER TABLE documents ADD COLUMN source_hash TEXT")
+
+    # Schema migration: add asset_path column to document_sections
+    try:
+        _ = conn.execute("SELECT asset_path FROM document_sections LIMIT 1")
+    except sqlite3.OperationalError:
+        _ = conn.execute("ALTER TABLE document_sections ADD COLUMN asset_path TEXT")
 
     # Schema migration: add summary column if not exists
     try:

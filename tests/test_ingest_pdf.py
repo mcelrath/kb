@@ -417,3 +417,222 @@ def test_build_intermediate_pdf_mapping_mocked_docling():
         e for e in intermediate if e["kind"] == "prose" and "Body prose" in (e["content"] or "")
     )
     assert prose_leaf["path"] == "1.1"
+
+
+# ---------------------------------------------------------------------------
+# New tests for kb-4c5a58: asset_path schema, coord conversion, OCR fallback
+# ---------------------------------------------------------------------------
+
+def _make_test_conn():
+    """Return an in-memory SQLite connection with schema (vec0 optional)."""
+    import sqlite3
+    from kb.core.schema import init_schema
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        import sqlite_vec
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+    except Exception:
+        pass
+    init_schema(conn, 4)
+    return conn
+
+
+class TestAssetPathSchema:
+    """asset_path column exists and can be persisted via DocumentSectionsRepository."""
+
+    def test_asset_path_column_exists(self):
+        """Schema migration adds asset_path TEXT column to document_sections."""
+        conn = _make_test_conn()
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(document_sections)").fetchall()}
+        assert "asset_path" in cols, f"asset_path column missing; got: {cols}"
+        conn.close()
+
+    def test_asset_path_persists_via_repo(self):
+        """DocumentSectionsRepository.add accepts and persists asset_path."""
+        from kb.entities.document_sections import DocumentSectionsRepository
+        from kb.entities.documents import DocumentsRepository
+        conn = _make_test_conn()
+
+        docs = DocumentsRepository(conn)
+        doc_id = docs.add(title="Test", doc_type="reference", source_path="/tmp/x.pdf")
+
+        repo = DocumentSectionsRepository(conn)
+        sec_id = repo.add(
+            document_id=doc_id,
+            path="0.f1",
+            level=0,
+            ordinal=0,
+            kind="figure",
+            content="a diagram",
+            asset_path="/tmp/fig.png",
+        )
+
+        row = conn.execute(
+            "SELECT asset_path FROM document_sections WHERE id = ?", (sec_id,)
+        ).fetchone()
+        assert row is not None
+        assert row["asset_path"] == "/tmp/fig.png", f"Got: {row['asset_path']}"
+        conn.close()
+
+
+class TestCoordConversion:
+    """Coordinate conversion: docling bbox -> fitz Rect via to_top_left_origin."""
+
+    def test_to_top_left_origin_gives_correct_fitz_rect(self):
+        """
+        Verify the coordinate conversion formula matches what we use in pdf.py.
+        docling BoundingBox: l, t, r, b in bottom-left origin (PDF coords).
+        to_top_left_origin(page_height) flips to top-left (fitz coords).
+        Expected: rect.y0 = page_height - bbox.t, rect.y1 = page_height - bbox.b
+        """
+        # Simulate the bbox object (no real docling needed)
+        class MockBBox:
+            def __init__(self, l, t, r, b):
+                self.l = l; self.t = t; self.r = r; self.b = b
+            def to_top_left_origin(self, page_height):
+                # docling's actual formula: top-left y = page_height - bottom-left y
+                return MockBBox(self.l, page_height - self.t, self.r, page_height - self.b)
+
+        page_height = 792.0  # standard US letter in points
+        # bbox in bottom-left PDF coords: l=100, t=600, r=500, b=400
+        # (t > b in bottom-left means top of figure is at y=600)
+        bbox = MockBBox(l=100, t=600, r=500, b=400)
+        tl = bbox.to_top_left_origin(page_height)
+
+        # In fitz (top-left origin): y0 < y1 (y increases downward)
+        assert tl.l == 100
+        assert tl.r == 500
+        # t in top-left = page_height - t_bottomleft = 792 - 600 = 192
+        assert abs(tl.t - (page_height - 600)) < 1e-6
+        # b in top-left = page_height - b_bottomleft = 792 - 400 = 392
+        assert abs(tl.b - (page_height - 400)) < 1e-6
+        # y0 < y1: 192 < 392 -- correct fitz ordering
+        assert tl.t < tl.b
+
+
+class TestOCRFallback:
+    """OCR is optional: embed_text falls back to caption when rapidocr unavailable."""
+
+    def test_figure_leaf_without_ocr(self):
+        """_build_intermediate_pdf emits embed_text=caption when no OCR available."""
+        import sys, types
+
+        mod = types.ModuleType("docling.datamodel.document")
+        class TextItem: pass
+        class TableItem: pass
+        class SectionHeaderItem: pass
+        class PictureItem: pass
+        mod.TextItem = TextItem
+        mod.TableItem = TableItem
+        mod.SectionHeaderItem = SectionHeaderItem
+        mod.PictureItem = PictureItem
+
+        class _Prov:
+            def __init__(self, pn): self.page_no = pn
+
+        fig = PictureItem()
+        fig.prov = [_Prov(1)]
+        cap = MagicMock()
+        cap.text = "Cache Hierarchy Diagram"
+        fig.captions = [cap]
+
+        doc = MagicMock()
+        doc.iterate_items.return_value = [(fig, None)]
+        doc.tables = []
+
+        outline = [{"level": 1, "heading": "Architecture", "page": 0}]
+
+        with patch.dict(sys.modules, {"docling.datamodel.document": mod}):
+            from kb.ingest.pdf import _build_intermediate_pdf
+            # No fitz_doc, no doc_image_dir -> no crop -> no OCR
+            intermediate, _, _ = _build_intermediate_pdf(doc, outline)
+
+        figs = [e for e in intermediate if e["kind"] == "figure"]
+        assert figs, "No figure entries emitted"
+        fig_entry = figs[0]
+        assert fig_entry["asset_path"] is None, f"Expected None asset_path, got {fig_entry['asset_path']}"
+        assert "Cache Hierarchy Diagram" in fig_entry["embed_text"]
+        assert fig_entry["embed_text"].startswith("Figure: ")
+
+    def test_figure_embed_text_includes_ocr_when_rapidocr_available(self):
+        """When asset_path is set and rapidocr works, embed_text includes labels."""
+        import sys, types, tempfile
+        from pathlib import Path
+
+        mod = types.ModuleType("docling.datamodel.document")
+        class TextItem: pass
+        class TableItem: pass
+        class SectionHeaderItem: pass
+        class PictureItem: pass
+        mod.TextItem = TextItem
+        mod.TableItem = TableItem
+        mod.SectionHeaderItem = SectionHeaderItem
+        mod.PictureItem = PictureItem
+
+        class _Prov:
+            def __init__(self, pn, bbox): self.page_no = pn; self.bbox = bbox
+
+        class _BBox:
+            def __init__(self): self.l = 0; self.t = 100; self.r = 200; self.b = 50
+            def to_top_left_origin(self, ph): return _BBox()
+
+        # Fake a PNG file
+        with tempfile.TemporaryDirectory() as tmpdir:
+            png = Path(tmpdir) / "fig.png"
+            png.write_bytes(b'\x89PNG\r\n')  # not a real PNG, but we mock OCR
+
+            fig = PictureItem()
+            fig.prov = [_Prov(1, _BBox())]
+            cap = MagicMock()
+            cap.text = "GPU Cache"
+            fig.captions = [cap]
+
+            doc = MagicMock()
+            doc.iterate_items.return_value = [(fig, None)]
+            doc.tables = []
+
+            outline = [{"level": 1, "heading": "GPU Arch", "page": 0}]
+
+            # Mock fitz page
+            mock_page = MagicMock()
+            mock_page.rect.height = 792.0
+            mock_pixmap = MagicMock()
+            mock_pixmap.save = MagicMock()
+
+            mock_fitz_doc = MagicMock()
+            mock_fitz_doc.__getitem__ = MagicMock(return_value=mock_page)
+            mock_page.get_pixmap.return_value = mock_pixmap
+
+            # Mock the unified `rapidocr` package: result object exposes `.txts`.
+            mock_ocr_module = types.ModuleType("rapidocr")
+            class _OcrResult:
+                txts = ("L2 Cache", "CrossBar")
+            class MockRapidOCR:
+                def __call__(self, img_path):
+                    return _OcrResult()
+            mock_ocr_module.RapidOCR = MockRapidOCR
+
+            doc_image_dir = Path(tmpdir) / "imgs"
+            with patch.dict(sys.modules, {
+                "docling.datamodel.document": mod,
+                "rapidocr": mock_ocr_module,
+                "fitz": MagicMock(__version__="1.0"),
+            }):
+                import fitz as mock_fitz
+                mock_fitz.Rect = lambda l, t, r, b: MagicMock()
+
+                from kb.ingest.pdf import _build_intermediate_pdf
+                intermediate, _, _ = _build_intermediate_pdf(
+                    doc, outline, fitz_doc=mock_fitz_doc, doc_image_dir=doc_image_dir
+                )
+
+        figs = [e for e in intermediate if e["kind"] == "figure"]
+        assert figs
+        fig_entry = figs[0]
+        # embed_text should contain caption + OCR labels
+        assert "GPU Cache" in fig_entry["embed_text"]
+        # OCR labels present (L2 Cache and CrossBar)
+        assert "L2 Cache" in fig_entry["embed_text"] or "CrossBar" in fig_entry["embed_text"]

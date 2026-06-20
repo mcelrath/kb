@@ -159,6 +159,8 @@ def _linearize_html_table(html: str) -> str:
 def _build_intermediate_pdf(
     doc,          # docling DoclingDocument
     outline: list[dict[str, Any]],
+    fitz_doc=None,  # PyMuPDF document (kept open for figure cropping)
+    doc_image_dir: Path | None = None,  # directory to store figure PNGs
 ) -> list[dict[str, Any]]:
     """Map a docling DoclingDocument → common intermediate.
 
@@ -272,7 +274,8 @@ def _build_intermediate_pdf(
                     caption = " ".join(
                         c.text for c in item.captions if hasattr(c, 'text') and c.text
                     )
-                sec["figures"].append(caption or "[figure]")
+                # Store (item, caption) so we can do bbox crop later
+                sec["figures"].append((item, caption))
             elif isinstance(item, TextItem):
                 text = (item.text or "").strip()
                 if text:
@@ -380,20 +383,77 @@ def _build_intermediate_pdf(
             ordinal += 1
 
         # Figures
-        for caption in sec["figures"]:
+        for pic_item, caption in sec["figures"]:
             fig_counter += 1
             path = f"{base_path}.f{fig_counter}"
+            asset_path_str: str | None = None
+
+            # --- image crop + caption harvest ---
+            if fitz_doc is not None and doc_image_dir is not None:
+                try:
+                    import fitz as _fitz
+                    prov = getattr(pic_item, 'prov', None)
+                    if prov:
+                        page_no_0 = prov[0].page_no - 1  # 0-based
+                        bbox_obj = prov[0].bbox
+                        fitz_page = fitz_doc[page_no_0]
+                        page_height = fitz_page.rect.height
+                        # docling bbox: to_top_left_origin converts to fitz coordinate system
+                        tl_bbox = bbox_obj.to_top_left_origin(page_height)
+                        rect = _fitz.Rect(tl_bbox.l, tl_bbox.t, tl_bbox.r, tl_bbox.b)
+                        pixmap = fitz_page.get_pixmap(clip=rect, dpi=150)
+                        # Sanitize path for filename
+                        safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', path)
+                        png_path = doc_image_dir / f"{safe_name}.png"
+                        doc_image_dir.mkdir(parents=True, exist_ok=True)
+                        pixmap.save(str(png_path))
+                        asset_path_str = str(png_path)
+                        # Caption fallback: harvest 'Figure N.' from fitz page text
+                        if not caption:
+                            page_text = fitz_page.get_text('text')
+                            fig_match = re.search(
+                                r'Figure\s+\d+[.:]\s*([^\n]+)', page_text
+                            )
+                            if fig_match:
+                                caption = fig_match.group(1).strip()
+                except Exception:
+                    pass  # crop failed; continue without asset_path
+
+            if not caption:
+                caption = '[figure]'
+
+            # --- OCR labels (import-guarded) ---
             embed_text = f"Figure: {caption}"
+            content_note = caption
+            if asset_path_str:
+                try:
+                    # The unified `rapidocr` package (a docling dep) on the
+                    # onnxruntime engine — NOT the legacy `rapidocr_onnxruntime`.
+                    # Result object exposes `.txts` (tuple of recognized strings).
+                    from rapidocr import RapidOCR as _RapidOCR
+                    _ocr = _RapidOCR()
+                    _res = _ocr(asset_path_str)
+                    labels = [t for t in (getattr(_res, "txts", None) or []) if t]
+                    if labels:
+                        embed_text = caption + '\n' + ' | '.join(labels)
+                        content_note = (
+                            caption
+                            + f" [figure: {len(labels)} labels OCR'd; image at {asset_path_str}]"
+                        )
+                except Exception:
+                    pass  # rapidocr/onnxruntime unavailable or failed -- caption-only
+
             intermediate.append({
                 "level": sec["level"],
                 "heading": sec["heading"],
                 "kind": "figure",
-                "content": caption,
+                "content": content_note,
                 "embed_text": embed_text,
                 "table_repr": None,
                 "is_interior": False,
                 "ordinal": ordinal,
                 "path": path,
+                "asset_path": asset_path_str,
             })
             ordinal += 1
 
@@ -475,6 +535,7 @@ def _persist_intermediate(
             content=entry["content"],
             embed_text=entry.get("embed_text") or entry["content"],
             table_repr=entry.get("table_repr"),
+            asset_path=entry.get("asset_path"),
             parent_section_id=parent_db_id,
         )
         section_ids.append(section_id)
@@ -528,7 +589,7 @@ def ingest_pdf_file(
 
     toc = fitz_doc.get_toc()
     outline = _fitz_outline_to_tree(toc)
-    fitz_doc.close()
+    # NOTE: fitz_doc is NOT closed here — kept open for figure cropping.
 
     # --- Step 3: docling ---
     opts = PdfPipelineOptions()
@@ -542,14 +603,28 @@ def ingest_pdf_file(
     result = converter.convert(str(path))
     docling_doc = result.document
 
-    # --- Step 4: Build intermediate ---
+    # --- Resolve doc image dir (KB_DOC_IMAGE_DIR env or default) ---
+    import os as _os
+    _img_root_env = _os.environ.get('KB_DOC_IMAGE_DIR', '')
+    # doc_id not yet known; use source_hash as a stable subdir key during build.
+    # After persist we know doc_id; the subdir uses source_hash (unique per file content).
+    raw_bytes = path.read_bytes()
+    import hashlib as _hashlib
+    source_hash = _hashlib.sha256(raw_bytes).hexdigest()
+    if _img_root_env:
+        _img_root = Path(_img_root_env)
+    else:
+        _img_root = Path.home() / '.cache' / 'kb' / 'doc-images'
+    doc_image_dir = _img_root / source_hash[:16]
+
+    # --- Step 4: Build intermediate (fitz_doc passed for figure cropping) ---
     intermediate, all_sections, section_paths = _build_intermediate_pdf(
-        docling_doc, outline
+        docling_doc, outline, fitz_doc=fitz_doc, doc_image_dir=doc_image_dir
     )
+    fitz_doc.close()  # close after figure cropping is done
 
     # --- Step 5: Persist ---
-    raw_bytes = path.read_bytes()
-    source_hash = hashlib.sha256(raw_bytes).hexdigest()
+    # raw_bytes and source_hash already computed above for doc_image_dir
 
     if doc_type is None:
         doc_type = "reference"
@@ -576,6 +651,18 @@ def ingest_pdf_file(
         project=project,
         summary=summary,
     )
+
+    # Rename image dir from source_hash subdir to doc_id subdir for clarity
+    if doc_image_dir.exists():
+        final_image_dir = doc_image_dir.parent / doc_id
+        if not final_image_dir.exists():
+            doc_image_dir.rename(final_image_dir)
+            # Update asset_path references in intermediate
+            for entry in intermediate:
+                if entry.get('asset_path') and str(doc_image_dir) in entry['asset_path']:
+                    entry['asset_path'] = entry['asset_path'].replace(
+                        str(doc_image_dir), str(final_image_dir)
+                    )
 
     section_ids = _persist_intermediate(
         intermediate, all_sections, section_paths, doc_id, secs_repo
