@@ -64,7 +64,7 @@ def run_add(kb, args, add_content: str, queue_async_add_fn) -> None:
 # search
 # ---------------------------------------------------------------------------
 
-def run_search(kb, args, load_session_seen_ids_fn, fmt_one_line_fn, format_finding_fn) -> None:
+def run_search(kb, args, load_session_seen_ids_fn, format_results_fn, format_finding_fn) -> None:
     exclude_ids: set[str] = set(args.exclude or [])
     if not args.no_dedup:
         exclude_ids |= load_session_seen_ids_fn()
@@ -91,15 +91,14 @@ def run_search(kb, args, load_session_seen_ids_fn, fmt_one_line_fn, format_findi
             print(format_finding_fn(finding, verbose=args.verbose))
             print()
     else:
-        for finding in results:
-            print(fmt_one_line_fn(finding))
+        print(format_results_fn(results))
 
 
 # ---------------------------------------------------------------------------
 # list
 # ---------------------------------------------------------------------------
 
-def run_list(kb, args, fmt_one_line_fn, format_finding_fn) -> None:
+def run_list(kb, args, format_results_fn, format_finding_fn) -> None:
     results = kb.list_findings(
         limit=args.limit,
         project=args.project,
@@ -114,8 +113,7 @@ def run_list(kb, args, fmt_one_line_fn, format_finding_fn) -> None:
             print(format_finding_fn(finding, verbose=args.verbose))
             print()
     else:
-        for finding in results:
-            print(fmt_one_line_fn(finding))
+        print(format_results_fn(results))
 
 
 # ---------------------------------------------------------------------------

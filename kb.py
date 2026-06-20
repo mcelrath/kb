@@ -429,6 +429,61 @@ def _fmt_one_line(finding: dict) -> str:
     return f"{color}[{abbr}]{reset} {dim}{finding['id']}{reset}{sim_str}{proj}  {text}"
 
 
+def format_results(findings: list[dict]) -> str:
+    """Render the one-line search/list view for a whole result set.
+
+    Agent mode: one `_fmt_one_line` per row, joined — byte-identical to the prior
+    per-row output, so agents/hooks that parse it are unaffected.
+    User mode: column-aligned, colored table (tag / id / similarity / project /
+    text) so a human sees tidy columns instead of ragged per-row strings. Handles
+    both finding rows and ingested document-section rows (which carry a DOC tag).
+    """
+    if not findings:
+        return ""
+    if AGENT_MODE:
+        return "\n".join(_fmt_one_line(f) for f in findings)
+
+    dim = "\033[2m"
+    reset = "\033[0m"
+
+    def _sim_color(s: float) -> str:
+        return "\033[32m" if s >= 0.7 else "\033[33m" if s >= 0.5 else "\033[31m"
+
+    rows = []  # (tag_raw, tag_color, fid, sim, sim_raw, proj_raw, text)
+    for f in findings:
+        sim = f.get("similarity")
+        sim_raw = f"({sim:.2f})" if isinstance(sim, (int, float)) else ""
+        if f.get("result_type") == "section":
+            kind = f.get("kind", "prose")
+            tg = {"table": "DOC·tbl", "figure": "DOC·fig"}.get(kind, "DOC")
+            tag_raw = f"[{tg} {f.get('path', '')}]"
+            tag_color = "\033[36m"  # cyan
+            proj_raw = f"({f.get('project') or '?'})"
+            text = f.get("heading") or (f.get("content") or "").split("\n")[0][:100]
+        else:
+            tag_raw = f"[{_TYPE_ABBREV.get(f.get('type', ''), '???')}]"
+            tag_color = _TYPE_COLORS.get(f.get("type", ""), "")
+            proj_raw = f"({f['project']})" if f.get("project") else ""
+            text = f.get("summary") or f["content"].split("\n")[0][:100]
+        rows.append((tag_raw, tag_color, f["id"], sim, sim_raw, proj_raw, text))
+
+    tagw = max(len(r[0]) for r in rows)
+    idw = max(len(r[2]) for r in rows)
+    simw = max(len(r[4]) for r in rows)
+    projw = max(len(r[5]) for r in rows)
+
+    out = []
+    for tag_raw, tag_color, fid, sim, sim_raw, proj_raw, text in rows:
+        cells = [f"{tag_color}{tag_raw:<{tagw}}{reset}", f"{dim}{fid:<{idw}}{reset}"]
+        if simw:
+            cells.append(f"{_sim_color(sim)}{sim_raw:<{simw}}{reset}"
+                         if sim is not None else " " * simw)
+        if projw:
+            cells.append(f"{dim}{proj_raw:<{projw}}{reset}" if proj_raw else " " * projw)
+        out.append(" ".join(cells) + f"  {text}")
+    return "\n".join(out)
+
+
 def format_finding(finding: dict, verbose: bool = False) -> str:
     """Format a finding for terminal display (list/search output)."""
     if AGENT_MODE:
@@ -1389,9 +1444,9 @@ def main():
         "add": lambda kb, args: _cmd_findings.run_add(
             kb, args, _add_content, _queue_async_add),
         "search": lambda kb, args: _cmd_findings.run_search(
-            kb, args, _load_session_seen_ids, _fmt_one_line, format_finding),
+            kb, args, _load_session_seen_ids, format_results, format_finding),
         "list": lambda kb, args: _cmd_findings.run_list(
-            kb, args, _fmt_one_line, format_finding),
+            kb, args, format_results, format_finding),
         "get": _cmd_findings.run_get,
         "correct": _cmd_findings.run_correct,
         "delete": _cmd_findings.run_delete,
