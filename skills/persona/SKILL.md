@@ -7,8 +7,12 @@ description: List the available session personas, or select/activate one for thi
 
 Personas live at `<project>/.claude/agents/personas/<name>.md` (a project supplies its own
 set, via `kb:project-setup`), with `~/.claude/agents/personas/` as a cross-project fallback.
-The **bridge ID IS the persona name** — no mapping layer. Append a suffix to run multiple
-instances of one persona (`tip-mathlib`); the base (before the first `-`) selects the file.
+The **bridge ID IS the persona name** — no mapping layer (no `architect`→`archie` alias
+table; the file name IS the canonical id). Append a suffix to run multiple INSTANCES of the
+SAME persona (`tip-mathlib`, `terry-nemotron`); the base (before the first `-`) selects the
+file, the full id is the distinct bridge id. A suffix is ONLY for same-persona instances — a
+genuinely DIFFERENT role gets its OWN base name and its own file (do not encode a variant role
+as a suffix; that file would never load, because the base resolves to the existing persona).
 The kb plugin's `session-persona.sh` SessionStart hook re-injects the active persona on every
 start/compact.
 
