@@ -104,8 +104,14 @@ def main():
 
     if not lines:
         return
+    # Emit best-LAST: selection above is by descending similarity, but attention is
+    # U-shaped (Liu et al. 2023 "lost in the middle") — strongest at the start and
+    # end of context. The header takes the primacy slot, so reversing puts the
+    # highest-similarity finding in the recency slot, adjacent to the user's prompt
+    # and the generation point. CLI `kb search` stays descending (humans read top-down).
+    lines.reverse()
     lines.insert(0, 'Possibly-relevant prior findings (semantic match to your prompt — '
-                    '`kb get <id>` to read before reimplementing):')
+                    '`kb get <id>` to read before reimplementing; ordered least→most relevant):')
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
