@@ -1102,6 +1102,12 @@ def main():
     bridge_announce_parser.add_argument("focus", help="what you're working on now")
     bridge_announce_parser.add_argument("offering", help="what you can help peers with")
 
+    bridge_owed_parser = bridge_sub.add_parser("owed",
+        help="LIST unanswered --needs-reply messages addressed to this agent (read-only).")
+    bridge_owed_parser.add_argument("agent_id", nargs="?", default=None,
+        help="Your id (default: inferred from persona pin / AGENT_ID / whoami)")
+    bridge_owed_parser.add_argument("--json", action="store_true", help="machine-readable output")
+
     bridge_clear_owed_parser = bridge_sub.add_parser("clear-owed",
         help="Clear ALL owed --needs-reply messages for this agent (stale backlog).")
     bridge_clear_owed_parser.add_argument("agent_id", nargs="?", default=None,

@@ -159,6 +159,8 @@ def run_bridge(kb, args, bridge_parser) -> None:
         _run_recv(args)
     elif cmd in ("announce", "join"):
         _run_announce(args)
+    elif cmd == "owed":
+        _run_owed(args)
     elif cmd == "clear-owed":
         _run_clear_owed(args)
     else:
@@ -170,6 +172,71 @@ def _parse_to(s) -> list:
         return [str(x).strip() for x in s if str(x).strip()]
     s = (str(s) if s is not None else "").strip().strip("[]")
     return [p.strip().strip("'\"") for p in s.split(",") if p.strip().strip("'\"")]
+
+
+def _owed_messages(me: str) -> list:
+    """Return the full message dicts this agent OWES a reply to: peer messages
+    addressed explicitly to `me` with needs_reply, not yet replied-to, and not in
+    the owed-cleared set the Stop hook honors. Shared by `owed` (list) and the
+    Stop-hook computation. Raises on kb-server unreachable (caller handles)."""
+    import json
+    import os
+    import urllib.request
+    url = f"{_server_url()}/bridge/messages?recipient={me}&limit=500"
+    with urllib.request.urlopen(url, timeout=8) as r:
+        msgs = json.loads(r.read())
+    cleared: set = set()
+    try:
+        with open(os.path.join(_state_dir(), "owed-cleared")) as f:
+            cleared = {ln.strip() for ln in f if ln.strip()}
+    except OSError:
+        pass
+    replied = {str(m["reply_to"]) for m in msgs
+               if m.get("sender") == me and m.get("reply_to") not in (None, "None", "")}
+    owed = []
+    for m in msgs:
+        nr = m.get("needs_reply")
+        if not (nr is True or str(nr) == "True"):
+            continue
+        if m.get("sender") == me:
+            continue
+        if me not in _parse_to(m.get("to")):       # explicit-to-me (not 'all' broadcasts)
+            continue
+        mid = str(m.get("id"))
+        if mid in replied or mid in cleared:
+            continue
+        owed.append(m)
+    return owed
+
+
+def _run_owed(args) -> None:
+    """kb bridge owed [<id>] [--json] — LIST unanswered --needs-reply messages
+    addressed to this agent (the read-only counterpart to clear-owed). Lets an
+    agent inspect what it owes before deciding to reply or clear."""
+    import json
+    me = (getattr(args, "agent_id", None) or "").strip() or _self_id(args)
+    if not me:
+        print("kb bridge owed: could not infer your id — pass <id> or run /persona.",
+              file=sys.stderr)
+        sys.exit(1)
+    try:
+        owed = _owed_messages(me)
+    except Exception as e:
+        print(f"kb bridge owed: kb-server unreachable ({e})", file=sys.stderr)
+        sys.exit(1)
+    if getattr(args, "json", False):
+        print(json.dumps([{"id": m.get("id"), "sender": m.get("sender"),
+                           "ts": m.get("ts"), "subject": m.get("subject")}
+                          for m in owed], indent=2, default=str))
+        return
+    if not owed:
+        print(f"No owed replies for {me}.")
+        return
+    print(f"{len(owed)} owed reply(ies) for {me}  "
+          f"(reply: kb bridge send <sender> \"<subject>\" --reply <id>):")
+    for m in owed:
+        print(f"  [{m.get('id')}] from={m.get('sender')}  {m.get('ts', '')}  "
+              f"{m.get('subject', '')}")
 
 
 def _run_clear_owed(args) -> None:
@@ -184,28 +251,11 @@ def _run_clear_owed(args) -> None:
         print("kb bridge clear-owed: could not infer your id — pass <id> or run /persona.",
               file=sys.stderr)
         sys.exit(1)
-    url = f"{_server_url()}/bridge/messages?recipient={me}&limit=500"
     try:
-        with urllib.request.urlopen(url, timeout=8) as r:
-            msgs = json.loads(r.read())
+        owed = [str(m.get("id")) for m in _owed_messages(me)]
     except Exception as e:
         print(f"kb bridge clear-owed: kb-server unreachable ({e})", file=sys.stderr)
         sys.exit(1)
-    replied = {str(m["reply_to"]) for m in msgs
-               if m.get("sender") == me and m.get("reply_to") not in (None, "None", "")}
-    owed = []
-    for m in msgs:
-        nr = m.get("needs_reply")
-        if not (nr is True or str(nr) == "True"):
-            continue
-        if m.get("sender") == me:
-            continue
-        if me not in _parse_to(m.get("to")):       # explicit-to-me (not 'all' broadcasts)
-            continue
-        mid = str(m.get("id"))
-        if mid in replied:
-            continue
-        owed.append(mid)
     if not owed:
         print(f"kb bridge clear-owed: no owed replies for {me}.")
         return
