@@ -80,6 +80,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from kb.cli import output as _out
+
 
 # ---------------------------------------------------------------------------
 # Backend resolution
@@ -441,6 +443,37 @@ def _project_blocked_item(row: dict[str, Any], conn: Any) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Human row formatting — color + priority for users, plain for agents
+# ---------------------------------------------------------------------------
+
+_STATUS_COLOR: dict[str, str | None] = {
+    "open": None,
+    "in_progress": "cyan",
+    "blocked": "red",
+    "closed": "green",
+    "deferred": "blue",
+}
+
+
+def _fmt_row(issue_id: str, status: str, title: str, priority: int | None = None) -> str:
+    """Format a single list/row line.
+
+    User mode: id dim, status colored, priority shown as P{n}, truncated to term width.
+    Agent mode: plain text, no ANSI, no truncation.
+    """
+    if _out.AGENT_MODE:
+        prio_part = f" P{priority}" if priority is not None else ""
+        return f"[{issue_id}] ({status}){prio_part} {title}"
+    else:
+        color = _STATUS_COLOR.get(status)
+        id_part = _out.c(f"[{issue_id}]", "dim")
+        status_part = _out.c(f"({status})", color)
+        prio_part = f" P{priority}" if priority is not None else ""
+        line = f"{id_part} {status_part}{prio_part} {title}"
+        return _out.fit_line(line)
+
+
+# ---------------------------------------------------------------------------
 # KnowledgeBase construction helper
 # ---------------------------------------------------------------------------
 
@@ -535,8 +568,15 @@ def cmd_show(args: Any, kb: Any) -> int:
 
 
 def _print_issue_human(row: dict[str, Any]) -> None:
-    print(f"[{row['id']}] {row['title']}")
-    print(f"  type={row['type']}  status={row['status']}  priority={row['priority']}")
+    issue_id = row["id"]
+    status = row["status"]
+    color = _STATUS_COLOR.get(status)
+    if _out.AGENT_MODE:
+        print(f"[{issue_id}] {row['title']}")
+        print(f"  type={row['type']}  status={status}  priority={row['priority']}")
+    else:
+        print(_out.c(f"[{issue_id}]", "dim") + " " + row["title"])
+        print(f"  type={row['type']}  status={_out.c(status, color)}  priority={row['priority']}")
     if row.get("parent_id"):
         print(f"  parent={row['parent_id']}")
     if row.get("assignee"):
@@ -682,7 +722,7 @@ def cmd_list(args: Any, kb: Any) -> int:
         print(json.dumps(out, indent=2))
     else:
         for r in rows:
-            print(f"[{r['id']}] ({r['status']}) {r['title']}")
+            print(_fmt_row(r["id"], r["status"], r["title"], r.get("priority")))
     return 0
 
 
@@ -717,9 +757,11 @@ def cmd_dep_list(args: Any, kb: Any) -> int:
         print(json.dumps(out, indent=2))
     else:
         for d in deps.get("outgoing", []):
-            print(f"  depends-on [{d['type']}]: {d['id']} ({d['status']}) {d['title']}")
+            row = _fmt_row(d["id"], d["status"], d["title"], d.get("priority"))
+            print(f"  depends-on [{d['type']}]: {row}")
         for d in deps.get("incoming", []):
-            print(f"  depended-on-by [{d['type']}]: {d['id']} ({d['status']}) {d['title']}")
+            row = _fmt_row(d["id"], d["status"], d["title"], d.get("priority"))
+            print(f"  depended-on-by [{d['type']}]: {row}")
     return 0
 
 
@@ -746,7 +788,7 @@ def cmd_children(args: Any, kb: Any) -> int:
         print(json.dumps(out, indent=2))
     else:
         for r in rows:
-            print(f"[{r['id']}] ({r['status']}) {r['title']}")
+            print(_fmt_row(r["id"], r["status"], r["title"], r.get("priority")))
     return 0
 
 
@@ -773,7 +815,7 @@ def cmd_ready(args: Any, kb: Any) -> int:
         print(json.dumps(out, indent=2))
     else:
         for r in rows:
-            print(f"[{r['id']}] ({r['status']}) {r['title']}")
+            print(_fmt_row(r["id"], r["status"], r["title"], r.get("priority")))
     return 0
 
 
@@ -802,7 +844,8 @@ def cmd_blocked(args: Any, kb: Any) -> int:
     else:
         for r in rows:
             blockers = ", ".join(r.get("blocker_ids", []))
-            print(f"[{r['id']}] ({r['status']}) {r['title']}  blocked-by: {blockers}")
+            base = _fmt_row(r["id"], r["status"], r["title"], r.get("priority"))
+            print(f"{base}  blocked-by: {blockers}")
     return 0
 
 
