@@ -3,9 +3,9 @@
 Precedence (highest first):
   1. KBT_BACKEND env
   2. per-project .kbt/config.toml [tracker] backend  (walk up)
-  3. legacy .beads/config.yaml backend:              (walk up; deprecation warn)
+  3. legacy .beads/config.yaml with EXPLICIT backend: (escape hatch; deprecation warn)
   4. host-wide ~/.config/kb/config.toml [tracker] backend
-  5. default: dolt-if-bd (transitional notice) else kb
+  5. default: kb (warns if a non-empty legacy .beads is present)
 
 The two walk-ups are INDEPENDENT and SEQUENTIAL (.kbt to root first, then
 .beads to root), so a per-project .kbt marker at a HIGHER ancestor beats a
@@ -58,11 +58,40 @@ def test_kbt_higher_ancestor_beats_beads_lower(tmp_path):
     assert issue_cli.resolve_backend(sub) == "kb"
 
 
-def test_legacy_beads_read_and_warns(tmp_path, capsys):
+def test_legacy_beads_explicit_backend_honored_and_warns(tmp_path, capsys):
+    # An EXPLICIT backend: in .beads/config.yaml is still honored (escape hatch).
     _write_beads(tmp_path, "dolt")
     assert issue_cli.resolve_backend(tmp_path) == "dolt"
     err = capsys.readouterr().err
     assert "deprecated" in err and "bead-migrate" in err
+
+
+def test_beads_without_explicit_backend_falls_through_to_kb(tmp_path, monkeypatch):
+    # A .beads/config.yaml with NO backend: key must NOT route to dolt anymore.
+    (tmp_path / ".beads").mkdir()
+    (tmp_path / ".beads" / "config.yaml").write_text("dolt:\n  shared-server: true\n")
+    monkeypatch.setattr(issue_cli.shutil, "which", lambda name: "/usr/bin/bd")
+    assert issue_cli.resolve_backend(tmp_path) == "kb"
+
+
+def test_nonempty_beads_warns_but_defaults_kb(tmp_path, monkeypatch, capsys):
+    # Non-empty .beads (dolt DB dir present), no explicit backend, bd on PATH:
+    # default to kb AND emit a migration-suggesting warning.
+    (tmp_path / ".beads" / "dolt").mkdir(parents=True)
+    monkeypatch.setattr(issue_cli.shutil, "which", lambda name: "/usr/bin/bd")
+    assert issue_cli.resolve_backend(tmp_path) == "kb"
+    err = capsys.readouterr().err
+    assert "bead-migrate" in err and "ASK THE USER" in err
+
+
+def test_empty_beads_no_warning(tmp_path, monkeypatch, capsys):
+    # A config-only .beads (no dolt dir, no issues.jsonl) is NOT "non-empty":
+    # default to kb with no migration warning.
+    (tmp_path / ".beads").mkdir()
+    (tmp_path / ".beads" / "config.yaml").write_text("dolt:\n  shared-server: true\n")
+    monkeypatch.setattr(issue_cli.shutil, "which", lambda name: None)
+    assert issue_cli.resolve_backend(tmp_path) == "kb"
+    assert "bead-migrate" not in capsys.readouterr().err
 
 
 def test_host_global_toml(tmp_path, monkeypatch):
@@ -73,10 +102,11 @@ def test_host_global_toml(tmp_path, monkeypatch):
     assert issue_cli.resolve_backend(tmp_path) == "kb"
 
 
-def test_default_dolt_if_bd_with_notice(tmp_path, monkeypatch, capsys):
+def test_default_kb_even_with_bd(tmp_path, monkeypatch, capsys):
+    # Cutover: bd on PATH no longer routes to dolt; no .beads → kb, no warning.
     monkeypatch.setattr(issue_cli.shutil, "which", lambda name: "/usr/bin/bd")
-    assert issue_cli.resolve_backend(tmp_path) == "dolt"
-    assert "bead-migrate" in capsys.readouterr().err
+    assert issue_cli.resolve_backend(tmp_path) == "kb"
+    assert "bead-migrate" not in capsys.readouterr().err
 
 
 def test_default_kb_if_no_bd(tmp_path, monkeypatch):

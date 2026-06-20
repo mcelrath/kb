@@ -684,7 +684,8 @@ def _print_main_help():
             print(f"  {cmd:<{W}}{desc}")
         print("\nIssue tracking: use the  kbt  command (kb-native tracker, bd-compatible:")
         print("  kbt ready | list | create | show | update | close | dep | blocked).")
-        print("  Defaults to the kb backend when bd is absent; an explicit .beads/config.yaml wins.")
+        print("  Defaults to the kb-native tracker; a non-empty legacy .beads warns to migrate")
+        print("  (kbt bead-migrate). Explicit .beads backend: / .kbt marker / KBT_BACKEND override.")
         print("kb-server (bridge + kb/issue HTTP endpoints): install the systemd --user unit with")
         print("  kb configure --install-server [--server-port 8765].")
         print("\nRun any command with --help for full flag list.")
@@ -718,7 +719,7 @@ def _print_main_help():
         print()
 
         print(f"{bold}Issue tracking:{reset}  {cyan}kbt{reset}{dim}  (kb-native, bd-compatible: ready|list|create|show|update|close|dep|blocked){reset}")
-        print(f"  {dim}defaults to the kb backend when bd is absent; an explicit .beads/config.yaml wins{reset}")
+        print(f"  {dim}defaults to the kb-native tracker; a non-empty legacy .beads warns to run kbt bead-migrate{reset}")
         print(f"{bold}Server:{reset}  {dim}kb configure --install-server  installs the kb-server systemd --user unit{reset}")
         print()
 

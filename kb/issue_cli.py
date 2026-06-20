@@ -87,16 +87,38 @@ from typing import Any
 
 
 def _default_backend() -> str:
-    """Backend when nothing explicit is configured: dolt-if-bd (TRANSITIONAL).
+    """Backend when nothing explicit is configured: ALWAYS the kb-native tracker.
 
-    UNCHANGED this epic (kb-sg0.14): a legacy host with `bd` on PATH and live
-    dolt data is NOT stranded — it keeps resolving to dolt until `kbt
-    bead-migrate` writes a per-project .kbt/config.toml marker. The flip to
-    unconditional 'kb' moves to cutover (kb-sg0.8), where bd is removed
-    (dolt-if-bd → bd absent → kb). resolve_backend emits a one-line stderr
-    notice when this default fires (resolves kb-zpy's "silent routing").
+    Cutover (kb-sg0.8) is now in effect: the presence of `bd` on PATH or a
+    legacy `.beads/` directory no longer routes to dolt. kbt defaults to its
+    own kb-native store; un-migrated dolt data is surfaced via a loud warning
+    in `resolve_backend` (non-empty `.beads` detected → suggest the agent ask
+    the user to run `kbt bead-migrate`) rather than silently keeping the
+    project on dolt. An explicit `.beads/config.yaml backend:`, a
+    `.kbt/config.toml` marker, the host-wide [tracker] backend, or
+    KBT_BACKEND still override this default.
     """
-    return "dolt" if shutil.which("bd") else "kb"
+    return "kb"
+
+
+def _beads_has_data(beads_dir: Path) -> bool:
+    """True if a `.beads/` directory holds real tracker data (not just config).
+
+    Signals (any one suffices), all filesystem-only (no `bd`/dolt server call):
+      - a `dolt/` subdir (dolt-backed database present), or
+      - a non-empty `issues.jsonl` (no-db mode), or
+      - a non-empty `backup/issues.jsonl` (JSONL backup of dolt issues).
+    """
+    try:
+        if (beads_dir / "dolt").is_dir():
+            return True
+        for rel in ("issues.jsonl", "backup/issues.jsonl"):
+            p = beads_dir / rel
+            if p.is_file() and p.stat().st_size > 0:
+                return True
+    except OSError:
+        pass
+    return False
 
 
 def _walk_up_for(cwd: Path, rel: str) -> Path | None:
@@ -172,9 +194,13 @@ def resolve_backend(cwd: Path | None = None) -> str:
     Precedence (highest first):
       1. KBT_BACKEND env var (test/override; logged to stderr)
       2. per-project .kbt/config.toml [tracker] backend  (walk up from cwd)
-      3. legacy .beads/config.yaml backend:              (walk up; deprecation warn)
+      3. legacy .beads/config.yaml with an EXPLICIT backend: (escape hatch;
+         deprecation warn). A .beads WITHOUT an explicit backend no longer
+         routes to dolt — it falls through to the kb default (step 5).
       4. host-wide ~/.config/kb/config.toml [tracker] backend
-      5. default: dolt-if-bd (transitional notice; flips to kb at cutover kb-sg0.8)
+      5. default: kb (the kb-native tracker). If a NON-EMPTY legacy .beads is
+         detected here, a loud warning suggests the agent ask the user to run
+         `kbt bead-migrate` — kbt does NOT silently keep the project on dolt.
 
     The two walk-ups are INDEPENDENT and SEQUENTIAL (.kbt to root FIRST, then
     .beads to root) — never interleaved per-directory — so a per-project .kbt
@@ -201,16 +227,18 @@ def resolve_backend(cwd: Path | None = None) -> str:
         if b:
             return b
 
-    # 3. legacy .beads/config.yaml — INDEPENDENT walk to root
+    # 3. legacy .beads/config.yaml with an EXPLICIT backend — escape hatch only.
+    #    A .beads WITHOUT an explicit backend: key does NOT route to dolt; it
+    #    falls through to the kb default, with the non-empty-.beads warning below.
     beads_cfg = _walk_up_for(cwd, ".beads/config.yaml")
     if beads_cfg is not None:
         b = _read_beads_backend(beads_cfg)
-        print(
-            f"kbt: reading legacy {beads_cfg} — deprecated; run `kbt bead-migrate` "
-            "to move this project to the kb-native tracker",
-            file=sys.stderr,
-        )
         if b:
+            print(
+                f"kbt: honoring explicit backend={b!r} in legacy {beads_cfg} — "
+                "deprecated; run `kbt bead-migrate` to move to the kb-native tracker",
+                file=sys.stderr,
+            )
             return b
 
     # 4. host-wide [tracker] backend
@@ -222,12 +250,16 @@ def resolve_backend(cwd: Path | None = None) -> str:
     except Exception:
         pass
 
-    # 5. transitional default
+    # 5. default: the kb-native tracker. Warn (don't silently strand) if a
+    #    non-empty legacy .beads exists — its issues are NOT visible to kbt.
     b = _default_backend()
-    if b == "dolt":
+    beads_dir = _walk_up_for(cwd, ".beads")
+    if b == "kb" and beads_dir is not None and _beads_has_data(beads_dir):
         print(
-            "kbt: defaulting to dolt because bd is on PATH; run `kbt bead-migrate` "
-            "to move this project to the kb-native tracker",
+            f"kbt: WARNING — defaulting to the kb-native tracker, but a non-empty "
+            f"legacy beads tracker exists at {beads_dir}; its issues are NOT visible "
+            "to kbt. ASK THE USER whether to run `kbt bead-migrate` (migrates the "
+            "dolt issues into the kb-native tracker) before relying on tracker state.",
             file=sys.stderr,
         )
     return b
