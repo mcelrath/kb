@@ -609,6 +609,15 @@ def _resolve_scope(args: Any) -> str | None:
     return getattr(args, "project", None) or _current_project_name()
 
 
+def _hint_if_scoped_empty(scope: str | None, shown: list, all_rows: list) -> None:
+    """If project-scoping hid everything, tell the user --all would show more
+    (the scope key is the cwd dir name; projects whose dir != id-prefix and that
+    don't set the project column won't match without an explicit --project/--all)."""
+    if scope and not shown and all_rows:
+        print(f"(no issues in project {scope!r}; {len(all_rows)} in other "
+              f"projects — use --all or --project NAME)", file=sys.stderr)
+
+
 def cmd_list(args: Any, kb: Any) -> int:
     """kbt list [--status S] [--parent P] [--json] [--all]"""
     status = getattr(args, "status", None)
@@ -625,9 +634,9 @@ def cmd_list(args: Any, kb: Any) -> int:
                          type=itype, assignee=assignee,
                          limit=(None if scope else limit))
     if scope:
-        rows = [r for r in rows if _belongs_to_project(r, scope)]
-        if limit:
-            rows = rows[:limit]
+        scoped = [r for r in rows if _belongs_to_project(r, scope)]
+        _hint_if_scoped_empty(scope, scoped, rows)
+        rows = scoped[:limit] if limit else scoped
 
     if as_json:
         # For list, we need the full row data for projection — list() returns summary rows
@@ -715,7 +724,9 @@ def cmd_ready(args: Any, kb: Any) -> int:
     scope = _resolve_scope(args)
     rows = kb.issue_ready(project=None)
     if scope:
-        rows = [r for r in rows if _belongs_to_project(r, scope)]
+        scoped = [r for r in rows if _belongs_to_project(r, scope)]
+        _hint_if_scoped_empty(scope, scoped, rows)
+        rows = scoped
 
     if as_json:
         out = []
@@ -740,7 +751,9 @@ def cmd_blocked(args: Any, kb: Any) -> int:
     scope = _resolve_scope(args)
     rows = kb.issue_blocked(project=None)
     if scope:
-        rows = [r for r in rows if _belongs_to_project(r, scope)]
+        scoped = [r for r in rows if _belongs_to_project(r, scope)]
+        _hint_if_scoped_empty(scope, scoped, rows)
+        rows = scoped
 
     if as_json:
         out = []

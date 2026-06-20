@@ -175,7 +175,6 @@ def _build_intermediate_pdf(
     - Figures become kind='figure' leaves with caption.
     - Prose sections: collected per heading, window-split if oversize.
     """
-    from docling.datamodel.document import DoclingDocument  # type: ignore
     # Import item types conditionally (API varies by version)
     try:
         from docling.datamodel.document import (
