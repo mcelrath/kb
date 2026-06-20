@@ -8,6 +8,9 @@ requires-python = ">=3.11"
 kb = "kb_entry:main"
 kbt = "kbt_entry:main"
 
+[project.optional-dependencies]
+pdf = ["docling>=2.100", "pymupdf"]
+
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"

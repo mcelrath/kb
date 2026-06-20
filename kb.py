@@ -965,6 +965,16 @@ def main():
     ingest_md_parser.add_argument("--summary", default=None, help="Document summary")
     ingest_md_parser.add_argument("--dry-run", action="store_true")
 
+    ingest_pdf_parser = ingest_sub.add_parser("pdf", help="Ingest a PDF file into document + sections (requires 'kb[pdf]' extras)")
+    ingest_pdf_parser.add_argument("file", help="PDF file to ingest")
+    ingest_pdf_parser.add_argument("-p", "--project", default=None, help="Project tag")
+    ingest_pdf_parser.add_argument("--doc-type", choices=["internal", "reference", "spec", "paper", "standard"],
+        default=None, help="Document type (default: 'reference')")
+    ingest_pdf_parser.add_argument("--title", default=None, help="Document title (default: filename stem)")
+    ingest_pdf_parser.add_argument("--summary", default=None, help="Document summary")
+    ingest_pdf_parser.add_argument("--dry-run", action="store_true",
+        help="Show outline + page count without ingesting")
+
     ingest_personas_parser = ingest_sub.add_parser(
         "personas",
         help="Index persona .md files (<project>/.claude/agents/personas/*.md) + staleness check",
