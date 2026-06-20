@@ -18,6 +18,7 @@
 set -euo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+PLUGIN_ROOT="${PLUGIN_ROOT%/}"  # normalize: a trailing slash else trips the root-changed re-install every session
 REQUIREMENTS="${PLUGIN_ROOT}/requirements.txt"
 
 # Resolve venv path (DATA-or-fallback)
@@ -29,6 +30,44 @@ fi
 
 VENV_PYTHON="${VENV_DIR}/bin/python"
 HASH_FILE="${VENV_DIR}/.requirements-hash"
+
+# Install / upgrade ~/.local/bin/<name> wrappers (stable: reference the venv path,
+# NOT the versioned CLAUDE_PLUGIN_ROOT). The plugin OWNS these wrappers so the
+# `kb`/`kbt` commands always resolve to the plugin-managed venv — a stale
+# hand-written wrapper (e.g. one hardcoding a dev .venv path) is backed up once
+# and replaced. Defined early + called on BOTH the fast path and a full rebuild
+# so an already-built venv still gets its wrapper reconciled.
+ensure_wrappers() {
+    local _LOCAL_BIN="${HOME}/.local/bin"
+    [ -d "${_LOCAL_BIN}" ] || return 0
+    case ":${PATH}:" in
+        *":${_LOCAL_BIN}:"*) ;;
+        *) echo "kb-plugin setup-venv: NOTE — ${_LOCAL_BIN} is not on PATH; add it to your shell profile so \`kb\`/\`kbt\` resolve by name." >&2 ;;
+    esac
+    local name wrapper venv_tool
+    for name in kb kbt; do
+        wrapper="${_LOCAL_BIN}/${name}"
+        venv_tool="${VENV_DIR}/bin/${name}"
+        # Already points at our venv tool? leave it.
+        if [ -f "${wrapper}" ] && grep -qF "${venv_tool}" "${wrapper}" 2>/dev/null; then
+            continue
+        fi
+        # A different wrapper exists — back it up once before taking ownership.
+        if [ -f "${wrapper}" ] && [ ! -f "${wrapper}.pre-kb-plugin" ]; then
+            cp -p "${wrapper}" "${wrapper}.pre-kb-plugin"
+            echo "kb-plugin setup-venv: backed up existing ${wrapper} -> ${wrapper}.pre-kb-plugin" >&2
+        fi
+        cat > "${wrapper}" << WRAPPER_EOF
+#!/usr/bin/env bash
+# ${name} wrapper — written by kb-plugin setup-venv.sh
+# Stable: references the plugin venv, not the versioned CLAUDE_PLUGIN_ROOT.
+# kb config defaults (embedding/llm URLs) come from kb/config.py — no env needed.
+exec "${venv_tool}" "\$@"
+WRAPPER_EOF
+        chmod +x "${wrapper}"
+        echo "kb-plugin setup-venv: installed ${wrapper}" >&2
+    done
+}
 
 # Compute current requirements hash
 if ! command -v sha256sum &>/dev/null && command -v shasum &>/dev/null; then
@@ -51,7 +90,9 @@ if [ -f "${VENV_PYTHON}" ] && [ -f "${HASH_FILE}" ]; then
             "${VENV_DIR}/bin/pip" install --quiet -e "${PLUGIN_ROOT}"
             echo "${PLUGIN_ROOT}" > "${ROOT_FILE}"
         fi
-        # Venv is up-to-date; emit no output (SessionStart must be non-blocking)
+        # Venv is up-to-date — still reconcile the wrappers (cheap, idempotent),
+        # then exit quietly (SessionStart must be non-blocking).
+        ensure_wrappers
         exit 0
     fi
 fi
@@ -98,41 +139,6 @@ echo "${CURRENT_HASH}" > "${HASH_FILE}"
 "${VENV_DIR}/bin/pip" install --quiet -e "${PLUGIN_ROOT}"
 echo "${PLUGIN_ROOT}" > "${ROOT_FILE}"
 
-# Install ~/.local/bin/<name> wrappers (stable: reference the venv path, NOT the versioned
-# CLAUDE_PLUGIN_ROOT). One per console script the package provides (kb + kbt).
-_LOCAL_BIN="${HOME}/.local/bin"
-if [ -d "${_LOCAL_BIN}" ]; then
-    case ":${PATH}:" in
-        *":${_LOCAL_BIN}:"*) ;;
-        *) echo "kb-plugin setup-venv: NOTE — ${_LOCAL_BIN} is not on PATH; add it to your shell profile so \`kb\`/\`kbt\` resolve by name." >&2 ;;
-    esac
-    _install_wrapper() {
-        local name="$1"
-        local wrapper="${_LOCAL_BIN}/${name}"
-        local venv_tool="${VENV_DIR}/bin/${name}"
-        # Already points at our venv tool? leave it.
-        if [ -f "${wrapper}" ] && grep -qF "${venv_tool}" "${wrapper}" 2>/dev/null; then
-            return 0
-        fi
-        # Exists but is NOT a kb-plugin wrapper (e.g. a user's hand-written one)? don't clobber.
-        if [ -f "${wrapper}" ] \
-           && ! grep -qF "kb-plugin" "${wrapper}" 2>/dev/null \
-           && ! grep -qF "${HOME}/.cache/kb" "${wrapper}" 2>/dev/null \
-           && ! grep -qF "CLAUDE_PLUGIN_DATA" "${wrapper}" 2>/dev/null; then
-            echo "kb-plugin setup-venv: ${wrapper} exists and is not a kb-plugin wrapper — leaving it." >&2
-            return 0
-        fi
-        cat > "${wrapper}" << WRAPPER_EOF
-#!/usr/bin/env bash
-# ${name} wrapper — written by kb-plugin setup-venv.sh
-# Stable: references the plugin venv, not the versioned CLAUDE_PLUGIN_ROOT.
-exec "${venv_tool}" "\$@"
-WRAPPER_EOF
-        chmod +x "${wrapper}"
-        echo "kb-plugin setup-venv: installed ${wrapper}" >&2
-    }
-    _install_wrapper kb
-    _install_wrapper kbt
-fi
+ensure_wrappers
 
 echo "kb-plugin setup-venv: venv ready (${VENV_PYTHON})" >&2
