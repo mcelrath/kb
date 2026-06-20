@@ -18,9 +18,9 @@ from _seen import filter_unseen  # noqa: E402
 from _state import kb_project_for_path  # noqa: E402
 from _db import kb_db_path  # noqa: E402
 try:
-    from ash_health import ash_down, STOP_LINE
+    from ash_health import embedding_down, STOP_LINE
 except Exception:
-    def ash_down(): return False
+    def embedding_down(): return False
     STOP_LINE = ''
 
 
@@ -623,7 +623,7 @@ def main() -> None:
 
     # EMBEDDING-DOWN gate: ash:8081 down => semantic retrieval is BLIND. Surface a
     # hard STOP at compute/dispatch time so the agent does not forge ahead blind.
-    if ash_down() and STOP_LINE:
+    if embedding_down() and STOP_LINE:
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse", "additionalContext": STOP_LINE}}))
         sys.exit(0)

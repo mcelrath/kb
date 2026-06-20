@@ -167,14 +167,6 @@ class KnowledgeBase:
         """Generate embedding for text."""
         return self._embedding.embed(text)
 
-    def _llm_complete(self, *args: Any, **kwargs: Any) -> str | None:
-        """Generic LLM completion."""
-        return self._llm.complete(*args, **kwargs)
-
-    def _extract_text_from_json(self, text: str, keys: list[str] | None = None) -> str:
-        """Extract text from JSON-wrapped responses."""
-        return self._llm.extract_text_from_json(text, keys)
-
     def _generate_summary(self, content: str, evidence: str | None = None) -> str | None:
         """Generate summary for finding.
 

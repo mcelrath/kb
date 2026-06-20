@@ -17,6 +17,7 @@ Advisory only (exit 0 always).
 """
 import sys
 import json
+import math
 import os
 import re
 import sqlite3
@@ -29,9 +30,9 @@ from _seen import filter_unseen  # noqa: E402
 from _state import kb_project_for_path  # noqa: E402
 from _db import kb_db_path  # noqa: E402
 try:
-    from ash_health import ash_down
+    from ash_health import embedding_down
 except Exception:
-    def ash_down(): return False  # type: ignore[misc]
+    def embedding_down(): return False  # type: ignore[misc]
 
 _MAX_SURFACE = 4           # max open issues to surface per hook call
 _MAX_CLOSED = 2            # max recently-closed issues to surface
@@ -73,6 +74,11 @@ def _embed_prompt(text: str) -> bytes | None:
             vec = body.get('embedding')
         if not vec:
             return None
+        # L2-normalize so the 1-dist²/2 cosine identity in _search_vector holds.
+        # The embedding server returns un-normalized vectors (EmbeddingService
+        # normalizes client-side); without this, issue-surfacing scores are wrong.
+        norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+        vec = [x / norm for x in vec]
         return struct.pack(f'{len(vec)}f', *vec)
     except Exception:
         return None
@@ -219,7 +225,7 @@ def main() -> None:
 
         # Vector search with FTS fallback (kb-zma pattern)
         candidates: list[dict] = []
-        if not ash_down():
+        if not embedding_down():
             blob = _embed_prompt(prompt_text[:2000])
             if blob:
                 candidates = _search_vector(conn, blob, project)

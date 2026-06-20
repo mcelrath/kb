@@ -246,8 +246,6 @@ class ConceptRepository(EntityRepository):
                     "SELECT theorem_id FROM concept_theorems WHERE concept_id = ?", (c["id"],)
                 ).fetchall()
                 refs = " " + " ".join(f"[{r[0]}]" for r in theorem_ids) if theorem_ids else ""
-                prefix = "VERIFIED" if c["status"] == "verified" else "active"
-                label = c["claim"].split(":")[0] if ":" in c["claim"] else c["id"]
                 claim_body = c["claim"]
                 lines.append(f"- {claim_body}{refs}")
 

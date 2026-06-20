@@ -713,9 +713,6 @@ _MAINT_CMDS = [
     ("reembed",       "re-embed all findings  [--force]  (required after an embedding model/dim change)"),
 ]
 
-_LEGACY_CMDS = None  # no legacy commands remain
-
-
 def _print_main_help():
     W = 14  # column width for command names
     if AGENT_MODE:
@@ -765,11 +762,6 @@ def _print_main_help():
         print(f"  {dim}defaults to the kb-native tracker; a non-empty legacy .beads warns to run kbt bead-migrate{reset}")
         print(f"{bold}Server:{reset}  {dim}kb configure --install-server  installs the kb-server systemd --user unit{reset}")
         print()
-
-        if _LEGACY_CMDS:
-            print(f"{bold}Legacy{reset} {dim}(still work; run with --help for flags):{reset}")
-            print(f"  {dim}{_LEGACY_CMDS}{reset}")
-            print()
 
         print(f"{bold}Options:{reset}")
         print(f"  {dim}{'--db PATH':<{W}}database path (default: ~/.cache/kb/knowledge.db){reset}")

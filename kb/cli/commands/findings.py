@@ -154,14 +154,45 @@ def _print_section(kb, section_id: str) -> None:
         print(f"\n{body}")
 
 
+def _print_document(kb, doc_id: str) -> None:
+    """Render a document (doc-*) by id: header + heading-tree TOC of its sections."""
+    from kb.entities.document_sections import DocumentSectionsRepository
+    from kb.entities.documents import DocumentsRepository
+
+    doc = DocumentsRepository(kb.conn).get(doc_id)
+    if not doc:
+        print(f"Document not found: {doc_id}")
+        sys.exit(1)
+
+    proj = f" ({doc['project']})" if doc.get("project") else ""
+    dtype = f" [{doc['doc_type']}]" if doc.get("doc_type") else ""
+    print(f"{doc['title']}{proj}{dtype}  {doc_id}")
+    if doc.get("summary"):
+        print(f"  {doc['summary']}")
+
+    sections = DocumentSectionsRepository(kb.conn).list_by_document(doc_id)
+    if not sections:
+        print("  (no sections)")
+        return
+    print(f"\n{len(sections)} sections — `kb get <sec-id>` to read one:")
+    for s in sections:
+        level = int(s["level"] or 1)
+        heading = s["heading"] or "(no heading)"
+        print(f"{'  ' * (level - 1)}{'#' * level} {heading}  [{s['id']}  path={s['path']}]")
+
+
 def run_get(kb, args) -> None:
     from kb.markdown import format_finding_markdown
 
-    # A `sec-*` id is a document section (surfaced by `kb search`), not a finding.
-    # Resolve it against document_sections so a search hit is directly readable —
-    # otherwise `kb get <sec-id>` dead-ends on "Finding not found".
+    # A `sec-*` id is a document section and `doc-*` is a document root (both
+    # surfaced by `kb search`/`kb doc list`), not findings. Resolve them directly
+    # so a search/list hit is readable — otherwise `kb get <id>` dead-ends on
+    # "Finding not found" for an id the tool itself printed.
     if str(args.id).startswith("sec-"):
         _print_section(kb, str(args.id))
+        return
+    if str(args.id).startswith("doc-"):
+        _print_document(kb, str(args.id))
         return
 
     try:
