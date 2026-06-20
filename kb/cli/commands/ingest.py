@@ -91,5 +91,19 @@ def run_ingest(kb, args, ingest_parser) -> None:
         if rc:
             sys.exit(rc)
 
+    elif args.ingest_cmd == "md":
+        from kb.ingest.markdown import run
+        rc = run(
+            file_path=Path(args.file),
+            db_path=args.db,
+            doc_type=getattr(args, "doc_type", None),
+            project=getattr(args, "project", None),
+            title=getattr(args, "title", None),
+            summary=getattr(args, "summary", None),
+            dry_run=getattr(args, "dry_run", False),
+        )
+        if rc:
+            sys.exit(rc)
+
     else:
         ingest_parser.print_help()

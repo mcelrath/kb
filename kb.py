@@ -786,7 +786,14 @@ def main():
     add_parser.add_argument("--no-auto-tag", action="store_true", help="Skip auto-tagging")
     add_parser.add_argument("--async", dest="async_add", action="store_true",
         help="Fire-and-forget: write to queue file and return immediately without waiting "
-             "for embedding. Use when embedding server may be slow or unavailable.")
+             "for embedding. Use when embedding server may be slow or unavailable. "
+             "Note: when --file is a multi-section markdown, --async queues each section "
+             "as a separate pending entry (not a single blob).")
+    _split_group = add_parser.add_mutually_exclusive_group()
+    _split_group.add_argument("--split", dest="split", action="store_true", default=None,
+        help="Force multi-section split for markdown --file (ingest as document + sections)")
+    _split_group.add_argument("--no-split", dest="no_split", action="store_true", default=False,
+        help="Disable multi-section detection; always add as a single finding")
 
     # Search command
     search_parser = _add_parser("search", "Search findings", agent_visible=True)
@@ -947,6 +954,15 @@ def main():
         help="Specific files to process (overrides --root glob)")
     ingest_tex_parser.add_argument("--project", default="algebraic-genesis")
     ingest_tex_parser.add_argument("--dry-run", action="store_true")
+
+    ingest_md_parser = ingest_sub.add_parser("md", help="Ingest a markdown file into document + sections by heading tree")
+    ingest_md_parser.add_argument("file", help="Markdown file to ingest (.md or .markdown)")
+    ingest_md_parser.add_argument("-p", "--project", default=None, help="Project tag")
+    ingest_md_parser.add_argument("--doc-type", choices=["internal", "reference", "spec", "paper", "standard"],
+        default=None, help="Document type (default: inferred from front-matter or 'internal')")
+    ingest_md_parser.add_argument("--title", default=None, help="Document title (default: filename stem)")
+    ingest_md_parser.add_argument("--summary", default=None, help="Document summary")
+    ingest_md_parser.add_argument("--dry-run", action="store_true")
 
     ingest_personas_parser = ingest_sub.add_parser(
         "personas",
@@ -1238,6 +1254,55 @@ def main():
             for _err in _lean_errors:
                 print(f"Error [lean: tag]: {_err}", file=sys.stderr)
             sys.exit(1)
+
+        # Multi-section markdown detection for `kb add -f <file.md>`.
+        # If the file is markdown with >=2 heading-bounded sections and --no-split
+        # is not set, route to the markdown chunker (document + sections) instead
+        # of the single-finding path.
+        _do_split = False
+        if args.file and not getattr(args, "no_split", False):
+            _md_exts = {".md", ".markdown"}
+            if args.file.suffix.lower() in _md_exts:
+                from kb.ingest.markdown import count_heading_sections
+                _n_sections = count_heading_sections(_add_content)
+                _do_split = _n_sections >= 2 or getattr(args, "split", False)
+
+        if _do_split:
+            from kb.ingest.markdown import ingest_markdown_file
+            if args.async_add:
+                # Queue each section as its own pending entry using _queue_async_add.
+                # We need the raw intermediate list to do this without hitting the DB.
+                from kb.ingest.markdown import (
+                    _parse_front_matter, _parse_sections, _build_intermediate,
+                    _compute_paths,
+                )
+                _meta, _body = _parse_front_matter(_add_content)
+                _raw_secs = _parse_sections(_body)
+                _inter = _build_intermediate(_raw_secs)
+                _compute_paths(_raw_secs, _inter)
+                for _entry in _inter:
+                    _queue_async_add(
+                        content=_entry["content"] or "",
+                        finding_type=args.type,
+                        project=args.project,
+                        sprint=args.sprint,
+                        tags=args.tags,
+                        evidence=args.evidence,
+                        summary=None,
+                    )
+                print(f"Queued: {len(_inter)} sections from {args.file.name}")
+                sys.exit(0)
+            else:
+                _doc_id, _sec_ids = ingest_markdown_file(
+                    args.file,
+                    db_path=args.db,
+                    project=args.project,
+                )
+                print(f"doc-id: {_doc_id}")
+                print(f"sections: {len(_sec_ids)}")
+                for _sid in _sec_ids:
+                    print(f"  {_sid}")
+                sys.exit(0)
 
         if args.async_add:
             _queue_async_add(
