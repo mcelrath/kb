@@ -48,6 +48,12 @@ class DocumentSectionsRepository(EntityRepository):
         if kind not in VALID_KINDS:
             raise ValueError(f"Invalid kind: {kind!r}. Must be one of {VALID_KINDS}")
 
+        # For documents, the section/subsection TITLE is a better one-line summary
+        # than an (absent) LLM summary — and avoids display paths falling back to
+        # raw content (e.g. a table's HTML). Default summary to the heading.
+        if summary is None and heading:
+            summary = heading
+
         now = datetime.now().isoformat()
         section_id = f"sec-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}"
 
