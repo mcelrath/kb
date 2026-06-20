@@ -6,8 +6,7 @@ Read this BEFORE starting your task. This is a condensed agent-targeted summary 
 
 `kb` is a SQLite + sqlite-vec powered findings database for tracking successes, failures,
 experiments, and discoveries across AI/physics projects. It exposes a Python library
-(`kb/`), a CLI wrapper (`~/.local/bin/kb`), and two MCP servers (`kb_mcp_core.py`,
-`kb_mcp_advanced.py`) consumed by Claude Code.
+(`kb/`) and a CLI (`kb`, on PATH) consumed by Claude Code and its hooks.
 
 ## Non-Negotiable Constraints
 
@@ -38,8 +37,7 @@ experiments, and discoveries across AI/physics projects. It exposes a Python lib
 | `kb/llm/analysis.py` | LLM-based summarization, query expansion |
 | `kb/hooks/` | Claude Code PreToolUse/PostToolUse hook implementations |
 | `kb.py` | CLI entry point; subcommands mirror facade methods |
-| `kb_mcp_core.py` | MCP tools: add, search, list, get, correct, stats |
-| `kb_mcp_advanced.py` | MCP tools: notations, errors, docs, scripts |
+| `kb/issue_cli.py` | `kbt` issue-tracker CLI (kb-native, bd-compatible) |
 | `scripts/ingest_lean_direct.py` | Lean theorem ingestion |
 | `scripts/ingest_python.py` | Python symbol ingestion |
 | `scripts/ingest_tex.py` | LaTeX annotation ingestion |
@@ -59,7 +57,6 @@ experiments, and discoveries across AI/physics projects. It exposes a Python lib
 | Embedding cache unbounded growth | `kb/core/embedding.py` | evict at 500 entries |
 | `similarity = 1 - distance` | search results | use `1 - (d**2)/2` for L2-norm |
 | Theorem duplicate insert | `TheoremRepository.add()` | upsert by name |
-| MCP tool returning bare string | any `@mcp.tool()` | return dict with id + metadata |
 | `HTTP 500` from embedding | `kb/core/embedding.py` | retry with exponential backoff (max_retries=5) |
 | `RemoteDisconnected` LLM | `kb/llm/client.py` | retry; check tardis:9510 |
 | `format()` on Lean/LaTeX curly braces | `ingest_lean_direct.py` | escape `{` as `{{` before format |
@@ -75,6 +72,7 @@ experiments, and discoveries across AI/physics projects. It exposes a Python lib
 | SQL in `kb/facade.py` | Architecture violation; SQL belongs in entity repos |
 | Duplicate theorem insert on re-ingest | Use upsert-by-name in `TheoremRepository` |
 | Embedding server assumed always available | Add retry + graceful degradation |
+| Hardcoding `~/.local/bin/kb` | `kb`/`kbt` are on PATH; call them by name |
 
 ## Epistemological Rules
 
@@ -83,8 +81,19 @@ experiments, and discoveries across AI/physics projects. It exposes a Python lib
 3. 5 rounds of kb-research minimum, not 2.
 4. Verify, don't infer. Read files; don't describe from grep output.
 5. State evidence. Every claim cites file:line, kb-ID, or command output.
-6. `~/.local/bin/kb add` before returning. Checkpoint every 10 tool uses.
-7. Use `project="knowledge-base"` for all `~/.local/bin/kb add`/`kb search` calls.
+6. `kb add` before returning. Checkpoint every 10 tool uses.
+7. Use `project="knowledge-base"` for all `kb add`/`kb search` calls.
+
+## Tracking: kbt (durable) vs the harness task-list (ephemeral)
+
+Two tools, two scopes — NEVER parallel trackers. **kbt** (`kbt create/ready/close`, kb-native,
+bd-compatible) is the DURABLE source of truth: epics/tasks/deps/priorities that survive the
+session. The **harness task-list (TaskCreate/TodoWrite)** is a session-local execution view —
+the step checklist for the ONE kbt task you are executing now; it dies with the session, so
+nothing may exist only there. The harness "consider TaskCreate" reminder is advisory: use a
+task-list only for a claimed kbt task with ≥3 sequential steps, mirroring that task's steps
+(not other kbt tasks, not a single edit/dispatch). Dispatching an agent is NOT a todo — it
+serves a kbt task. Finish → tick todos → `kbt close` (mandatory) → commit.
 
 ## Stopping Conditions
 
