@@ -22,30 +22,36 @@ experiments, and discoveries across AI/physics projects. It exposes a Python lib
 
 | Module | Purpose |
 |--------|---------|
-| `kb/core/schema.py` | DDL, table definitions, migration |
-| `kb/core/connection.py` | SQLite connection, WAL mode, retry |
+| `kb/core/schema.py` | DDL, table definitions, status/dep CHECK constraints |
+| `kb/core/connection.py` | SQLite conn; WAL mode; `busy_timeout=120000` (every statement BLOCKS up to 120s on a locked db); `wal_autocheckpoint` |
+| `kb/core/retry.py` | `@retry_on_locked` — exp-backoff + rollback-before-retry write wrapper (kbt write methods); layered on busy_timeout |
 | `kb/core/embedding.py` | Remote embedding calls + LRU cache |
-| `kb/facade.py` | Public KnowledgeBase class; delegates to entity repos |
-| `kb/entities/base.py` | BaseRepository; raw SQL in entity repos, not facade |
-| `kb/entities/findings.py` | Core findings CRUD + supersession chains |
+| `kb/facade.py` | Public `KnowledgeBase` class. Holds findings CRUD + supersession SQL DIRECTLY (findings are NOT a separate entity repo); delegates issues/theorems/documents/etc to their repos |
+| `kb/entities/base.py` | BaseRepository |
+| `kb/entities/issues.py` | `IssuesRepository` — kbt issue tracker (create/ready/blocked/deps/claim) |
 | `kb/entities/theorems.py` | Lean theorem entries, finding_id, drift detection |
-| `kb/entities/documents.py` | Document citations, doc-finding links |
+| `kb/entities/documents.py` + `document_sections.py` | Document citations + ingested section chunks (PDF/markdown) |
 | `kb/entities/scripts.py` | Script registry (key: "filename") |
 | `kb/entities/concepts.py` | Notation/concept tracking |
+| `kb/entities/bridge.py` | Agent-bridge message ingest/embed |
+| `kb/bd_import.py` | bd→kb migration importer + `verify_fidelity` (used by `kbt bead-migrate`) |
 | `kb/search/hybrid.py` | FTS5 + vector hybrid search, BM25 + cosine fusion |
 | `kb/llm/client.py` | LLM completion client (tardis:9510), thinking=false |
 | `kb/llm/analysis.py` | LLM-based summarization, query expansion |
 | `kb/hooks/` | Claude Code PreToolUse/PostToolUse hook implementations |
-| `kb.py` | CLI entry point; subcommands mirror facade methods |
-| `kb/issue_cli.py` | `kbt` issue-tracker CLI (kb-native, bd-compatible) |
+| `kb.py` | `kb` CLI entry point; AGENT_MODE + color/format helpers (`format_results`, `_fmt_one_line`, `format_finding`); dispatches to `kb/cli/commands/` |
+| `kb/cli/commands/*.py` | Per-command handlers (findings, admin, maintenance, ingest, bridge, lean, doc, surface, serve, misc) |
+| `kb/issue_cli.py` | `kbt` issue-tracker CLI (kb-native, bd-compatible) + backend resolution (kb default; legacy `.beads` warns) |
 | `scripts/ingest_lean_direct.py` | Lean theorem ingestion |
 | `scripts/ingest_python.py` | Python symbol ingestion |
 | `scripts/ingest_tex.py` | LaTeX annotation ingestion |
 
 ## Key Patterns
 
-- `KnowledgeBase` in `kb/facade.py` is the single public API; CLI and MCP both go through it
-- Entity repos in `kb/entities/` own all SQL; facade only calls repo methods
+- `KnowledgeBase` in `kb/facade.py` is the single public library API; the `kb` CLI goes through it. (The MCP servers were removed; CLI only.)
+- Entity repos in `kb/entities/` own their SQL. EXCEPTION: findings CRUD lives directly in `facade.py` (historical — there is no `entities/findings.py`).
+- All writes BLOCK-until-complete under contention: `busy_timeout=120s` at the connection (SQLite's own backoff), plus `@retry_on_locked` on kbt write methods. No code path should hold a long write lock; bulk jobs commit incrementally.
+- Output is colorized for users, plain for agents (gated by `AGENT_MODE` / `KB_AGENT` / `CLAUDECODE`); currently wired for `kb search/list/related` (epic kb-431950 extends this everywhere + terminal-width truncation).
 - `TheoremRepository.add()` does name-based reconciliation (upsert by name, not duplicate insert)
 - Lean-verify subcommand checks theorem drift between KB and current Lean source
 
