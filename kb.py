@@ -742,6 +742,7 @@ def main():
     from kb.cli.commands import serve as _cmd_serve
     from kb.cli.commands import misc as _cmd_misc
     from kb.cli.commands import surface as _cmd_surface
+    from kb.cli.commands import doc as _cmd_doc
 
     parser = argparse.ArgumentParser(
         description="Knowledge Base",
@@ -978,6 +979,29 @@ def main():
         help="Report stale personas: file gone / reviewers.yaml newer / dir-count changed")
     ingest_personas_parser.add_argument("-p", "--project", dest="project_filter",
         help="Filter to a specific project name")
+
+    # Doc command group: document navigation (list/toc/get)
+    doc_parser = _add_parser("doc", "Navigate ingested documents (list, toc, get)",
+                             agent_visible=True)
+    doc_sub = doc_parser.add_subparsers(dest="doc_cmd")
+
+    doc_list_parser = doc_sub.add_parser("list", help="List document roots")
+    doc_list_parser.add_argument("-p", "--project", help="Filter by project")
+    doc_list_parser.add_argument("--type", dest="type",
+        choices=["spec", "paper", "standard", "internal", "reference"],
+        help="Filter by doc type")
+    doc_list_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    doc_toc_parser = doc_sub.add_parser("toc", help="Print heading tree for a document")
+    doc_toc_parser.add_argument("doc_id", help="Document ID")
+    doc_toc_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    doc_get_parser = doc_sub.add_parser("get", help="Fetch a section by path")
+    doc_get_parser.add_argument("doc_id", help="Document ID")
+    doc_get_parser.add_argument("--path", required=True, help="Section path (e.g. '1.2.3')")
+    doc_get_parser.add_argument("--subtree", action="store_true",
+        help="Include all descendant sections")
+    doc_get_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     # Bridge command group: ingest/search/promote agent bridge messages
     bridge_parser = _add_parser("bridge", "Ingest/search/promote agent bridge messages",
@@ -1351,6 +1375,7 @@ def main():
         "related": lambda kb, args: _cmd_maintenance.run_related(
             kb, args, _fmt_one_line, format_finding),
         "ingest": lambda kb, args: _cmd_ingest.run_ingest(kb, args, ingest_parser),
+        "doc": lambda kb, args: _cmd_doc.run_doc(kb, args, doc_parser),
         "bridge": lambda kb, args: _cmd_bridge.run_bridge(kb, args, bridge_parser),
         "reconcile": _cmd_misc.run_reconcile,
         "notation-audit": _cmd_misc.run_notation_audit,

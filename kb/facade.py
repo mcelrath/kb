@@ -1550,18 +1550,18 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         commit_every: int = 50,
         force_dim: int | None = None,
     ) -> dict[str, Any]:
-        """Re-generate embeddings for all entities across all 7 vec tables.
+        """Re-generate embeddings for all entities across all 8 vec tables.
 
-        Covers ALL seven _vec tables:
+        Covers ALL eight _vec tables:
           findings_vec, scripts_vec, lean_theorems_vec, concepts_vec, issues_vec,
-          symbols_vec, tex_annotations_vec.
+          symbols_vec, tex_annotations_vec, document_sections_vec.
 
         For symbols and tex_annotations, BOTH the base-table `embedding BLOB`
         column AND the _vec row are regenerated (mirroring add_symbol /
         add_tex_annotation dual-write).
 
         Dim-change handling: if force_dim is provided (or stored dim != configured dim),
-        all 7 _vec tables are DROPPED and RECREATED at the new dim BEFORE the reembed
+        all 8 _vec tables are DROPPED and RECREATED at the new dim BEFORE the reembed
         loop.  The drop is gated on coverage — we only drop tables we will repopulate.
 
         POST-REEMBED ASSERTION: after each table, verifies that _vec rowcount matches
@@ -1597,7 +1597,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             stored_dim is not None and stored_dim != configured_dim
         )
 
-        # The 7 vec tables we own and will repopulate.
+        # The 8 vec tables we own and will repopulate.
         ALL_VEC_TABLES = [
             "findings_vec",
             "scripts_vec",
@@ -1606,6 +1606,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             "issues_vec",
             "symbols_vec",
             "tex_annotations_vec",
+            "document_sections_vec",
         ]
 
         if dim_changed:
@@ -1635,6 +1636,7 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             "issues": self.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0],
             "symbols": self.conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0],
             "tex_annotations": self.conn.execute("SELECT COUNT(*) FROM tex_annotations").fetchone()[0],
+            "document_sections": self.conn.execute("SELECT COUNT(*) FROM document_sections").fetchone()[0],
         }
         grand_total = sum(counts.values())
         print(
@@ -1809,17 +1811,29 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             base_blob_update=_update_tex_annotation_blob,
         )
 
+        # document_sections: embed embed_text if present, else content.
+        def _document_sections_text(row: Any) -> str:
+            return row["embed_text"] or row["content"] or row["heading"] or ""
+
+        _do_table(
+            "document_sections",
+            "SELECT id, embed_text, content, heading FROM document_sections",
+            "document_sections_vec",
+            _document_sections_text,
+        )
+
         # POST-REEMBED ASSERTION: each _vec must have >= base embedded-row count.
         # For findings/scripts/lean_theorems/concepts/issues: all rows should have a vec entry.
         # For symbols/tex_annotations: rows with non-null embedding should match.
         assertion_checks = [
-            ("findings_vec",        "SELECT COUNT(*) FROM findings"),
-            ("scripts_vec",         "SELECT COUNT(*) FROM scripts"),
-            ("lean_theorems_vec",   "SELECT COUNT(*) FROM lean_theorems"),
-            ("concepts_vec",        "SELECT COUNT(*) FROM concepts"),
-            ("issues_vec",          "SELECT COUNT(*) FROM issues"),
-            ("symbols_vec",  "SELECT COUNT(*) FROM symbols WHERE embedding IS NOT NULL"),
-            ("tex_annotations_vec", "SELECT COUNT(*) FROM tex_annotations WHERE embedding IS NOT NULL"),
+            ("findings_vec",           "SELECT COUNT(*) FROM findings"),
+            ("scripts_vec",            "SELECT COUNT(*) FROM scripts"),
+            ("lean_theorems_vec",      "SELECT COUNT(*) FROM lean_theorems"),
+            ("concepts_vec",           "SELECT COUNT(*) FROM concepts"),
+            ("issues_vec",             "SELECT COUNT(*) FROM issues"),
+            ("symbols_vec",            "SELECT COUNT(*) FROM symbols WHERE embedding IS NOT NULL"),
+            ("tex_annotations_vec",    "SELECT COUNT(*) FROM tex_annotations WHERE embedding IS NOT NULL"),
+            ("document_sections_vec",  "SELECT COUNT(*) FROM document_sections"),
         ]
         assertion_errors = []
         for vec_table, base_sql in assertion_checks:

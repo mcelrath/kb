@@ -31,6 +31,55 @@ class HybridSearch:
         self.embedding_service = embedding_service
         self.expand_query = expand_query
 
+    def search_sections(
+        self,
+        query_embedding: bytes,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Search document_sections via KNN on document_sections_vec.
+
+        Returns section hits annotated with breadcrumb, doc_id, and path.
+        Result dicts have result_type='section' plus standard fields.
+        """
+        from ..entities.document_sections import DocumentSectionsRepository
+
+        sql = """
+            SELECT ds.*, dsv.distance
+            FROM document_sections ds
+            JOIN document_sections_vec dsv ON ds.id = dsv.id
+            WHERE dsv.embedding MATCH ?
+            AND k = ?
+        """
+        try:
+            rows = self.conn.execute(sql, [query_embedding, limit * 3]).fetchall()
+        except Exception:
+            return []
+
+        sections_repo = DocumentSectionsRepository(self.conn)
+        results: list[dict[str, Any]] = []
+        for rank, row in enumerate(rows, 1):
+            distance = float(row["distance"])
+            similarity = 1 - (distance ** 2) / 2
+            breadcrumb = sections_repo.breadcrumb(row["id"])
+            results.append({
+                "result_type": "section",
+                "id": row["id"],
+                "doc_id": row["document_id"],
+                "path": row["path"],
+                "heading": row["heading"],
+                "kind": row["kind"],
+                "content": row["content"],
+                "summary": row["summary"],
+                "status": row["status"],
+                "breadcrumb": breadcrumb,
+                "similarity": similarity,
+                "rank": rank,
+                "score": similarity,
+            })
+
+        results.sort(key=lambda x: x["similarity"], reverse=True)
+        return results[:limit]
+
     def search(
         self,
         query: str,
@@ -48,6 +97,7 @@ class HybridSearch:
         exclude_corrections: bool = True,
         recency_weight: float = 0.1,
         exclude_ids: set[str] | None = None,
+        include_sections: bool = False,
     ) -> list[dict[str, Any]]:
         """Search findings using hybrid vector + keyword search.
 
@@ -75,6 +125,7 @@ class HybridSearch:
         vector_results: dict[str, dict[str, Any]] = {}
         fts_results: dict[str, dict[str, Any]] = {}
         degraded = False  # set when the embedding server is down -> FTS-only
+        query_embedding: bytes | None = None
 
         # Vector similarity search (instruction prefix for query embeddings).
         # The query embed fails FAST (small retry budget) so a down embedding
@@ -258,6 +309,15 @@ class HybridSearch:
             if max_score > 0:
                 for r in results:
                     r["score"] = r["score"] / max_score
+
+        # Union search: also query document_sections_vec if requested and embedding succeeded
+        if include_sections and not degraded and query_embedding is not None:
+            section_hits = self.search_sections(query_embedding, limit=limit)
+            # Filter out superseded sections
+            if not include_superseded:
+                section_hits = [s for s in section_hits if s.get("status") == "active"]
+            # Tag each as section and append (sections rank after findings by default)
+            results = results + section_hits
 
         return results[:limit]
 
