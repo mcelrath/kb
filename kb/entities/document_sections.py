@@ -54,9 +54,25 @@ class DocumentSectionsRepository(EntityRepository):
         if summary is None and heading:
             summary = heading
 
+        # Embed BEFORE opening the write transaction. The embed is a multi-second
+        # network call (with retries); doing it between INSERT and commit would
+        # hold the SQLite write lock the whole time, blocking every other kb/kbt
+        # writer past busy_timeout ("database is locked") for the entire ingest.
+        # Best-effort: a transient embed failure must not abort a large ingest —
+        # the row is still stored and can be reembedded later.
+        emb = None
+        if self.embedding_service is not None:
+            text = (embed_text or content or heading or "").strip()
+            if text:
+                try:
+                    emb = self.embedding_service.embed(text)
+                except Exception:
+                    emb = None  # embed server down/slow — store row, defer vec to reembed
+
         now = datetime.now().isoformat()
         section_id = f"sec-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}"
 
+        # Narrow write transaction: only the two fast inserts + commit hold the lock.
         _ = self.conn.execute(
             """INSERT INTO document_sections
                (id, document_id, parent_section_id, level, ordinal, heading, path,
@@ -67,23 +83,13 @@ class DocumentSectionsRepository(EntityRepository):
              content, kind, table_repr, embed_text, summary, token_count,
              content_hash, asset_path, now),
         )
-
-        # Inline embedding (best-effort): populate document_sections_vec so the
-        # section is searchable immediately. A transient embed failure must not
-        # abort a large ingest — the row is still stored and can be reembedded.
-        if self.embedding_service is not None:
-            text = (embed_text or content or heading or "").strip()
-            if text:
-                try:
-                    emb = self.embedding_service.embed(text)
-                    self.conn.execute(
-                        "DELETE FROM document_sections_vec WHERE id = ?", (section_id,))
-                    self.conn.execute(
-                        "INSERT INTO document_sections_vec (id, embedding) VALUES (?, ?)",
-                        (section_id, emb),
-                    )
-                except Exception:
-                    pass  # embed server down/slow — section stored, vec deferred to reembed
+        if emb is not None:
+            self.conn.execute(
+                "DELETE FROM document_sections_vec WHERE id = ?", (section_id,))
+            self.conn.execute(
+                "INSERT INTO document_sections_vec (id, embedding) VALUES (?, ?)",
+                (section_id, emb),
+            )
 
         self.conn.commit()
         return section_id
