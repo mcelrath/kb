@@ -349,3 +349,71 @@ def test_end_to_end_dry_run(tmp_path):
         dry_run=True,
     )
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Mapping coverage WITHOUT docling — inject a fake docling item-type module so
+# _build_intermediate_pdf's docling->intermediate mapping runs dependency-free.
+# (The real docling path is e2e-verified separately in the doc-ingest venv.)
+# ---------------------------------------------------------------------------
+
+def test_build_intermediate_pdf_mapping_mocked_docling():
+    import sys
+    import types
+
+    mod = types.ModuleType("docling.datamodel.document")
+
+    class TextItem: pass
+    class TableItem: pass
+    class SectionHeaderItem: pass
+    class PictureItem: pass
+
+    mod.TextItem = TextItem
+    mod.TableItem = TableItem
+    mod.SectionHeaderItem = SectionHeaderItem
+    mod.PictureItem = PictureItem
+
+    class _Prov:
+        def __init__(self, page_no): self.page_no = page_no
+
+    txt = TextItem()
+    txt.text = "Body prose for the subsection."
+    txt.prov = [_Prov(1)]  # docling 1-based -> page 0
+
+    tbl = TableItem()
+    tbl.prov = [_Prov(1)]
+    tbl.export_to_html = lambda doc: (
+        "<table><tr><td>FieldName</td><td>Bits</td></tr>"
+        "<tr><td>OP</td><td>[29:23]</td></tr></table>"
+    )
+
+    doc = MagicMock()
+    doc.iterate_items.return_value = [(txt, 0), (tbl, 0)]
+    doc.tables = [tbl]
+
+    outline = [
+        {"level": 1, "heading": "Chapter 1", "page": 0},
+        {"level": 2, "heading": "1.1 Sub", "page": 0},
+    ]
+
+    with patch.dict(sys.modules, {"docling.datamodel.document": mod}):
+        from kb.ingest.pdf import _build_intermediate_pdf
+        intermediate, all_sections, section_paths = _build_intermediate_pdf(doc, outline)
+
+    # Outline -> section tree: preamble '0', chapter '1', subsection '1.1'.
+    assert section_paths == ["0", "1", "1.1"]
+
+    kinds = {e["kind"] for e in intermediate}
+    assert "prose" in kinds and "table" in kinds
+
+    # Table leaf: HTML content + linearized embed shadow + '.t' path suffix.
+    tbl_leaf = next(e for e in intermediate if e["kind"] == "table")
+    assert "<table>" in tbl_leaf["content"]
+    assert "OP" in tbl_leaf["embed_text"] and "[29:23]" in tbl_leaf["embed_text"]
+    assert ".t1" in tbl_leaf["path"]
+
+    # Prose leaf carries the body text, parented under the deepest page-0 section.
+    prose_leaf = next(
+        e for e in intermediate if e["kind"] == "prose" and "Body prose" in (e["content"] or "")
+    )
+    assert prose_leaf["path"] == "1.1"
