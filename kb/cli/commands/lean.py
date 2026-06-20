@@ -8,6 +8,8 @@ import re
 import sys
 from pathlib import Path
 
+import kb.cli.output as output
+
 
 # ---------------------------------------------------------------------------
 # Tag vocabulary validator (was _validate_lean_tags inside main())
@@ -226,16 +228,16 @@ def run_lean_verify(kb, args) -> None:
                 )
 
         if drift_issues:
-            print(f"DRIFT DETECTED on {args.id}:")
+            print(output.c(f"DRIFT DETECTED on {args.id}:", "red"))
             for d in drift_issues:
-                print(f"  {d}")
+                print(output.c(f"  {d}", "yellow"))
             print(f"  File: {lean_file}")
             print(f"  Cited line: {cited_line}")
             print(f"  Tags: {', '.join(lean_tags)}")
             print("  Action: use 'kb correct' to update the entry or fix the proof.")
             sys.exit(3)
         else:
-            print(f"CLEAN: {args.id}")
+            print(output.c(f"CLEAN: {args.id}", "green"))
             print(f"  File: {lean_file}")
             print(f"  lean-audit: status={build_status} sorry={sorry_count}")
             if nonstd:
@@ -286,11 +288,22 @@ def run_queue_defer(kb, args) -> None:
         if not rows:
             print("lean_work_queue: no deferred rows")
         else:
-            print(f"lean_work_queue: {len(rows)} deferred row(s)")
+            print(output.c(f"lean_work_queue: {len(rows)} deferred row(s)", "bold"))
             for rid, file, decl, cls, readiness, defer_reason, defer_detail, ts in rows:
                 fname = _op.basename(file or "?")
                 detail_str = f" ({defer_detail})" if defer_detail else ""
-                print(f"  {rid[:10]}  {readiness} {cls}: {fname}::{decl or '(file-level)'}  reason={defer_reason}{detail_str}  [{ts}]")
+                row = (
+                    "  "
+                    + output.c(rid[:10], "cyan")
+                    + "  "
+                    + output.c(readiness, "yellow")
+                    + " "
+                    + output.c(cls, "bold")
+                    + f": {fname}::{decl or '(file-level)'}"
+                    + output.c(f"  reason={defer_reason}{detail_str}", "dim")
+                    + f"  [{ts}]"
+                )
+                print(output.fit_line(row))
         sys.exit(0)
 
     row_id = args.row_id
@@ -301,7 +314,7 @@ def run_queue_defer(kb, args) -> None:
 
     if args.reason is None:
         kb.clear_defer_reason(row_id)
-        print(f"queue-defer: cleared defer on {row_id[:10]} (row re-activated)")
+        print(output.c(f"queue-defer: cleared defer on {row_id[:10]} (row re-activated)", "green"))
         sys.exit(0)
 
     reason = args.reason
@@ -318,5 +331,7 @@ def run_queue_defer(kb, args) -> None:
 
     kb.set_defer_reason(row_id, reason, detail or None)
     _, cls, readiness, _ = existing
-    print(f"queue-defer: deferred {row_id[:10]} ({readiness} {cls}) — reason: {reason}" + (f" ({detail})" if detail else ""))
+    msg = (f"queue-defer: deferred {row_id[:10]} ({readiness} {cls}) — reason: {reason}"
+           + (f" ({detail})" if detail else ""))
+    print(output.c(msg, "yellow"))
     sys.exit(0)

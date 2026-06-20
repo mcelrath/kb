@@ -19,6 +19,8 @@ import json
 import sys
 from pathlib import Path
 
+import kb.cli.output as output
+
 DEFAULT_JSONL = Path.home() / ".agent-bridge" / "messages.jsonl"
 
 
@@ -93,8 +95,17 @@ def _run_search(kb, args) -> None:
         snippet = (r.get("body") or "").replace("\n", " ")[:120]
         sim = r.get("similarity", 0)
         subject = r.get("subject") or "(no subject)"
-        print(f"[{r['id']}] {r.get('sender', '?')} ({sim:.2f}) | {subject}")
-        print(f"    {snippet}")
+        header = (
+            output.c(f"[{r['id']}]", "cyan")
+            + " "
+            + output.c(r.get("sender", "?"), "bold")
+            + " "
+            + output.c(f"({sim:.2f})", output.sim_color(sim))
+            + output.c(" | ", "dim")
+            + subject
+        )
+        print(output.fit_line(header))
+        print(output.fit_line(output.c(f"    {snippet}", "dim")))
 
 
 def _run_promote(kb, args) -> None:
@@ -317,9 +328,17 @@ def _run_recv(args) -> None:
         print("(no messages)")
         return
     for m in msgs:
-        print(f"[#{m.get('id')}] from {m.get('sender')}: {m.get('subject', '')}")
+        header = (
+            output.c(f"[#{m.get('id')}]", "cyan")
+            + output.c(" from ", "dim")
+            + output.c(str(m.get("sender")), "bold")
+            + output.c(": ", "dim")
+            + (m.get("subject") or "")
+        )
+        print(output.fit_line(header))
         b = (m.get("body") or "").strip()
         if b:
+            # body is multi-line; print up to 400 chars but do not truncate per-line
             print(f"    {b[:400]}")
 
 
