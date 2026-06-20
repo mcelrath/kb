@@ -84,8 +84,9 @@ class TestCliAdd:
     the in-process fast-fail-and-queue fallback fires.
     """
 
-    def test_add_output_shape(self):
+    def test_add_output_shape(self, tmp_path):
         result = _run(
+            "--db", str(tmp_path / "char.db"),
             "add", "characterization-test-entry-for-cli-tests",
             "-t", "discovery",
             "-p", "claude",
@@ -98,9 +99,10 @@ class TestCliAdd:
             f"Unexpected add output: stdout={result.stdout!r} stderr={result.stderr!r}"
         )
 
-    def test_add_returns_kb_id_format(self):
+    def test_add_returns_kb_id_format(self, tmp_path):
         """On the embedded branch, output has 'Added: kb-YYYYMMDD-HHMMSS-xxxxxx'."""
         result = _run(
+            "--db", str(tmp_path / "char.db"),
             "add", "another-characterization-test-probe",
             "-t", "discovery",
             "-p", "claude",
@@ -120,8 +122,9 @@ class TestCliAdd:
         parts = kb_id.split("-")
         assert len(parts) == 4, f"Expected 4 dash-parts in {kb_id!r}"
 
-    def test_add_exit_code_zero(self):
+    def test_add_exit_code_zero(self, tmp_path):
         result = _run(
+            "--db", str(tmp_path / "char.db"),
             "add", "exit-code-test-probe",
             "-t", "discovery",
             "-p", "claude",

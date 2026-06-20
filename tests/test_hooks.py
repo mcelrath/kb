@@ -12,6 +12,7 @@ stand up a threaded mock server returning canned messages instead of the live on
 """
 import json
 import os
+import socket
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -213,8 +214,10 @@ def test_owed_reply_defer_clears_block(tmp_path):
 # kb-bridge-watch.sh  (loopback -> ash rewrite; the sandbox-reachability fix)
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("given,expect_host", [
-    ("http://localhost:8765", "ash"),
-    ("http://127.0.0.1:8765", "ash"),
+    # loopback rewrites to THIS host's name (script uses $(hostname)) — not a
+    # hardcoded 'ash'; the suite is host-portable (was ash-only; kb-8552d1 sibling).
+    ("http://localhost:8765", socket.gethostname()),
+    ("http://127.0.0.1:8765", socket.gethostname()),
     ("http://ash:8765", "ash"),
     ("http://tardis:9510", "tardis"),
 ])
