@@ -373,6 +373,29 @@ def _fmt_age(created_at: str | None) -> str:
 
 def _fmt_one_line(finding: dict) -> str:
     """One-line summary for search/list/related. Colored in user mode, plain in agent mode."""
+    # Document-section hits (from ingested PDFs/markdown) have no finding `type`
+    # (they carry result_type='section' + kind); render a DOC tag + path instead
+    # of falling through to '???'.
+    if finding.get("result_type") == "section":
+        kind = finding.get("kind", "prose")
+        tag = {"table": "DOC·tbl", "figure": "DOC·fig"}.get(kind, "DOC")
+        sim = finding.get("similarity")
+        path = finding.get("path", "")
+        text = (finding.get("heading")
+                or (finding.get("content") or "").split("\n")[0][:100])
+        proj = finding.get("project") or "?"
+        if AGENT_MODE:
+            sim_str = f" ({sim:.2f})" if sim is not None else ""
+            return f"{finding['id']}{sim_str} [{tag} {path}] ({proj})  {text}"
+        dim = "\033[2m"; reset = "\033[0m"
+        if sim is not None:
+            sc = "\033[32m" if sim >= 0.7 else "\033[33m" if sim >= 0.5 else "\033[31m"
+            sim_str = f" {sc}({sim:.2f}){reset}"
+        else:
+            sim_str = ""
+        return (f"\033[36m[{tag} {path}]{reset} {dim}{finding['id']}{reset}"
+                f"{sim_str} {dim}({proj}){reset}  {text}")
+
     text = finding.get("summary") or finding["content"].split("\n")[0][:100]
     sim = finding.get("similarity")
 
