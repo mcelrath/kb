@@ -467,6 +467,33 @@ SCHEMA_SQL = """
     CREATE INDEX IF NOT EXISTS idx_persona_index_name ON persona_index(name);
     CREATE INDEX IF NOT EXISTS idx_persona_index_finding ON persona_index(finding_id);
 
+    -- Hierarchical document sections (chunks of ingested documents)
+    CREATE TABLE IF NOT EXISTS document_sections (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        parent_section_id TEXT REFERENCES document_sections(id),
+        level INT NOT NULL,
+        ordinal INT NOT NULL,
+        heading TEXT,
+        path TEXT NOT NULL,
+        content TEXT,
+        kind TEXT NOT NULL CHECK(kind IN ('prose', 'table', 'figure')),
+        table_repr TEXT,         -- HTML table repr for kind=table; NULL otherwise
+        embed_text TEXT,         -- linearized shadow used for embedding
+        summary TEXT,
+        token_count INT,
+        content_hash TEXT,
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded')),
+        superseded_by TEXT REFERENCES document_sections(id),
+        created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_document_sections_document ON document_sections(document_id);
+    CREATE INDEX IF NOT EXISTS idx_document_sections_parent ON document_sections(parent_section_id);
+    CREATE INDEX IF NOT EXISTS idx_document_sections_path ON document_sections(document_id, path);
+    CREATE INDEX IF NOT EXISTS idx_document_sections_status ON document_sections(status);
+    CREATE INDEX IF NOT EXISTS idx_document_sections_ordinal ON document_sections(document_id, ordinal);
+
     -- Embedding model metadata (single row; tracks configured model for reembed detection)
     CREATE TABLE IF NOT EXISTS embedding_meta (
         id INTEGER PRIMARY KEY CHECK(id=1),
@@ -562,6 +589,24 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
             embedding float[{embedding_dim}]
         )
     """)
+
+    # Create vector table for document sections
+    _ = conn.execute(f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS document_sections_vec USING vec0(
+            id TEXT PRIMARY KEY,
+            embedding float[{embedding_dim}]
+        )
+    """)
+
+    # Schema migration: add source_path and source_hash to documents
+    try:
+        _ = conn.execute("SELECT source_path FROM documents LIMIT 1")
+    except sqlite3.OperationalError:
+        _ = conn.execute("ALTER TABLE documents ADD COLUMN source_path TEXT")
+    try:
+        _ = conn.execute("SELECT source_hash FROM documents LIMIT 1")
+    except sqlite3.OperationalError:
+        _ = conn.execute("ALTER TABLE documents ADD COLUMN source_hash TEXT")
 
     # Schema migration: add summary column if not exists
     try:

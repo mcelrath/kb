@@ -27,10 +27,14 @@ class DocumentsRepository(EntityRepository):
         url: str | None = None,
         project: str | None = None,
         summary: str | None = None,
+        source_path: str | None = None,
+        source_hash: str | None = None,
     ) -> str:
         """Add an authoritative document.
 
         doc_type: spec, paper, standard, internal, reference
+        source_path: filesystem path to the source file (for ingested docs)
+        source_hash: SHA256 of the source file (for change detection on re-ingest)
         """
         if doc_type not in VALID_DOC_TYPES:
             raise ValueError(f"Invalid doc_type: {doc_type}. Must be one of {VALID_DOC_TYPES}")
@@ -39,9 +43,10 @@ class DocumentsRepository(EntityRepository):
         doc_id = f"doc-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}"
 
         _ = self.conn.execute(
-            """INSERT INTO documents (id, title, url, doc_type, project, summary, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'active', ?)""",
-            (doc_id, title, url, doc_type, project, summary, now)
+            """INSERT INTO documents
+               (id, title, url, doc_type, project, summary, status, created_at, source_path, source_hash)
+               VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
+            (doc_id, title, url, doc_type, project, summary, now, source_path, source_hash)
         )
         self.conn.commit()
         return doc_id
