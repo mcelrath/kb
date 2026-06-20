@@ -36,18 +36,23 @@ print(data.get('content') or data.get('new_string') or '')
 
 # Scan content. For each line containing a follow-up trigger phrase, check
 # whether that line OR any of the next 3 lines contains a tracker-ID.
-VIOLATIONS=$(echo "$CONTENT" | python3 -c "
-import sys, re
-content = sys.stdin.read()
+# (heredoc with a 'PYEOF' delimiter so the python body is free of bash expansion
+#  — lets us match backticks/$ literally for the code-span stripping below.)
+VIOLATIONS=$(CLAUDE_PLAN_CONTENT="$CONTENT" python3 <<'PYEOF' 2>/dev/null
+import os, re
+content = os.environ.get('CLAUDE_PLAN_CONTENT', '')
 lines = content.split('\n')
 
-# Trigger phrases — case-insensitive, word-boundary anchored.
+# Trigger phrases — case-insensitive, word-boundary anchored. The 'deferred'
+# branch requires the work-deferral form "deferred to" so a STATUS-value mention
+# ("deferred status", "map deferred -> open", the bd `deferred` enum) does NOT
+# count as a deferral of work. Backticked code spans are stripped first
+# (strip_code), so a `deferred` identifier never trips any branch.
 trigger_rx = re.compile(
     r'(?i)\b('
     r'out[- ]of[- ]scope|'
-    r'follow[- ]up|'
-    r'follow[- ]ups|'
-    r'deferred?(\s+to)?|'
+    r'follow[- ]ups?|'
+    r'deferred?\s+to\b|'
     r'future\s+(epic|session|work|fix|sprint)|'
     r'later\s+(epic|session)|'
     r'next\s+(epic|sprint)|'
@@ -62,18 +67,24 @@ trigger_rx = re.compile(
 # general <project>-<short-with-digit> branch.
 bd_id_rx = re.compile(r'\b(bd-[a-z0-9]+|[a-z][a-z0-9_]*[a-z0-9](?:-[a-z][a-z0-9_]*[a-z0-9])*-[a-z0-9]*[0-9][a-z0-9]*)\b')
 
+def strip_code(s):
+    # A `backticked` token is a code / identifier / status reference (e.g. the bd
+    # `deferred` STATUS value, a `follow_up()` function), NEVER a work-deferral.
+    # Strip inline-code spans before trigger matching so they can't false-fire.
+    return re.sub(r'`[^`]*`', '', s)
+
 # Skip section headers (### Follow-ups (in kbt)) — they're the legitimate marker.
 # Only flag bullet/sentence-level references.
 violations = []
 for i, line in enumerate(lines):
-    if not trigger_rx.search(line):
+    if not trigger_rx.search(strip_code(line)):
         continue
     # Allow if the line is a section heading with '(in bd)'/'(in kbt)' note
     stripped = line.strip()
     if re.match(r'^#+\s.*\(in (bd|kbt)\)', stripped):
         continue
     # Skip pure header lines without colon or hyphen context
-    if re.match(r'^#+\s+(out[- ]of[- ]scope|follow[- ]ups?|deferred?)\s*\$', stripped, re.IGNORECASE):
+    if re.match(r'^#+\s+(out[- ]of[- ]scope|follow[- ]ups?|deferred?)\s*$', stripped, re.IGNORECASE):
         # Header alone is allowed; the content lines below must have bd-IDs.
         continue
     # Check this line + next 3 lines for a bd-ID
@@ -85,7 +96,8 @@ for i, line in enumerate(lines):
 
 if violations:
     print('\n'.join(violations[:10]))  # cap at 10 violations
-" 2>/dev/null)
+PYEOF
+)
 
 if [ -n "$VIOLATIONS" ]; then
     cat >&2 <<EOF
