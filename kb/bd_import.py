@@ -139,6 +139,106 @@ def _merge_description_notes(description: str | None, notes: str | None) -> str 
     return description
 
 
+def _issue_fingerprint(issue: dict[str, Any], project: str | None) -> dict[str, Any]:
+    """Extract the fields that would be written to the issues table for comparison."""
+    itype = issue.get("issue_type", "task")
+    status = _normalize_status(issue.get("status"))
+    priority = issue.get("priority", 2)
+    title = issue.get("title", "")
+    description = _merge_description_notes(issue.get("description"), issue.get("notes"))
+    design_file = issue.get("design")
+    assignee = issue.get("assignee") or issue.get("owner")
+    close_reason = issue.get("close_reason")
+    created_at = issue.get("created_at", "")
+    updated_at = issue.get("updated_at", created_at)
+    started_at = issue.get("started_at")
+    closed_at = issue.get("closed_at")
+    parent_id = _derive_parent_id(issue["id"])
+    return {
+        "type": itype, "status": status, "priority": priority,
+        "title": title, "description": description, "design_file": design_file,
+        "assignee": assignee, "close_reason": close_reason, "project": project,
+        "created_at": created_at, "updated_at": updated_at,
+        "started_at": started_at, "closed_at": closed_at, "parent_id": parent_id,
+    }
+
+
+def _check_id_collisions(
+    conn: sqlite3.Connection,
+    issues_data: list[dict[str, Any]],
+    project: str | None,
+) -> None:
+    """Abort with ValueError if any export id exists in db with DIFFERENT content.
+
+    Identical re-import is allowed (idempotent). Called before any write so the
+    db is never partially modified on collision.
+
+    Raises:
+        ValueError: listing all colliding ids so the caller can surface them.
+    """
+    collisions: list[str] = []
+    for issue in issues_data:
+        issue_id: str = issue["id"]
+        row = conn.execute(
+            """SELECT type, status, priority, parent_id, title, description,
+                      design_file, assignee, close_reason, project,
+                      created_at, updated_at, started_at, closed_at
+               FROM issues WHERE id = ?""",
+            (issue_id,),
+        ).fetchone()
+        if row is None:
+            continue  # new id — fine
+
+        (
+            db_type, db_status, db_priority, db_parent_id, db_title, db_description,
+            db_design_file, db_assignee, db_close_reason, db_project,
+            db_created_at, db_updated_at, db_started_at, db_closed_at,
+        ) = row
+
+        fp = _issue_fingerprint(issue, project)
+        db_fp = {
+            "type": db_type, "status": db_status, "priority": db_priority,
+            "title": db_title, "description": db_description, "design_file": db_design_file,
+            "assignee": db_assignee, "close_reason": db_close_reason, "project": db_project,
+            "created_at": db_created_at, "updated_at": db_updated_at,
+            "started_at": db_started_at, "closed_at": db_closed_at, "parent_id": db_parent_id,
+        }
+        if fp != db_fp:
+            collisions.append(issue_id)
+
+    if collisions:
+        raise ValueError(
+            f"id-collision: {len(collisions)} export id(s) already exist in db with different "
+            f"content — aborting to prevent silent overwrite. Colliding ids: {collisions}. "
+            "To re-import identical data, use an empty target db or remove the colliding rows first."
+        )
+
+
+def _check_prefix_uniformity(issues_data: list[dict[str, Any]]) -> None:
+    """Log a warning if export ids have mixed prefixes (guards shared-dolt multi-DB exports).
+
+    A bd prefix is the part of the id before the first dot and after the last hyphen,
+    e.g. 'kb-488f9a' → prefix segment 'kb-488f9a', root ids only (no dot).
+    We collect the set of root-id prefixes (everything before the first '.') and warn
+    if more than one is present.
+    """
+    root_prefixes: set[str] = set()
+    for issue in issues_data:
+        iid: str = issue.get("id", "")
+        # Compare the FIRST id segment (the project tag): 'claude-abc' and
+        # 'claude-wisp-xyz' both → 'claude' (a wisp molecule sub-namespace is NOT a
+        # different project), while 'claude-*' vs 'secular-*' → two projects (the
+        # real shared-dolt case this guards). Children inherit their root's prefix.
+        if "-" in iid:
+            root_prefixes.add(iid.split("-", 1)[0])
+    if len(root_prefixes) > 1:
+        logger.warning(
+            "Export contains mixed id-prefixes %s — this export may combine issues from "
+            "multiple bd repos (shared-dolt). Verify this is intentional before importing "
+            "into a shared db.", sorted(root_prefixes)
+        )
+
+
 def import_bd_export(
     kb: Any,
     export_json_path: str | Path,
@@ -187,6 +287,17 @@ def import_bd_export(
         "notes_merged": 0,
     }
 
+    # T3: id-collision pre-flight — abort before any write if an export id already
+    # exists in the target db WITH DIFFERENT content. Identical re-import is allowed
+    # (idempotent). Checked BEFORE the savepoint/FK-toggle so no partial state can
+    # appear on an abort.
+    _check_id_collisions(conn, issues_data, project)
+
+    # T6c: assert/log uniform id-prefix across the export (guards the shared-dolt
+    # multi-DB case where ~/Physics/claude/.beads/dolt holds both `claude` and
+    # `secular_constraints`).
+    _check_prefix_uniformity(issues_data)
+
     # Disable FK enforcement during bulk import to avoid insert-order issues.
     # PRAGMA foreign_keys cannot be changed inside a transaction, so set it
     # BEFORE opening the savepoint.
@@ -201,6 +312,8 @@ def import_bd_export(
         if dry_run:
             conn.execute("ROLLBACK TO SAVEPOINT bd_import_dry_run")
             conn.execute("RELEASE SAVEPOINT bd_import_dry_run")
+        # T6a: restore FK enforcement even on the non-dry-run exception path
+        conn.execute("PRAGMA foreign_keys = ON")
         raise
 
     conn.execute("PRAGMA foreign_keys = ON")
@@ -301,13 +414,14 @@ def _do_import(
                 logger.warning("Skipping dep with missing issue_id or depends_on_id: %r", dep)
                 continue
 
-            conn.execute(
+            cur = conn.execute(
                 """INSERT OR IGNORE INTO issue_deps
                    (issue_id, depends_on_id, type, created_at, created_by)
                    VALUES (?, ?, ?, ?, ?)""",
                 (dep_issue_id, depends_on_id, dep_type, dep_created_at, dep_created_by),
             )
-            stats["deps_imported"] += 1
+            # T6b: use rowcount so idempotent re-runs don't overcount
+            stats["deps_imported"] += cur.rowcount
 
     # ------------------------------------------------------------------
     # 3. INSERT issue_comments
@@ -322,13 +436,14 @@ def _do_import(
             author = comment.get("author")
             cmt_created_at = comment.get("created_at", "")
 
-            conn.execute(
+            cur = conn.execute(
                 """INSERT OR IGNORE INTO issue_comments
                    (id, issue_id, body, author, created_at)
                    VALUES (?, ?, ?, ?, ?)""",
                 (cmt_id, cmt_issue_id, body, author, cmt_created_at),
             )
-            stats["comments_imported"] += 1
+            # T6b: use rowcount so idempotent re-runs don't overcount
+            stats["comments_imported"] += cur.rowcount
 
     # ------------------------------------------------------------------
     # 4. SEED child_counters
@@ -389,7 +504,8 @@ def verify_fidelity(
 
         # Fetch from kb
         row = conn.execute(
-            """SELECT id, type, status, priority, parent_id, design_file, close_reason,
+            """SELECT id, type, status, priority, parent_id, title, description,
+                      design_file, assignee, close_reason,
                       created_at, updated_at, started_at, closed_at
                FROM issues WHERE id = ?""",
             (issue_id,),
@@ -400,8 +516,9 @@ def verify_fidelity(
             continue
 
         (
-            kb_id, kb_type, kb_status, kb_priority, kb_parent_id, kb_design_file,
-            kb_close_reason, kb_created_at, kb_updated_at, kb_started_at, kb_closed_at,
+            kb_id, kb_type, kb_status, kb_priority, kb_parent_id,
+            kb_title, kb_description, kb_design_file, kb_assignee, kb_close_reason,
+            kb_created_at, kb_updated_at, kb_started_at, kb_closed_at,
         ) = row
 
         # parent_id
@@ -418,6 +535,34 @@ def verify_fidelity(
                 f"status: expected={expected_status!r} got={kb_status!r}"
             )
 
+        # title
+        expected_title = issue.get("title", "")
+        if kb_title != expected_title:
+            diffs.append(f"title: expected={expected_title!r} got={kb_title!r}")
+
+        # description (post notes-merge — mirror _merge_description_notes)
+        expected_description = _merge_description_notes(
+            issue.get("description"), issue.get("notes")
+        )
+        if kb_description != expected_description:
+            exp_repr = (expected_description or "")[:80] if expected_description else None
+            got_repr = (kb_description or "")[:80] if kb_description else None
+            diffs.append(f"description: expected={exp_repr!r} got={got_repr!r}")
+
+        # priority
+        expected_priority = issue.get("priority", 2)
+        if kb_priority != expected_priority:
+            diffs.append(
+                f"priority: expected={expected_priority!r} got={kb_priority!r}"
+            )
+
+        # assignee
+        expected_assignee = issue.get("assignee") or issue.get("owner")
+        if kb_assignee != expected_assignee:
+            diffs.append(
+                f"assignee: expected={expected_assignee!r} got={kb_assignee!r}"
+            )
+
         # design_file (stored as content)
         expected_design = issue.get("design")
         if expected_design != kb_design_file:
@@ -427,6 +572,43 @@ def verify_fidelity(
             diffs.append(
                 f"design_file: expected={exp_repr!r} got={got_repr!r}"
             )
+
+        # timestamps
+        ts_checks = [
+            ("created_at", issue.get("created_at", ""), kb_created_at),
+            ("updated_at", issue.get("updated_at", issue.get("created_at", "")), kb_updated_at),
+            ("started_at", issue.get("started_at"), kb_started_at),
+            ("closed_at", issue.get("closed_at"), kb_closed_at),
+        ]
+        for ts_name, exp_ts, got_ts in ts_checks:
+            if exp_ts != got_ts:
+                diffs.append(f"{ts_name}: expected={exp_ts!r} got={got_ts!r}")
+
+        # comments: count + body + author per id
+        export_comments = {
+            c["id"]: {"body": c.get("text") or c.get("body", ""), "author": c.get("author")}
+            for c in issue.get("comments", [])
+            if c.get("id")
+        }
+        kb_comment_rows = conn.execute(
+            "SELECT id, body, author FROM issue_comments WHERE issue_id = ?",
+            (issue_id,),
+        ).fetchall()
+        kb_comments = {r[0]: {"body": r[1], "author": r[2]} for r in kb_comment_rows}
+
+        if len(export_comments) != len(kb_comments):
+            diffs.append(
+                f"comments count: expected={len(export_comments)} got={len(kb_comments)}"
+            )
+        else:
+            for cmt_id, exp_cmt in export_comments.items():
+                if cmt_id not in kb_comments:
+                    diffs.append(f"comment missing in kb: id={cmt_id!r}")
+                elif kb_comments[cmt_id] != exp_cmt:
+                    diffs.append(
+                        f"comment mismatch id={cmt_id!r}: "
+                        f"expected={exp_cmt!r} got={kb_comments[cmt_id]!r}"
+                    )
 
         # dep edges: only the kept types, and only well-formed edges. MIRROR the importer's
         # skip (line ~300: `if not dep_issue_id or not depends_on_id: continue`): a dep with an

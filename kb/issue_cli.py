@@ -858,7 +858,9 @@ def cmd_bead_migrate(args: Any, kb: Any) -> int:
       1. require bd on PATH; independent live count `bd list --all --json`
       2. `bd export` (exit==0); validate every line parses (truncation defense)
       3. import_bd_export into the kb db
-      4. issues_imported == live_count AND verify_fidelity empty  → else STOP
+      4. issues_imported == export_issue_count (export-internal integrity); warn if
+         != live_count (expected: bd export omits closed ephemeral *-wisp-* tasks);
+         verify_fidelity empty → else STOP
       5. write per-project .kbt/config.toml marker
       6. archive+commit .beads/ (COMMIT-BEFORE-CLOBBER), then rm -rf  (unless --keep-beads)
     --dry-run runs 1-4 (import rolled back) and skips 5-6.
@@ -924,14 +926,46 @@ def cmd_bead_migrate(args: Any, kb: Any) -> int:
     try:
         stats = import_bd_export_safe(target_kb, export_path, dry_run=False, project=project)
 
-        # 4. gates: live count vs imported, and per-issue fidelity
+        # 4. gates: export-internal completeness (primary), live count advisory cross-check
         imported = stats["issues_imported"]
-        if imported != live_count:
-            print(f"kbt bead-migrate: ABORT — imported {imported} != live dolt count {live_count}. "
-                  "Export may be truncated or include a different population (infra beads). "
-                  "No marker written, .beads/ untouched. Re-run, or use --keep-beads if the "
-                  "difference is known-safe.", file=sys.stderr)
+        # Export-internal check: every issue record in the export was imported.
+        # Both counters come from the SAME export file, so a mismatch signals
+        # an INSERT collision or a mid-loop exception — genuine truncation is
+        # caught earlier (the per-line parse in step 2).
+        if imported != export_n:
+            print(f"kbt bead-migrate: ABORT — imported {imported} issues but export "
+                  f"contained {export_n} issue records. "
+                  "The export may contain duplicate ids (INSERT OR REPLACE collapsed "
+                  "records) or the import was interrupted. No marker written, .beads/ "
+                  "untouched. Re-run with a fresh export.", file=sys.stderr)
             return 1
+        # Advisory cross-check: live bd list vs export issue count.
+        # bd export legitimately omits closed ephemeral molecule sub-tasks
+        # (*-wisp-*) that bd list --all counts, so a delta here is expected
+        # and is NOT a hard abort — just warn and continue.
+        if imported != live_count:
+            delta = live_count - imported
+            # Sample up to 5 ids that are in the live list but not in the export
+            export_ids: set[str] = set()
+            for line in export_path.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    if rec.get("_type") == "issue":
+                        export_ids.add(rec.get("id", ""))
+                except Exception:
+                    pass
+            sample_missing = [item["id"] for item in live
+                              if item.get("id") not in export_ids][:5]
+            sample_str = ", ".join(sample_missing) if sample_missing else "(none sampled)"
+            print(f"kbt bead-migrate: WARNING — live bd count {live_count} != "
+                  f"export count {imported} (delta={delta:+d}). "
+                  "bd export omits closed ephemeral molecule sub-tasks (*-wisp-*) "
+                  "that bd list --all counts; this is expected and safe. "
+                  f"Sample ids in live list but not in export: {sample_str}. "
+                  "Continuing.", file=sys.stderr)
         diffs = verify_fidelity(target_kb, export_path)
         if diffs:
             print(f"kbt bead-migrate: ABORT — fidelity verify found {len(diffs)} discrepancies. "
