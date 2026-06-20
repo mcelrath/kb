@@ -20,8 +20,8 @@ from kb import bd_import
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("given,expect", [
     ("open", "open"), ("in_progress", "in_progress"), ("blocked", "blocked"),
-    ("closed", "closed"), ("deferred", "open"), ("pinned", "open"),
-    (None, "open"), ("DEFERRED", "open"),
+    ("closed", "closed"), ("deferred", "deferred"), ("pinned", "open"),
+    (None, "open"), ("DEFERRED", "deferred"),
 ])
 def test_normalize_status(given, expect):
     assert bd_import._normalize_status(given) == expect

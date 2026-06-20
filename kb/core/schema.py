@@ -328,7 +328,7 @@ SCHEMA_SQL = """
         id TEXT PRIMARY KEY,
         type TEXT NOT NULL CHECK(type IN ('task','bug','feature','epic','chore','spike','decision')),
         status TEXT NOT NULL DEFAULT 'open'
-            CHECK(status IN ('open','in_progress','blocked','closed')),
+            CHECK(status IN ('open','in_progress','blocked','closed','deferred')),
         priority INTEGER DEFAULT 2,
         parent_id TEXT REFERENCES issues(id),
         title TEXT NOT NULL,

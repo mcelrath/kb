@@ -133,3 +133,39 @@ def test_config_toml_tracker_section_parsed(tmp_path):
     cfg = config._apply_toml(dataclasses.replace(config._DEFAULTS), flat)
     assert cfg.tracker_backend == "kb"
     assert config._DEFAULTS.tracker_backend is None  # singleton not mutated
+
+
+# --------------------------------------------------------------------------
+# T5: 'deferred' status accepted by ISSUE_STATUSES and IssuesRepository
+# --------------------------------------------------------------------------
+def test_deferred_status_accepted_by_issue_statuses():
+    """T5: ISSUE_STATUSES must include 'deferred' so create/set_status accept it."""
+    from kb.entities.issues import ISSUE_STATUSES
+    assert "deferred" in ISSUE_STATUSES
+
+
+def test_deferred_status_create_and_set(tmp_path):
+    """T5: IssuesRepository.create and set_status must accept 'deferred'."""
+    from kb.bd_import import _build_test_kb
+    from kb.entities.issues import IssuesRepository
+    kb = _build_test_kb(tmp_path / "t5.db")
+    repo = IssuesRepository(kb.conn, kb._embedding)
+
+    # create with status=deferred must not raise
+    result = repo.create(title="deferred task", status="deferred", prefix="tst")
+    issue_id = result["id"]
+    assert result["is_new"]
+
+    # set_status to deferred on an existing issue must not raise
+    row = kb.conn.execute("SELECT status FROM issues WHERE id=?", (issue_id,)).fetchone()
+    assert row[0] == "deferred"
+
+    # transition back to open must work
+    repo.set_status(issue_id, "open")
+    row = kb.conn.execute("SELECT status FROM issues WHERE id=?", (issue_id,)).fetchone()
+    assert row[0] == "open"
+
+    # set to deferred again
+    repo.set_status(issue_id, "deferred")
+    row = kb.conn.execute("SELECT status FROM issues WHERE id=?", (issue_id,)).fetchone()
+    assert row[0] == "deferred"

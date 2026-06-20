@@ -33,7 +33,7 @@ from ..core.embedding import EmbeddingService
 
 
 ISSUE_TYPES = ("task", "bug", "feature", "epic", "chore", "spike", "decision")
-ISSUE_STATUSES = ("open", "in_progress", "blocked", "closed")
+ISSUE_STATUSES = ("open", "in_progress", "blocked", "closed", "deferred")
 DEP_TYPES = ("blocks", "parent-child", "discovered-from", "related", "supersedes")
 
 

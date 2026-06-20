@@ -82,11 +82,10 @@ logger = logging.getLogger(__name__)
 # Dep types the kb schema CHECK constraint accepts.
 _KB_DEP_TYPES = frozenset({"blocks", "parent-child", "discovered-from", "related", "supersedes"})
 
-# Statuses the kb schema CHECK constraint accepts. bd ALSO has 'deferred' (and
-# niche pin/hook states) which the kb-sg0 design intentionally DROPPED — map any
-# non-kept status to 'open' (the closest actionable kept status) so the import
-# does not violate the CHECK. verify_fidelity applies the SAME normalization.
-_KB_STATUSES = frozenset({"open", "in_progress", "blocked", "closed"})
+# Statuses the kb schema CHECK constraint accepts. bd's 'deferred' is preserved
+# verbatim (T5: kb-488f9a.5 — ISSUE_STATUSES now includes 'deferred'). Any
+# remaining niche bd states (pin, hook, etc.) fall back to 'open'.
+_KB_STATUSES = frozenset({"open", "in_progress", "blocked", "closed", "deferred"})
 
 
 def _normalize_status(status: str | None) -> str:
