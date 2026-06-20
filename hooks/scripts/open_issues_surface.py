@@ -269,6 +269,11 @@ def main() -> None:
             lines.append(f'[RESOLVED-ISSUE: {iid} — {title}]')
 
     if lines:
+        # Reverse-importance emission (best-LAST): all_items is built most-important
+        # first (open P0.., then recently-closed prior art). Attention is U-shaped,
+        # so reversing puts the highest-priority OPEN issue in the recency slot
+        # adjacent to the tool call; less-important resolved prior art leads.
+        lines.reverse()
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

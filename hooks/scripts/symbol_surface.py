@@ -297,6 +297,11 @@ def main() -> None:
         advisories = query_symbols(conn, tokens, fracs, project=project)
         conn.close()
         if advisories:
+            # Reverse-importance emission (best-LAST): query_symbols builds these
+            # most-important first (RETIRED correctness hazards, then NOTATION, then
+            # KB-VALUE). Attention is U-shaped, so reversing puts a RETIRED hazard in
+            # the recency slot adjacent to the agent's next action.
+            advisories.reverse()
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "PostToolUse",

@@ -209,6 +209,10 @@ def main():
     if not lines:
         return
 
+    # Emit best-LAST (lines are descending-similarity): U-shaped attention favors the
+    # recency slot, and the header holds primacy, so the strongest near-duplicate
+    # belongs immediately before the guarded continuation.
+    lines.reverse()
     body = (
         "PRIOR ART — your analysis proposes building something the kb may already "
         "have. Before implementing, `kb get <id>` and REUSE if it covers your plan "

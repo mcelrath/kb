@@ -637,9 +637,13 @@ def main() -> None:
         tokens = extract_candidate_tokens(prompt_text)
         fracs = extract_fractions(prompt_text)
         project = _project_from_cwd()
-        advisories = query_db(conn, tokens, fracs, project=project)
+        # Assemble least→most important (reverse-importance, best-LAST): attention
+        # is U-shaped, so the strongest directives (DO-NOT-RECOMPUTE structural
+        # facts, ROUTE-TO-TIP) belong in the recency slot adjacent to the dispatch.
+        # Context issues lead; reuse/codified advisories sit in the weaker middle.
+        advisories = query_issues(conn, prompt_text, project=project)
+        advisories += query_db(conn, tokens, fracs, project=project)
         advisories += query_contracts(conn, tokens, project=project, raw_text=prompt_text)
-        advisories += query_issues(conn, prompt_text, project=project)
         advisories += query_structural_facts(conn, prompt_text)
         advisories += query_route_to_tip(conn, tool_name, ti, prompt_text)
         conn.close()
