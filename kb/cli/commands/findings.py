@@ -120,8 +120,49 @@ def run_list(kb, args, format_results_fn, format_finding_fn) -> None:
 # get
 # ---------------------------------------------------------------------------
 
+def _print_section(kb, section_id: str) -> None:
+    """Render a document section (sec-*) by id: doc title, breadcrumb, full body."""
+    from kb.entities.document_sections import DocumentSectionsRepository
+    from kb.entities.documents import DocumentsRepository
+
+    sec_repo = DocumentSectionsRepository(kb.conn)
+    sec = sec_repo.get(section_id)
+    if not sec:
+        print(f"Section not found: {section_id}")
+        sys.exit(1)
+
+    doc = DocumentsRepository(kb.conn).get(str(sec["document_id"]))
+    if doc:
+        proj = f" ({doc['project']})" if doc.get("project") else ""
+        dtype = f" [{doc['doc_type']}]" if doc.get("doc_type") else ""
+        print(f"{doc['title']}{proj}{dtype}")
+
+    crumb = sec_repo.breadcrumb(section_id)
+    if crumb:
+        trail = " > ".join(
+            f"{c['path']} {c['heading']}".strip() for c in crumb
+        )
+        print(f"  {trail}")
+
+    print(f"\n{'#' * (int(sec['level'] or 1))} {sec['heading'] or '(no heading)'}"
+          f"   [{sec['kind']}  path={sec['path']}]")
+    if sec.get("asset_path"):
+        print(f"asset: {sec['asset_path']}")
+    body = sec.get("table_repr") if sec["kind"] == "table" else sec.get("content")
+    body = body or sec.get("content") or sec.get("embed_text") or ""
+    if body:
+        print(f"\n{body}")
+
+
 def run_get(kb, args) -> None:
     from kb.markdown import format_finding_markdown
+
+    # A `sec-*` id is a document section (surfaced by `kb search`), not a finding.
+    # Resolve it against document_sections so a search hit is directly readable —
+    # otherwise `kb get <sec-id>` dead-ends on "Finding not found".
+    if str(args.id).startswith("sec-"):
+        _print_section(kb, str(args.id))
+        return
 
     try:
         from rich.console import Console

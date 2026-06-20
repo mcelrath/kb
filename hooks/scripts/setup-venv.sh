@@ -48,15 +48,20 @@ ensure_wrappers() {
     for name in kb kbt; do
         wrapper="${_LOCAL_BIN}/${name}"
         venv_tool="${VENV_DIR}/bin/${name}"
-        # Already points at our venv tool? leave it.
-        if [ -f "${wrapper}" ] && grep -qF "${venv_tool}" "${wrapper}" 2>/dev/null; then
+        # Already a thin wrapper (regular file) pointing at our venv tool? leave it.
+        if [ -f "${wrapper}" ] && [ ! -L "${wrapper}" ] && grep -qF "${venv_tool}" "${wrapper}" 2>/dev/null; then
             continue
         fi
-        # A different wrapper exists — back it up once before taking ownership.
-        if [ -f "${wrapper}" ] && [ ! -f "${wrapper}.pre-kb-plugin" ]; then
-            cp -p "${wrapper}" "${wrapper}.pre-kb-plugin"
+        # A different wrapper/symlink exists — back it up ONCE with cp -P (copy the
+        # symlink ITSELF, never follow it), then rm the entry so the heredoc below
+        # creates a fresh regular file. Writing `cat >` through a symlink would
+        # clobber its TARGET (e.g. a `~/.local/bin/kbt -> repo/kbt` symlink would
+        # destroy the repo's source script). rm -f drops the link, not the target.
+        if { [ -e "${wrapper}" ] || [ -L "${wrapper}" ]; } && [ ! -e "${wrapper}.pre-kb-plugin" ]; then
+            cp -Pp "${wrapper}" "${wrapper}.pre-kb-plugin"
             echo "kb-plugin setup-venv: backed up existing ${wrapper} -> ${wrapper}.pre-kb-plugin" >&2
         fi
+        rm -f "${wrapper}"
         cat > "${wrapper}" << WRAPPER_EOF
 #!/usr/bin/env bash
 # ${name} wrapper — written by kb-plugin setup-venv.sh
