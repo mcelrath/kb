@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from datetime import datetime
+from typing import Any
 
 from .base import EntityRepository
 
@@ -18,6 +19,13 @@ VALID_KINDS = ("prose", "table", "figure")
 
 class DocumentSectionsRepository(EntityRepository):
     """Repository for document section management."""
+
+    def __init__(self, conn: sqlite3.Connection, embedding_service: Any | None = None):
+        super().__init__(conn)
+        # Optional: when set, add() embeds each section into document_sections_vec
+        # inline (so ingested docs are searchable immediately, no separate reembed).
+        # Left None for schema-only / non-embedding contexts (e.g. unit tests).
+        self.embedding_service = embedding_service
 
     def add(
         self,
@@ -53,6 +61,24 @@ class DocumentSectionsRepository(EntityRepository):
              content, kind, table_repr, embed_text, summary, token_count,
              content_hash, asset_path, now),
         )
+
+        # Inline embedding (best-effort): populate document_sections_vec so the
+        # section is searchable immediately. A transient embed failure must not
+        # abort a large ingest — the row is still stored and can be reembedded.
+        if self.embedding_service is not None:
+            text = (embed_text or content or heading or "").strip()
+            if text:
+                try:
+                    emb = self.embedding_service.embed(text)
+                    self.conn.execute(
+                        "DELETE FROM document_sections_vec WHERE id = ?", (section_id,))
+                    self.conn.execute(
+                        "INSERT INTO document_sections_vec (id, embedding) VALUES (?, ?)",
+                        (section_id, emb),
+                    )
+                except Exception:
+                    pass  # embed server down/slow — section stored, vec deferred to reembed
+
         self.conn.commit()
         return section_id
 

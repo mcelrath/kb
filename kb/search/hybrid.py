@@ -310,14 +310,22 @@ class HybridSearch:
                 for r in results:
                     r["score"] = r["score"] / max_score
 
-        # Union search: also query document_sections_vec if requested and embedding succeeded
+        # Union search: also query document_sections_vec if requested and embedding succeeded.
         if include_sections and not degraded and query_embedding is not None:
             section_hits = self.search_sections(query_embedding, limit=limit)
-            # Filter out superseded sections
             if not include_superseded:
                 section_hits = [s for s in section_hits if s.get("status") == "active"]
-            # Tag each as section and append (sections rank after findings by default)
-            results = results + section_hits
+            if section_hits:
+                # Reserve up to ~1/3 of the limit for the top doc-sections.
+                # Finding `score` is normalized-to-top-finding (=1.0), while section
+                # `score` is raw cosine similarity — a plain merge would always bury
+                # sections, so ingested docs would never surface. Reserve slots, fill
+                # the rest with findings, then present sorted by score.
+                sec_quota = min(len(section_hits), max(1, limit // 3))
+                kept_secs = section_hits[:sec_quota]
+                kept_find = results[: max(0, limit - len(kept_secs))]
+                results = kept_find + kept_secs
+                results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
 
         return results[:limit]
 

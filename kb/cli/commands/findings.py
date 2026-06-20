@@ -75,6 +75,11 @@ def run_search(kb, args, load_session_seen_ids_fn, fmt_one_line_fn, format_findi
         finding_type=args.type,
         include_superseded=args.include_superseded,
         exclude_ids=exclude_ids or None,
+        # Unified retrieval: also surface ingested document_sections (PDF/markdown
+        # docs) alongside findings, so `kb search` and the surfacing hook inject
+        # doc content. Phase-4 built search_sections but left it unwired (default
+        # off); the CLI turns it on.
+        include_sections=True,
     )
     results = results[:args.limit]
     if args.json:

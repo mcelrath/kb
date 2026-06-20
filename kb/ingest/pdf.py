@@ -640,8 +640,10 @@ def ingest_pdf_file(
     conn = db_conn.conn
     init_schema(conn, cfg.embedding_dim)
 
+    from kb.core.embedding import EmbeddingService
+    _embedding = EmbeddingService(cfg.embedding_url, cfg.embedding_dim)
     docs_repo = DocumentsRepository(conn)
-    secs_repo = DocumentSectionsRepository(conn)
+    secs_repo = DocumentSectionsRepository(conn, embedding_service=_embedding)
 
     doc_id = docs_repo.add(
         title=title,
