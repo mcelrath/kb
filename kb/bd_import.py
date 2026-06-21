@@ -82,15 +82,35 @@ logger = logging.getLogger(__name__)
 # Dep types the kb schema CHECK constraint accepts.
 _KB_DEP_TYPES = frozenset({"blocks", "parent-child", "discovered-from", "related", "supersedes"})
 
-# Statuses the kb schema CHECK constraint accepts. bd's 'deferred' is preserved
-# verbatim (T5: kb-488f9a.5 — ISSUE_STATUSES now includes 'deferred'). Any
-# remaining niche bd states (pin, hook, etc.) fall back to 'open'.
-_KB_STATUSES = frozenset({"open", "in_progress", "blocked", "closed", "deferred"})
+# Statuses the kb schema issues.status CHECK constraint accepts — EXACTLY these.
+# (kb-488f9a.5 added 'deferred' to this set but NOT to the schema CHECK, so a bd
+# issue with status='deferred' passed _normalize_status yet crashed the INSERT:
+# "CHECK constraint failed". 'deferred' is NOT a kb status; map it to 'open'.)
+_KB_STATUSES = frozenset({"open", "in_progress", "blocked", "closed"})
+
+# Map bd/dolt (and other tracker) statuses onto the kb set, PRESERVING meaning:
+# a completed/done/wont_fix issue maps to 'closed', NOT 'open' — sending finished
+# work to 'open' would silently re-open it on migrate.
+_STATUS_MAP = {
+    "done": "closed", "completed": "closed", "complete": "closed",
+    "finished": "closed", "resolved": "closed", "fixed": "closed",
+    "wont_fix": "closed", "wontfix": "closed", "cancelled": "closed",
+    "canceled": "closed", "duplicate": "closed", "abandoned": "closed",
+    "in_progress": "in_progress", "doing": "in_progress", "started": "in_progress",
+    "active": "in_progress", "wip": "in_progress",
+    "blocked": "blocked", "waiting": "blocked", "on_hold": "blocked",
+    "open": "open", "new": "open", "todo": "open", "backlog": "open",
+    "reopened": "open", "reopen": "open", "deferred": "open",
+    "pin": "open", "hook": "open",
+}
 
 
 def _normalize_status(status: str | None) -> str:
-    s = (status or "open").lower()
-    return s if s in _KB_STATUSES else "open"
+    """Map any tracker status onto the kb CHECK set, preserving meaning."""
+    s = (status or "open").strip().lower().replace("-", "_").replace(" ", "_")
+    if s in _KB_STATUSES:
+        return s
+    return _STATUS_MAP.get(s, "open")
 
 
 def _derive_parent_id(issue_id: str) -> str | None:

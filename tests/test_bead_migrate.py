@@ -20,8 +20,14 @@ from kb import bd_import
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("given,expect", [
     ("open", "open"), ("in_progress", "in_progress"), ("blocked", "blocked"),
-    ("closed", "closed"), ("deferred", "deferred"), ("pinned", "open"),
-    (None, "open"), ("DEFERRED", "deferred"),
+    ("closed", "closed"),
+    # 'deferred' is NOT a kb CHECK status -> must map to 'open' (it crashed the
+    # importer when passed through verbatim; #5958 / kb-488f9a.5).
+    ("deferred", "open"), ("DEFERRED", "open"),
+    ("pinned", "open"), (None, "open"),
+    # meaning-preserving map: done/completed/wont_fix -> closed (NOT open).
+    ("done", "closed"), ("completed", "closed"), ("wont_fix", "closed"),
+    ("in-progress", "in_progress"), ("reopened", "open"),
 ])
 def test_normalize_status(given, expect):
     assert bd_import._normalize_status(given) == expect
