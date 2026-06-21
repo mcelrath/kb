@@ -311,6 +311,17 @@ def _project_show(row: dict[str, Any], conn: Any) -> dict[str, Any]:
         "comment_count": cmt_count,
     }
 
+    # description + comments: the issue BODY. Omitting them made `kbt show --json`
+    # unable to surface the text at all (kb-b6c2b0.8) — include them always.
+    if row.get("description"):
+        out["description"] = row["description"]
+    if row.get("comments"):
+        out["comments"] = [
+            {"author": c.get("author"), "body": c.get("body"),
+             "created_at": c.get("created_at")}
+            for c in row["comments"]
+        ]
+
     # design: emit content (stored in design_file column)
     if row.get("design_file"):
         out["design"] = row["design_file"]
@@ -548,7 +559,34 @@ def cmd_create(args: Any, kb: Any) -> int:
                 dep_type, target = "blocks", dep_spec
             kb.issue_add_dep(issue_id, target, dep_type)
 
-    print(f"Created: {issue_id}")
+    # Bulk children (kb-b6c2b0.6): --children-from FILE (one title per line) creates
+    # a child task per line under this issue, so epic + N children = ONE invocation.
+    child_ids: list[str] = []
+    children_from = getattr(args, "children_from", None)
+    if children_from:
+        cf = Path(children_from)
+        if not cf.exists():
+            print(f"kbt: --children-from file not found: {children_from}", file=sys.stderr)
+            return 1
+        for line in cf.read_text().splitlines():
+            ct = line.strip()
+            if not ct:
+                continue
+            cres = kb.issue_create(title=ct, type="task", priority=priority,
+                                   parent_id=issue_id, project=project, prefix=prefix)
+            child_ids.append(cres["id"])
+
+    # Machine-readable id output (kb-b6c2b0.2): --json emits {id, children} so a
+    # scripted plan->epic->children flow captures ids without a dot-aware regex.
+    if getattr(args, "json", False):
+        payload: dict[str, Any] = {"id": issue_id}
+        if child_ids:
+            payload["children"] = child_ids
+        print(json.dumps(payload))
+    else:
+        print(f"Created: {issue_id}")
+        for cid in child_ids:
+            print(f"  child: {cid}")
     return 0
 
 
@@ -561,13 +599,24 @@ def cmd_show(args: Any, kb: Any) -> int:
 
     if args.json:
         out = _project_show(row, kb.conn)
-        print(json.dumps([out], indent=2))
+        # Emit an OBJECT (bd `show --json` does; a single-element list forced
+        # consumers to `.[0].design` instead of `.design`) — kb-b6c2b0.8.
+        print(json.dumps(out, indent=2))
     else:
-        _print_issue_human(row)
+        _print_issue_human(row, kb)
     return 0
 
 
-def _print_issue_human(row: dict[str, Any]) -> None:
+def _trunc(text: str, n: int) -> str:
+    """Truncate ONLY in user mode — agents have no terminal width and need the
+    full body (kb-b6c2b0.8; mirrors _fmt_row's AGENT_MODE gating, which the show
+    body had missed)."""
+    if _out.AGENT_MODE or len(text) <= n:
+        return text
+    return text[:n] + "…"
+
+
+def _print_issue_human(row: dict[str, Any], kb: Any = None) -> None:
     issue_id = row["id"]
     status = row["status"]
     color = _STATUS_COLOR.get(status)
@@ -582,17 +631,25 @@ def _print_issue_human(row: dict[str, Any]) -> None:
     if row.get("assignee"):
         print(f"  assignee={row['assignee']}")
     if row.get("description"):
-        print(f"  description: {row['description'][:200]}")
+        print(f"  description: {_trunc(row['description'], 200)}")
     if row.get("design_file"):
-        print(f"  design: {row['design_file'][:200]}")
+        print(f"  design: {_trunc(row['design_file'], 200)}")
     if row.get("comments"):
         print(f"  comments ({len(row['comments'])}):")
         for c in row["comments"]:
-            print(f"    [{c['created_at'][:10]}] {c['author'] or 'anon'}: {c['body'][:100]}")
+            print(f"    [{c['created_at'][:10]}] {c['author'] or 'anon'}: {_trunc(c['body'], 100)}")
     if row.get("deps"):
         print(f"  deps ({len(row['deps'])}):")
         for d in row["deps"]:
             print(f"    {d['type']}: {d['issue_id']} → {d['depends_on_id']}")
+    # children inline (kb-b6c2b0.12): show the issue's graph context in ONE read,
+    # not a separate `kbt children` call.
+    if kb is not None:
+        kids = kb.issue_list(parent_id=issue_id)
+        if kids:
+            print(f"  children ({len(kids)}):")
+            for k in kids:
+                print(f"    {_fmt_row(k['id'], k['status'], k['title'], k.get('priority'))}")
 
 
 def cmd_update(args: Any, kb: Any) -> int:
@@ -624,18 +681,35 @@ def cmd_update(args: Any, kb: Any) -> int:
         kb.conn.commit()
         print(f"Updated assignee: {issue_id} → {args.assignee}")
 
+    # --priority (kb-b6c2b0.3): re-prioritize after create.
+    if getattr(args, "priority", None) is not None:
+        kb.conn.execute(
+            "UPDATE issues SET priority = ?, updated_at = ? WHERE id = ?",
+            (args.priority, _now(), issue_id),
+        )
+        kb.conn.commit()
+        print(f"Updated priority: {issue_id} → P{args.priority}")
+
+    # --design-file (kb-b6c2b0.3): attach a plan to an epic after creation (reads
+    # the file CONTENT into design_file, mirroring create --design-file).
+    if getattr(args, "design_file", None):
+        p = Path(args.design_file)
+        if not p.exists():
+            print(f"kbt: design-file not found: {args.design_file}", file=sys.stderr)
+            return 1
+        kb.conn.execute(
+            "UPDATE issues SET design_file = ?, updated_at = ? WHERE id = ?",
+            (p.read_text(), _now(), issue_id),
+        )
+        kb.conn.commit()
+        print(f"Updated design-file: {issue_id}")
+
+    # --notes -> a first-class COMMENT (kb-b6c2b0.5). It used to concatenate onto
+    # the description with a '---' separator, which (a) bloated the body and (b)
+    # had no distinct event stream. Route to issue_add_comment; description unchanged.
     if args.notes:
-        # Append notes to description
-        row = kb.issue_get(issue_id)
-        if row:
-            existing = row.get("description") or ""
-            new_desc = existing + "\n\n---\n" + args.notes if existing else args.notes
-            kb.conn.execute(
-                "UPDATE issues SET description = ?, updated_at = ? WHERE id = ?",
-                (new_desc, _now(), issue_id),
-            )
-            kb.conn.commit()
-            print(f"Updated notes: {issue_id}")
+        kb.issue_add_comment(issue_id, args.notes, author=os.environ.get("USER"))
+        print(f"Added note (comment): {issue_id}")
 
     return 0
 
@@ -665,13 +739,21 @@ def _current_project_name() -> str | None:
 
 
 def _belongs_to_project(row: Any, name: str | None) -> bool:
-    """True if an issue row belongs to project `name`, matched by id-prefix
-    (the dominant grouping) OR the project column. name falsy => all."""
+    """True if an issue row belongs to project `name`. name falsy => all.
+
+    The project COLUMN is authoritative when set: a non-null project that differs
+    from the scope EXCLUDES the row regardless of its id-prefix (kb-b6c2b0.9 — a
+    'scrap'-project issue with a kb- id was leaking into the kb scope via the old
+    'prefix OR project' rule). The id-prefix is only the FALLBACK grouping key for
+    legacy rows whose project column is NULL."""
     if not name:
         return True
+    proj = row.get("project")
+    if proj:
+        return proj == name
     rid = str(row.get("id", ""))
     prefix = rid.split("-", 1)[0] if "-" in rid else rid
-    return prefix == name or row.get("project") == name
+    return prefix == name
 
 
 def _resolve_scope(args: Any) -> str | None:
@@ -1075,6 +1157,30 @@ def import_bd_export_safe(kb: Any, export_path: Path, dry_run: bool, project: st
     return import_bd_export(kb, export_path, dry_run=dry_run, project=project)
 
 
+def cmd_version(args: Any, kb: Any) -> int:
+    """kbt version — print the kb plugin version (+ git sha) so an install/upgrade
+    is verifiable (kb-b6c2b0.11 — there was no way to confirm which kbt code runs)."""
+    import subprocess
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))
+    ver = "?"
+    try:
+        with open(os.path.join(root, ".claude-plugin", "plugin.json")) as f:
+            ver = json.load(f).get("version", "?")
+    except Exception:
+        pass
+    sha = ""
+    try:
+        r = subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            sha = r.stdout.strip()
+    except Exception:
+        pass
+    print(f"kbt (kb plugin) {ver}" + (f" ({sha})" if sha else ""))
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Argparse setup
 # ---------------------------------------------------------------------------
@@ -1093,6 +1199,16 @@ def build_parser():
                              "(default: scope to the current project derived from cwd)")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # Scope flags also accepted AFTER the subcommand (kb-b6c2b0.10): `kbt list --all`
+    # is the universal convention but --all/--project were top-level-only. A shared
+    # parent parser with default=SUPPRESS adds them to list/ready/blocked WITHOUT
+    # clobbering a value already set by the top-level flags (`kbt --all list`).
+    scope_parent = argparse.ArgumentParser(add_help=False)
+    scope_parent.add_argument("--all", action="store_true", default=argparse.SUPPRESS,
+                              help="show ALL projects (not just the cwd-scoped one)")
+    scope_parent.add_argument("--project", default=argparse.SUPPRESS,
+                              help="scope to this project")
+
     # create
     p = sub.add_parser("create", help="Create a new issue")
     p.add_argument("--title", required=True)
@@ -1105,6 +1221,10 @@ def build_parser():
     p.add_argument("--prefix", default="kb")
     p.add_argument("--deps", nargs="+", default=[], metavar="TYPE:TARGET",
                    help="Deps in form type:target, e.g. discovered-from:kb-sg0")
+    p.add_argument("--json", action="store_true",
+                   help="emit {id[, children]} for scripting (no dot-aware regex)")
+    p.add_argument("--children-from", dest="children_from", default=None, metavar="FILE",
+                   help="create a child task per non-empty line under the new issue")
 
     # show
     p = sub.add_parser("show", help="Show an issue")
@@ -1117,7 +1237,10 @@ def build_parser():
     p.add_argument("--claim", action="store_true", help="Atomically claim the issue")
     p.add_argument("--status", default=None)
     p.add_argument("--assignee", default=None)
-    p.add_argument("--notes", default=None)
+    p.add_argument("--priority", type=int, default=None, help="re-prioritize")
+    p.add_argument("--design-file", dest="design_file", default=None,
+                   help="attach a plan file (content) to an epic after creation")
+    p.add_argument("--notes", default=None, help="add a note as a comment")
 
     # close
     p = sub.add_parser("close", help="Close an issue")
@@ -1125,7 +1248,7 @@ def build_parser():
     p.add_argument("--reason", default=None)
 
     # list
-    p = sub.add_parser("list", help="List issues")
+    p = sub.add_parser("list", help="List issues", parents=[scope_parent])
     p.add_argument("--status", default=None)
     p.add_argument("--parent", default=None)
     p.add_argument("--type", default=None)
@@ -1160,12 +1283,15 @@ def build_parser():
     p.add_argument("--json", action="store_true")
 
     # ready
-    p = sub.add_parser("ready", help="Show ready issues")
+    p = sub.add_parser("ready", help="Show ready issues", parents=[scope_parent])
     p.add_argument("--json", action="store_true")
 
     # blocked
-    p = sub.add_parser("blocked", help="Show blocked issues")
+    p = sub.add_parser("blocked", help="Show blocked issues", parents=[scope_parent])
     p.add_argument("--json", action="store_true")
+
+    # version
+    sub.add_parser("version", help="Print the kb plugin version + git sha")
 
     # search
     p = sub.add_parser("search", help="Search issues")
@@ -1234,6 +1360,8 @@ def run(argv: list[str] | None = None) -> int:
         return cmd_blocked(args, kb)
     elif command == "search":
         return cmd_search(args, kb)
+    elif command == "version":
+        return cmd_version(args, kb)
     elif command == "import":
         return cmd_import(args, kb)
     elif command == "bead-migrate":
