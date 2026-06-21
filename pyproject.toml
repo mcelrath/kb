@@ -9,7 +9,9 @@ kb = "kb_entry:main"
 kbt = "kbt_entry:main"
 
 [project.optional-dependencies]
-pdf = ["docling>=2.100", "pymupdf", "onnxruntime"]
+# docling = PDF->structured (tables); pymupdf(fitz) = outline + figure crops;
+# rapidocr (+ onnxruntime backend) = OCR raster figure labels (pdf.py:440).
+pdf = ["docling>=2.100", "pymupdf", "rapidocr", "onnxruntime"]
 
 [build-system]
 requires = ["setuptools>=61"]
