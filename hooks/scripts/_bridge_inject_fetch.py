@@ -121,6 +121,22 @@ def main():
 
     dmax = _maxid(directed, dlast)
     bmax = _maxid(broadcast, blast)
+
+    # Diagnostic trace (KB_BRIDGE_INJECT_DEBUG=1): one line per invocation capturing
+    # the exact (event, is_claude, per-class since, returned ids) so a re-inject that
+    # is not statically reproducible (archie #5970/kb-333773) can be caught in the act.
+    if os.environ.get("KB_BRIDGE_INJECT_DEBUG") == "1":
+        try:
+            dbg = os.path.join(os.path.expanduser("~/.cache/kb"), "bridge-inject-debug.log")
+            os.makedirs(os.path.dirname(dbg), exist_ok=True)
+            d_ids = [m.get("id") for m in directed]
+            b_ids = [m.get("id") for m in broadcast]
+            with open(dbg, "a") as f:
+                f.write(f"{agent_id} sess={session_id[:8]} event={event} claude={is_claude} "
+                        f"dlast={dlast} blast={blast} directed={d_ids} broadcast={b_ids} "
+                        f"-> dmax={dmax} bmax={bmax}\n")
+        except Exception:
+            pass
     # Directed always shown (never evicted); broadcasts shown but ambient. Announce
     # frames advance the cursor (so they don't re-notify) but are not displayed.
     fresh = [m for m in directed if not _is_announce(m)] \
