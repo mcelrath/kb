@@ -90,23 +90,41 @@ async def bridge_send(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "id": sent_id, "stdout": proc.stdout.strip()})
 
 
-def _bridge_msg_for_recipient(msg: dict, recipient: str) -> bool:
-    """Return True if msg is addressed to recipient or is a broadcast to 'all'."""
+def _msg_to_list(msg: dict) -> list:
     to = msg.get("to", [])
     if isinstance(to, str):
         to = [t.strip() for t in to.split(",")]
     if not isinstance(to, list):
         to = [str(to)]
+    return to
+
+
+def _bridge_msg_for_recipient(msg: dict, recipient: str) -> bool:
+    """Return True if msg is addressed to recipient or is a broadcast to 'all'."""
+    to = _msg_to_list(msg)
     return recipient in to or "all" in to
 
 
+def _bridge_msg_directed(msg: dict, recipient: str) -> bool:
+    """True only if msg is EXPLICITLY addressed to recipient (NOT an 'all' broadcast).
+
+    The directed/broadcast distinction is what lets WAKE fire only on messages
+    addressed to you and keeps broadcast volume from evicting directed messages.
+    """
+    return recipient in _msg_to_list(msg)
+
+
 def _parse_bridge_messages(
-    recipient: str | None, limit: int, last_event_id: int | None = None
+    recipient: str | None, limit: int, last_event_id: int | None = None,
+    mode: str = "any",
 ) -> list[dict]:
     """Read messages.jsonl, filter by recipient, return newest-last.
 
+    mode:
+      'any'        — directed-to-recipient OR 'all' broadcast (default; recv/pull)
+      'directed'   — EXPLICITLY addressed to recipient only (wake + no-evict path)
+      'broadcast'  — 'all' broadcasts NOT also explicitly addressed to recipient
     If last_event_id is given, only return messages with numeric id > last_event_id.
-    Exact copy of kb.py:81-112.
     """
     if not BRIDGE_MESSAGES_PATH.exists():
         return []
@@ -129,7 +147,16 @@ def _parse_bridge_messages(
                                 continue
                         except (TypeError, ValueError):
                             pass
-                if recipient is None or _bridge_msg_for_recipient(msg, recipient):
+                if recipient is None:
+                    keep = True
+                elif mode == "directed":
+                    keep = _bridge_msg_directed(msg, recipient)
+                elif mode == "broadcast":
+                    keep = (_bridge_msg_for_recipient(msg, recipient)
+                            and not _bridge_msg_directed(msg, recipient))
+                else:
+                    keep = _bridge_msg_for_recipient(msg, recipient)
+                if keep:
                     msgs.append(msg)
     except OSError:
         return []
@@ -154,7 +181,10 @@ async def bridge_messages(request: Request) -> JSONResponse:
         since: int | None = int(raw_since) if raw_since else None
     except ValueError:
         since = None
-    msgs = _parse_bridge_messages(recipient, limit, last_event_id=since)
+    mode = request.query_params.get("mode", "any").strip() or "any"
+    if mode not in ("any", "directed", "broadcast"):
+        mode = "any"
+    msgs = _parse_bridge_messages(recipient, limit, last_event_id=since, mode=mode)
     return JSONResponse(msgs)
 
 
@@ -236,8 +266,13 @@ async def bridge_watch(request: Request) -> StreamingResponse | JSONResponse:
         nonlocal last_id
         last_heartbeat = asyncio.get_event_loop().time()
 
-        # On connect: replay any messages past last_id
-        catchup = _parse_bridge_messages(agent_id, limit=200, last_event_id=last_id)
+        # On connect: replay any DIRECTED messages past last_id. Broadcasts NEVER
+        # wake (they would flood the watcher with cross-project 'all' traffic and
+        # let broadcast volume cursor-leap a directed message); they remain
+        # pull-only via GET /bridge/messages. Wake fires only for messages
+        # EXPLICITLY addressed to this agent.
+        catchup = _parse_bridge_messages(agent_id, limit=200, last_event_id=last_id,
+                                         mode="directed")
         for msg in catchup:
             msg_id = msg.get("id")
             data = json.dumps(msg, default=str)
@@ -257,7 +292,8 @@ async def bridge_watch(request: Request) -> StreamingResponse | JSONResponse:
                 yield b": ping\n\n"
                 last_heartbeat = now
 
-            new_msgs = _parse_bridge_messages(agent_id, limit=50, last_event_id=last_id)
+            new_msgs = _parse_bridge_messages(agent_id, limit=50, last_event_id=last_id,
+                                              mode="directed")
             for msg in new_msgs:
                 msg_id = msg.get("id")
                 data = json.dumps(msg, default=str)

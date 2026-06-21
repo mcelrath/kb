@@ -47,6 +47,35 @@ def _notice(fresh: list) -> str:
     return prefix + joined
 
 
+def _fetch(agent_id, mode, since, limit):
+    url = f"{BASE}/bridge/messages?recipient={agent_id}&mode={mode}&limit={limit}"
+    if since:
+        url += f"&since={since}"
+    try:
+        with urllib.request.urlopen(url, timeout=4) as r:
+            msgs = json.loads(r.read())
+    except Exception:
+        return None  # distinguish server-error (None) from empty ([])
+    return msgs if isinstance(msgs, list) else []
+
+
+def _is_announce(m):
+    return ((m.get("event") or "").strip() == "announce"
+            or (m.get("subject") or "").strip().upper().startswith("ANNOUNCE:"))
+
+
+def _maxid(msgs, base):
+    mx = base
+    for m in msgs:
+        try:
+            mid = int(m.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if mid > mx:
+            mx = mid
+    return mx
+
+
 def main():
     if len(sys.argv) < 3:
         return
@@ -56,49 +85,50 @@ def main():
     if not agent_id or not session_id:
         return
 
-    cursor_path = os.path.join(STATE_DIR, f"{session_id}-bridge-injected")
-    try:
-        last_id = int(open(cursor_path).read().strip() or "0")
-    except Exception:
-        last_id = 0
+    # Two separate cursors so broadcast volume can NEVER cursor-leap a directed
+    # message (the kb-1a0078 bug). Directed is fetched UNBOUNDED since its cursor
+    # (every one shown, never evicted); broadcasts are windowed (ambient noise,
+    # capped). Migrate from the legacy single cursor so we don't replay history.
+    dcur = os.path.join(STATE_DIR, f"{session_id}-bridge-injected-directed")
+    bcur = os.path.join(STATE_DIR, f"{session_id}-bridge-injected-broadcast")
+    legacy = os.path.join(STATE_DIR, f"{session_id}-bridge-injected")
 
-    url = f"{BASE}/bridge/messages?recipient={agent_id}&limit=50"
-    try:
-        with urllib.request.urlopen(url, timeout=4) as r:
-            msgs = json.loads(r.read())
-    except Exception:
-        return
-    if not isinstance(msgs, list):
-        return
-
-    # Advance the cursor past EVERY new id (so announces don't re-notify), but only
-    # DISPLAY real directed messages — skip ANNOUNCE join frames (event=announce or
-    # "ANNOUNCE:" subject), matching the idle watcher's wake filter.
-    fresh = []
-    max_id = last_id
-    for m in msgs:
+    def _read(p):
         try:
-            mid = int(m.get("id"))
-        except (TypeError, ValueError):
-            continue
-        if mid <= last_id:
-            continue
-        if mid > max_id:
-            max_id = mid
-        if (m.get("event") or "").strip() == "announce":
-            continue
-        if (m.get("subject") or "").strip().upper().startswith("ANNOUNCE:"):
-            continue
-        fresh.append(m)
-    if not fresh:
-        # Nothing to show, but still advance the cursor so the filtered announces
-        # are not reconsidered next call.
+            return int(open(p).read().strip() or "0")
+        except Exception:
+            return 0
+
+    def _write(p, v):
         try:
             os.makedirs(STATE_DIR, exist_ok=True)
-            with open(cursor_path, "w") as f:
-                f.write(str(max_id))
+            with open(p, "w") as f:
+                f.write(str(v))
         except Exception:
             pass
+
+    dlast, blast = _read(dcur), _read(bcur)
+    if dlast == 0 and blast == 0:
+        leg = _read(legacy)
+        dlast = blast = leg
+
+    directed = _fetch(agent_id, "directed", dlast, 200)
+    broadcast = _fetch(agent_id, "broadcast", blast, 12)
+    if directed is None and broadcast is None:
+        return  # server unreachable — change nothing
+    directed = directed or []
+    broadcast = broadcast or []
+
+    dmax = _maxid(directed, dlast)
+    bmax = _maxid(broadcast, blast)
+    # Directed always shown (never evicted); broadcasts shown but ambient. Announce
+    # frames advance the cursor (so they don't re-notify) but are not displayed.
+    fresh = [m for m in directed if not _is_announce(m)] \
+        + [m for m in broadcast if not _is_announce(m)]
+    if not fresh:
+        _write(dcur, dmax)
+        _write(bcur, bmax)
+        _write(legacy, max(dmax, bmax))
         return
 
     lines = []
@@ -112,17 +142,14 @@ def main():
     body_text = "\n---\n".join(lines)
 
     # goose PreToolUse = emit_blocking: no additionalContext channel -> stay silent
-    # (return BEFORE advancing the cursor so we never consume an undeliverable message).
+    # (return BEFORE advancing cursors so we never consume an undeliverable message).
     if event == "PreToolUse" and not is_claude:
         return
 
-    # Advance the cursor only after a successful build (never past undelivered msgs).
-    try:
-        os.makedirs(STATE_DIR, exist_ok=True)
-        with open(cursor_path, "w") as f:
-            f.write(str(max_id))
-    except Exception:
-        pass
+    # Advance cursors only after a successful build (never past undelivered msgs).
+    _write(dcur, dmax)
+    _write(bcur, bmax)
+    _write(legacy, max(dmax, bmax))
 
     wrapped = f"BRIDGE_UPDATE (new peer messages):\n{body_text}\n(end bridge messages)"
 

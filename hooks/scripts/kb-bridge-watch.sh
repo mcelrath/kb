@@ -61,7 +61,12 @@ if [ -n "$SESSION_ID" ]; then
     # emitted by the SHELL to stderr and is NOT caught by tr's 2>/dev/null, so it leaked as
     # a Stop-hook error when the cursor files didn't exist yet (post-reboot). cat owns the
     # missing-file error and 2>/dev/null suppresses it.
-    _inj=$(cat "$INJ_STATE/${SESSION_ID}-bridge-injected" 2>/dev/null | tr -dc '0-9')
+    # Seed from the DIRECTED cursor (the SSE now streams directed-only). Using the
+    # mixed/broadcast-advanced cursor would set Last-Event-ID above an unshown
+    # directed message and the replay would skip it -> no wake (kb-1a0078). Fall
+    # back to the legacy single cursor for sessions predating the split.
+    _inj=$(cat "$INJ_STATE/${SESSION_ID}-bridge-injected-directed" 2>/dev/null | tr -dc '0-9')
+    [ -z "$_inj" ] && _inj=$(cat "$INJ_STATE/${SESSION_ID}-bridge-injected" 2>/dev/null | tr -dc '0-9')
     WOKEN_CURSOR="$INJ_STATE/${SESSION_ID}-bridge-woken"
     _wok=$(cat "$WOKEN_CURSOR" 2>/dev/null | tr -dc '0-9')
     LAST=${_inj:-0}
