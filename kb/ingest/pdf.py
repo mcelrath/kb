@@ -596,7 +596,8 @@ def ingest_pdf_file(
     import fitz  # PyMuPDF
     from docling.document_converter import DocumentConverter, PdfFormatOption
     from docling.datamodel.base_models import InputFormat
-    from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+    from docling.datamodel.pipeline_options import (
+        PdfPipelineOptions, TableFormerMode, AcceleratorOptions, AcceleratorDevice)
 
     path = Path(path).expanduser().resolve()
 
@@ -621,6 +622,19 @@ def ingest_pdf_file(
     opts.do_ocr = False
     opts.table_structure_options.mode = TableFormerMode.FAST
     opts.table_structure_options.do_cell_matching = True
+    # Pin the accelerator to CPU. kb's pipeline is CPU-designed (do_ocr=False, FAST);
+    # left on AUTO, a system ROCm/CUDA torch (e.g. via a --system-site-packages venv)
+    # auto-selects the GPU and OOMs when that GPU is already occupied — e.g. the
+    # embedding server sharing the same AMD RX 7900 XTX (CUDA out of memory, 0 bytes
+    # free). Override with KB_DOCLING_DEVICE=auto|cuda|cpu|mps|xpu.
+    _dev = os.environ.get("KB_DOCLING_DEVICE", "cpu").strip().lower()
+    _devmap = {
+        "cpu": AcceleratorDevice.CPU, "auto": AcceleratorDevice.AUTO,
+        "cuda": AcceleratorDevice.CUDA, "mps": AcceleratorDevice.MPS,
+        "xpu": AcceleratorDevice.XPU,
+    }
+    opts.accelerator_options = AcceleratorOptions(
+        device=_devmap.get(_dev, AcceleratorDevice.CPU))
 
     converter = DocumentConverter(
         format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
