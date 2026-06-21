@@ -703,7 +703,7 @@ _MAINT_CMDS = [
     ("ask",           'LLM: answer a question from KB  "question" [-p PROJECT]'),
     ("stats",         "counts by type and project"),
     ("flush-pending", "drain the offline-add queue"),
-    ("ingest",        "lean | python | tex | scripts <dir>"),
+    ("ingest",        "md | pdf | lean | python | typescript | rust | tex | scripts | personas   <file|dir>"),
     ("delete",        "<kb-id> [--force]"),
     ("export",        "<file.json> [-p PROJECT]"),
     ("import",        "<file.json>"),
