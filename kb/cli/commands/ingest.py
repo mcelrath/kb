@@ -4,6 +4,17 @@ import sys
 from pathlib import Path
 
 
+def _cwd_project() -> str | None:
+    """Default a document's project to the cwd-scoped project (git-root basename,
+    via kbt's resolver) when -p is omitted — otherwise ingested PDFs/markdown get a
+    NULL project and surface as '(?)'. An explicit -p always wins."""
+    try:
+        from kb.issue_cli import _current_project_name
+        return _current_project_name()
+    except Exception:
+        return None
+
+
 def run_ingest(kb, args, ingest_parser) -> None:
     if args.ingest_cmd == "lean":
         from kb.ingest.lean import run
@@ -97,7 +108,7 @@ def run_ingest(kb, args, ingest_parser) -> None:
             file_path=Path(args.file),
             db_path=args.db,
             doc_type=getattr(args, "doc_type", None),
-            project=getattr(args, "project", None),
+            project=getattr(args, "project", None) or _cwd_project(),
             title=getattr(args, "title", None),
             summary=getattr(args, "summary", None),
             dry_run=getattr(args, "dry_run", False),
@@ -111,7 +122,7 @@ def run_ingest(kb, args, ingest_parser) -> None:
             file_path=Path(args.file),
             db_path=args.db,
             doc_type=getattr(args, "doc_type", None),
-            project=getattr(args, "project", None),
+            project=getattr(args, "project", None) or _cwd_project(),
             title=getattr(args, "title", None),
             summary=getattr(args, "summary", None),
             dry_run=getattr(args, "dry_run", False),
