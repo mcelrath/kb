@@ -26,15 +26,16 @@ ID=""
 case "$ID" in ""|"("*|"null") exit 0 ;; esac
 
 # Refresh this agent's LIVENESS each turn AND record WHICH session holds the id.
-# `bridge:_agent_status` derives online/offline from the mtime of
-# ~/.agent-bridge/<id>.cursor (fresh <120s = online) — writing the file bumps mtime,
-# so presence still works (filename UNCHANGED — the binary reads exactly `<id>.cursor`).
-# kb-72f717.3 F1: write THIS session_id as the cursor CONTENT (not a bare `touch`), so
-# persona identity resolution can tell whether a DIFFERENT live session currently holds
-# this bridge id (content=other session_id + fresh mtime ⇒ a live collision). A renamed
-# per-session file (<id>.<sid>.cursor) would break `_agent_status` (no glob) — content is
-# the only variant that preserves presence AND makes liveness per-session-decidable.
-printf '%s' "$SESSION_ID" > "$HOME/.agent-bridge/${ID}.cursor" 2>/dev/null || true
+# CRITICAL (archie #5949 / #5951): the legacy `bridge` binary uses ~/.agent-bridge/<id>.cursor
+# as a NUMERIC recv cursor (jq --argjson). The earlier kb-72f717.3 change overwrote that
+# file's CONTENT with this session_id (a UUID) — which crashed `bridge recv`
+# (invalid JSON to --argjson) and clobbered the recv position every turn. Split the two:
+#   <id>.kbsession : holds THIS session_id (content) for persona collision detection,
+#                    mtime = kb per-turn liveness. kb-owned; the binary ignores it.
+#   <id>.cursor    : the binary's numeric recv cursor — we only `touch` it (bump mtime
+#                    for `_agent_status` online/offline) and NEVER overwrite its content.
+printf '%s' "$SESSION_ID" > "$HOME/.agent-bridge/${ID}.kbsession" 2>/dev/null || true
+touch "$HOME/.agent-bridge/${ID}.cursor" 2>/dev/null || true
 
 # NOTE (kb-ee7): no watcher teardown here anymore. The watcher is now an asyncRewake
 # Stop hook (bridge-watch-rewake.sh) launched/owned by the harness; its flock keeps a

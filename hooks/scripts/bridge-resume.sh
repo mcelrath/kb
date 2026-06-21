@@ -47,15 +47,16 @@ fi
 # This SessionStart re-announce is the AUTOMATIC path and NEVER --steals. (Explicit takeover
 # lives at the action site: the /persona command and goose POST /bridge/identity do
 # `announce --steal` themselves.) If a DIFFERENT, LIVE session currently holds this bridge id
-# — detected via the per-session CONTENT cursor (~/.agent-bridge/<id>.cursor holds the
-# holder's session_id; mtime <120s = live, written each turn by bridge-inject) — we QUALIFY
+# — detected via the per-session marker (~/.agent-bridge/<id>.kbsession holds the holder's
+# session_id; mtime <120s = live, written each turn by bridge-inject) — we QUALIFY
 # to <id>#<shortsid> and repin instead of stealing (kb-86r D1 lower-session-id-keeps-bare
 # convergence, D2 no-reclaim). A stale/dead holder -> keep the bare name (D3 refined: qualify
 # only against a LIVE distinct session). BARE_ID is preserved for the registry role lookup
-# (a freshly-qualified id has no registry entry yet).
+# (a freshly-qualified id has no registry entry yet). NOTE: reads .kbsession, NOT .cursor —
+# .cursor is the legacy binary's NUMERIC recv cursor; conflating them crashed recv (#5949).
 BARE_ID="$AGENT_ID"
 SHORT_SID="${CLAUDE_SESSION_ID:0:8}"
-_cursor="$HOME/.agent-bridge/${BARE_ID}.cursor"
+_cursor="$HOME/.agent-bridge/${BARE_ID}.kbsession"
 _hold=$(cat "$_cursor" 2>/dev/null | tr -d '[:space:]')
 _age=$(( $(date +%s) - $(stat -c %Y "$_cursor" 2>/dev/null || echo 0) ))
 if [[ -n "$_hold" && -n "${CLAUDE_SESSION_ID:-}" && "$_hold" != "$CLAUDE_SESSION_ID" && "$_age" -lt 120 ]]; then

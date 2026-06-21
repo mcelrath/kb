@@ -182,7 +182,12 @@ def _owed_messages(me: str) -> list:
     import json
     import os
     import urllib.request
-    url = f"{_server_url()}/bridge/messages?recipient={me}&limit=500"
+    # FULL feed (no recipient filter): an outbound reply has sender=me and
+    # to=[other], so it is NOT in a recipient={me} fetch — computing `replied` from
+    # a recipient-filtered fetch leaves it empty and every needs-reply-to-me
+    # false-positives as owed (tt #5952). The Stop hook (bridge-owed-reply-stop.py)
+    # already uses the full feed; match it.
+    url = f"{_server_url()}/bridge/messages?limit=500"
     with urllib.request.urlopen(url, timeout=8) as r:
         msgs = json.loads(r.read())
     cleared: set = set()
