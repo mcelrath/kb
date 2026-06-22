@@ -23,16 +23,24 @@ cwd=$(printf '%s' "$input" | jq -r '.cwd // .workspace.current_dir // ""' 2>/dev
 CYAN='\033[0;36m'; RED='\033[0;31m'; RESET='\033[0m'
 parts=()
 
-# Persona / bridge id: the kb plugin pins it at <git-root>/.claude/.persona/session-<id>
-# (the persona name IS the bridge id). Local read; empty when no persona adopted.
+# Persona / bridge id for this session. Resolve in two cheap local steps:
+#   1. the kb plugin persona pin <git-root>/.claude/.persona/session-<id> (a /persona
+#      adoption), then
+#   2. the bridge registry ~/.agent-bridge/agents.json by session_id (covers an id
+#      claimed via `bridge announce`/`--from` without an explicit /persona pin).
+# Both are local file reads. Empty when this session has no bridge identity.
+persona=""
 if [[ -n "$sid" && -n "$cwd" ]]; then
     proot=$(cd "$cwd" 2>/dev/null && git rev-parse --show-toplevel </dev/null 2>/dev/null)
     pin="${proot:-$cwd}/.claude/.persona/session-${sid}"
-    if [[ -f "$pin" ]]; then
-        persona=$(tr -d '[:space:]' < "$pin" 2>/dev/null)
-        [[ -n "$persona" ]] && parts+=("${CYAN}🎭 ${persona}${RESET}")
-    fi
+    [[ -f "$pin" ]] && persona=$(tr -d '[:space:]' < "$pin" 2>/dev/null)
 fi
+if [[ -z "$persona" && -n "$sid" && -f "$HOME/.agent-bridge/agents.json" ]]; then
+    persona=$(jq -r --arg s "$sid" '.agents[] | select(.session_id == $s) | .id' \
+              "$HOME/.agent-bridge/agents.json" 2>/dev/null | head -1)
+    [[ "$persona" == "null" ]] && persona=""
+fi
+[[ -n "$persona" ]] && parts+=("${CYAN}🎭 ${persona}${RESET}")
 
 # Embedding-server health: read ash_health's 60s cache ("emb=0,llm=0"); do NOT probe.
 # emb=1 => the embedding server is down => kb search + surfacing are BLIND.
