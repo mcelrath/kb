@@ -178,6 +178,40 @@ kbt show <id> --json          # --json works on read commands (show/list/ready/b
 
 For more details, see README.md.
 
+## Planning & the expert-review gate
+
+Plans are authored in **native plan mode** (Shift+Tab) — the plan-mode harness writes the
+plan to `~/.claude/plans/<slug>.md` with no permission prompt. The kb plugin then GATES
+approval on review: a `PreToolUse(ExitPlanMode)` hook (`plan-review-gate.py`) blocks
+ExitPlanMode until the plan carries a recorded **APPROVED** verdict, keyed to a sha256 of
+the exact normalized plan text (any edit re-blocks).
+
+Flow:
+
+```bash
+# 1. Author the plan in plan mode (Shift+Tab).
+# 2. Review it BEFORE exiting plan mode — the gate denies ExitPlanMode otherwise:
+Task(subagent_type="kb:expert-review", prompt="FULL REVIEW: epic=<id> plan=<plan_path> project_root=<root>")
+#    REJECTED -> revise (the hash changes; the gate stays closed). APPROVED -> the agent records the marker.
+# 3. ExitPlanMode — now allowed; on approval the plan auto-mirrors (PostToolUse hook) to
+#    <project-root>/.kb/plans/PLAN-<slug>.md, committed alongside the code.
+```
+
+The verdict marker is a transport-agnostic core any agent host can call:
+
+```bash
+kb plan-review status <plan>          # stored verdict JSON for this plan's hash, or 'none'
+kb plan-review hash <plan>            # sha256 of the normalized plan text
+kb plan-review prior-rejected <plan>  # exit 0 if this plan path has a prior REJECTED record
+kb plan-review record <plan> --verdict APPROVED|REJECTED --synthesis "..." \
+    --project-root <root> --epic-id <id> [--blocking "..." ...]
+```
+
+The verdict lives in the marker + kbt — NOT in the plan filename. Do not use `.approved`/suffix
+filename markers. Every deferred / follow-up item in a plan MUST be a real kbt issue (created
+before review, `--deps discovered-from:<epic-id>`); the expert-review deferral audit REJECTS plans
+that defer work in free text without a tracker-ID.
+
 ## Landing the Plane (Session Completion)
 
 **When ending a work session**, complete ALL steps below. Work is NOT complete until `git push` succeeds.

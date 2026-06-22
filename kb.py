@@ -1179,6 +1179,28 @@ def main():
     )
 
     # configure: host-wide and per-project config UX (Phase 5, kb-2c3)
+    # plan-review: content-hash verdict markers gating native plan-mode approval
+    # on expert-review (epic kb-318a8b). DB-free; dispatched early like configure.
+    plan_review_parser = _add_parser(
+        "plan-review",
+        "Plan-review verdict markers (gate native plan mode on expert-review)",
+        agent_visible=True,
+    )
+    pr_sub = plan_review_parser.add_subparsers(dest="plan_review_cmd")
+    pr_hash = pr_sub.add_parser("hash", help="Print sha256 of the normalized plan text")
+    pr_hash.add_argument("plan", help="Plan file path, or - for stdin")
+    pr_status = pr_sub.add_parser("status", help="Print stored verdict JSON for this plan's hash, or 'none'")
+    pr_status.add_argument("plan", help="Plan file path, or - for stdin")
+    pr_prior = pr_sub.add_parser("prior-rejected", help="Exit 0 iff a prior REJECTED record exists for this plan's path")
+    pr_prior.add_argument("plan", help="Plan file path (stdin '-' has no path identity → exit 1)")
+    pr_record = pr_sub.add_parser("record", help="Record a verdict marker for this plan's hash")
+    pr_record.add_argument("plan", help="Plan file path, or - for stdin")
+    pr_record.add_argument("--verdict", required=True, choices=["APPROVED", "REJECTED"])
+    pr_record.add_argument("--synthesis", default="", help="One-line verdict synthesis")
+    pr_record.add_argument("--blocking", nargs="*", default=[], help="Blocking issue strings")
+    pr_record.add_argument("--project-root", default="", help="Project root (used by the approve-time mirror)")
+    pr_record.add_argument("--epic-id", default="", help="kbt epic id this review belongs to")
+
     configure_parser = _add_parser(
         "configure",
         "Configure kb: embedding provider, summary mode, project setup",
@@ -1390,6 +1412,12 @@ def main():
                 evidence=args.evidence,
             )
             sys.exit(0)
+
+    # plan-review: pure filesystem marker store — no KnowledgeBase/embedding.
+    # Dispatch early so the PreToolUse plan gate stays cheap (epic kb-318a8b).
+    if args.command == "plan-review":
+        from kb.cli.commands import plan_review as _cmd_plan_review
+        sys.exit(_cmd_plan_review.run_plan_review(args))
 
     # configure: does not need KnowledgeBase — dispatch early
     if args.command == "configure":

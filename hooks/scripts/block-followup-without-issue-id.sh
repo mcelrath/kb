@@ -19,9 +19,12 @@ TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.std
 
 FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null)
 
-# Only check plan files. Match ANY .../plans/PLAN-*.md — covers project-local
-# <project-root>/.claude/plans/ (the canonical home; outside the config dir so
-# no config-dir write-guard prompt) as well as legacy global plan paths.
+# Only check plan files. Match ANY .../plans/PLAN-*.md — covers the project mirror
+# <project-root>/.kb/plans/PLAN-<slug>.md (written on approval by the plan-review
+# PostToolUse hook) and legacy <project-root>/.claude/plans/PLAN-*.md.
+# NOTE: native plan-mode plans live at ~/.claude/plans/<slug>.md (NOT PLAN-*.md) and
+# do NOT match here by design — their deferral discipline is enforced at review time
+# by the kb:expert-review deferral audit, which gates ExitPlanMode (epic kb-318a8b).
 case "$FILE_PATH" in
     */plans/PLAN-*.md) ;;
     *) exit 0 ;;

@@ -59,5 +59,14 @@ automatic — you are woken on a directed message.
   kb bridge send <sender> "re: <subj>" --reply <message-id> --body "<text>"            # answer a --needs-reply
   kb bridge recv                                                                       # drain on demand
 Reply to every message marked --needs-reply, using --reply <its-id>.
+
+=== planning — author in plan mode, GATED on kb:expert-review ===
+Author plans in native plan mode (Shift+Tab) → ~/.claude/plans/<slug>.md (harness-owned, no prompt).
+A PreToolUse(ExitPlanMode) gate BLOCKS approval until kb:expert-review records an APPROVED verdict for
+the EXACT plan text (sha256-keyed; any edit re-blocks). So, before ExitPlanMode:
+  Task(subagent_type="kb:expert-review", prompt="FULL REVIEW: epic=<id> plan=<plan_path> project_root=<root>")
+  REJECTED -> revise + re-review ;  APPROVED -> ExitPlanMode now passes; the plan auto-mirrors to
+  <project>/.kb/plans/PLAN-<slug>.md on approval. Verdict lives in the marker+kbt, NOT the filename.
+  Every deferred/follow-up item must be a real kbt issue (--deps discovered-from:<epic>) BEFORE review.
 INSTRUCTIONS
 exit 0

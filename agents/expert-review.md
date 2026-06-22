@@ -233,7 +233,19 @@ If `iteration >= 3`: REJECTED with remaining unresolved blockers listed.
 ### Phase 4 — Return Verdict (both modes)
 
 21. `kb add` the verdict (survives termination).
-22. Return structured JSON (see Output Format).
+22. **Record the plan-review marker** so the PreToolUse(ExitPlanMode) gate can let an APPROVED
+    plan exit plan mode (epic kb-318a8b). Call once, with the SAME plan path you reviewed:
+    ```bash
+    kb plan-review record "<plan_path>" --verdict APPROVED|REJECTED \
+        --synthesis "<one-line synthesis>" \
+        --blocking "<issue 1>" "<issue 2>" ... \
+        --project-root "<project_root>" --epic-id "<epic>"
+    ```
+    The marker is keyed to the EXACT plan content (sha256 of the normalized text). If the author
+    revises the plan after a REJECTED verdict, the hash changes and the gate re-blocks until you
+    record a fresh APPROVED for the new text. Skip this only if no plan path was provided (the
+    design field came from the epic with no file).
+23. Return structured JSON (see Output Format).
 
 ## Output Format
 
