@@ -129,7 +129,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/plan-review-mirror.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/plan-review-hook.py\"",
             "timeout": 15
           }
         ]
@@ -210,7 +210,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/plan-review-gate.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/plan-review-hook.py\"",
             "timeout": 20
           }
         ]

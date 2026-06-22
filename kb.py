@@ -1191,8 +1191,6 @@ def main():
     pr_hash.add_argument("plan", help="Plan file path, or - for stdin")
     pr_status = pr_sub.add_parser("status", help="Print stored verdict JSON for this plan's hash, or 'none'")
     pr_status.add_argument("plan", help="Plan file path, or - for stdin")
-    pr_prior = pr_sub.add_parser("prior-rejected", help="Exit 0 iff a prior REJECTED record exists for this plan's path")
-    pr_prior.add_argument("plan", help="Plan file path (stdin '-' has no path identity → exit 1)")
     pr_record = pr_sub.add_parser("record", help="Record a verdict marker for this plan's hash")
     pr_record.add_argument("plan", help="Plan file path, or - for stdin")
     pr_record.add_argument("--verdict", required=True, choices=["APPROVED", "REJECTED"])

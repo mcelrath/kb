@@ -200,9 +200,8 @@ Task(subagent_type="kb:expert-review", prompt="FULL REVIEW: epic=<id> plan=<plan
 The verdict marker is a transport-agnostic core any agent host can call:
 
 ```bash
-kb plan-review status <plan>          # stored verdict JSON for this plan's hash, or 'none'
-kb plan-review hash <plan>            # sha256 of the normalized plan text
-kb plan-review prior-rejected <plan>  # exit 0 if this plan path has a prior REJECTED record
+kb plan-review status <plan>   # stored verdict JSON for this plan's hash, or 'none'
+kb plan-review hash <plan>     # sha256 of the normalized plan text
 kb plan-review record <plan> --verdict APPROVED|REJECTED --synthesis "..." \
     --project-root <root> --epic-id <id> [--blocking "..." ...]
 ```
