@@ -1,5 +1,46 @@
 # Knowledge Base (kb)
 
+Are your agentic projects littered with random Markdown files, re-implementations, poor
+architecture, and generally messy? Komptetent Brogrammers use KB to solve this.
+
+Agents don't search, don't find prior art, don't find documentation, don't find duplicate
+implementations, don't examine upstream dependencies and downstream consumers of code. We find
+that there are certain classes of things that NO amount of instruction or prompt engineering can
+overcome: training is just too strong. One should definitely use plan mode and create some kind of
+plan but even there agents often fail. Therefore instead of *instructing* agents to search, we do it
+for them by vector similarity search, LSP integration, and recording findings in the knowledge base.
+
+- **Task/plan management** inspired by [Beads](https://github.com/gastownhall/beads) but without the
+    Dolt DB and reduced complexity: single file sqlite DB for all projects. (=> cross-project
+    discovery)
+- **Knowledge injection** via vector cosine similarity search:
+  - Every response, tool call output, and inter-agent message is similarity matched against existing
+kb entries and kbt tasks to surface the information agents need but won't search effectively for.
+  - Instead of re-implementing, agents find 
+- **Anti-deferral rules**: when making a plan agents will often defer some tasks when it's too
+large. KB forces them to file a separate issue for any deferred features so they can be followed up
+on and the project can be completed as asked. 
+- **Experts**: associative keyword based list of expertise you want the agent to apply in its
+reasoning (reviewers.yaml), drawns from the agent's own training and memory. Individual human
+experts, books, academic papers, concepts, and architectural patterns are named. It's not actually
+necessary to *instruct* an agent to behave this way, simply naming the concepts biases the attention
+mechanism recall to use the named concepts.
+  - **/expert-review** is for reviewing plans. It creates a panel of domain experts. It has a
+"light" mode which runs in a single agent session, and a "full" mode which spins our several sub
+agents with indpendent context, so that the evaluation from one domain expert doesn't influence the
+evaluation for other domain experts.
+  - **/implementation-review** simlar to /expert-review but for after the implementation is
+finished.
+- **Personas** are long-running, collaborative agent sessions.
+
+# Getting Started
+
+- `git clone http://github.org/mcelrath/kb`
+- `claude plugin install <path>`
+- `kb configure`
+  - Will configure an embedding server
+- Start a claude session and run `/kb-setup`
+
 SQLite + sqlite-vec powered findings database for tracking successes, failures,
 experiments, and discoveries across projects — with a Claude Code plugin that
 surfaces relevant findings and injects kb conventions automatically, plus `kbt`,
