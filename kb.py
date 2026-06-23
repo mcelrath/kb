@@ -1196,7 +1196,8 @@ def main():
     pr_status.add_argument("plan", help="Plan file path, or - for stdin")
     pr_record = pr_sub.add_parser("record", help="Record a verdict marker for this plan's hash")
     pr_record.add_argument("plan", help="Plan file path, or - for stdin")
-    pr_record.add_argument("--verdict", required=True, choices=["APPROVED", "REJECTED"])
+    pr_record.add_argument("--verdict", required=True,
+        choices=["APPROVED", "APPROVED-WITH-REVISIONS", "REJECTED"])
     pr_record.add_argument("--synthesis", default="", help="One-line verdict synthesis")
     pr_record.add_argument("--blocking", nargs="*", default=[], help="Blocking issue strings")
     pr_record.add_argument("--project-root", default="", help="Project root (used by the approve-time mirror)")

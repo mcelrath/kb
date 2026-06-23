@@ -211,7 +211,10 @@ For each reviewer in the panel (default 3: Advocate, Challenger, Computational a
     A finding is DESIGN-BLOCKING only if implementing the plan AS WRITTEN would produce incorrect, unsafe, or fundamentally broken results.
 15. Synthesize:
     - REJECTED only if ≥1 DESIGN-BLOCKING issue with concrete evidence (not hypothetical)
-    - APPROVED if no DESIGN-BLOCKING issues (list IMPLEMENTATION-NOTEs for implementer)
+    - APPROVED if no DESIGN-BLOCKING issues AND no IMPLEMENTATION-NOTEs worth flagging
+    - APPROVED-WITH-REVISIONS if no DESIGN-BLOCKING issues but there are IMPLEMENTATION-NOTEs the
+      implementer MUST heed. Passes the plan-mode gate (dispatch may proceed without a full
+      re-review); list the notes in `suggestions`.
     - INCOMPLETE only if reviewers couldn't assess (missing info, timeout)
 16. Write synthesis explaining the reasoning across reviewers.
 
@@ -236,7 +239,7 @@ If `iteration >= 3`: REJECTED with remaining unresolved blockers listed.
 22. **Record the plan-review marker** so the PreToolUse(ExitPlanMode) gate can let an APPROVED
     plan exit plan mode (epic kb-318a8b). Call once, with the SAME plan path you reviewed:
     ```bash
-    kb plan-review record "<plan_path>" --verdict APPROVED|REJECTED \
+    kb plan-review record "<plan_path>" --verdict APPROVED|APPROVED-WITH-REVISIONS|REJECTED \
         --synthesis "<one-line synthesis>" \
         --blocking "<issue 1>" "<issue 2>" ... \
         --project-root "<project_root>" --epic-id "<epic>"
@@ -251,7 +254,7 @@ If `iteration >= 3`: REJECTED with remaining unresolved blockers listed.
 
 ```json
 {
-  "verdict": "APPROVED|REJECTED|INCOMPLETE",
+  "verdict": "APPROVED|APPROVED-WITH-REVISIONS|REJECTED|INCOMPLETE",
   "mode": "FULL|LIGHT",
   "panel": ["Reviewer1", "Reviewer2", "Claude"],
   "reviews": {

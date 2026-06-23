@@ -76,8 +76,10 @@ def _gate(data, kb, plan_path):
                      "DESIGN-BLOCKING findings, then call ExitPlanMode again:\n" + dispatch)
     epic = rec.get("epic_id", "")
     verdict = rec.get("verdict")
-    if verdict == "APPROVED":
-        msg = f"kb:expert-review APPROVED this plan (epic {epic}). {rec.get('synthesis', '')}".strip()
+    if verdict in ("APPROVED", "APPROVED-WITH-REVISIONS"):
+        # Both pass the gate (APPROVED-WITH-REVISIONS = no DESIGN-BLOCKING issues, only
+        # implementation notes — dispatch may proceed without a full re-review).
+        msg = f"kb:expert-review {verdict} this plan (epic {epic}). {rec.get('synthesis', '')}".strip()
         return _emit("ask", msg, msg)
     if verdict == "REJECTED":
         bl = "; ".join(rec.get("blocking_issues") or [])
@@ -97,20 +99,27 @@ def _emit(decision, reason="", context=""):
 
 def _mirror(kb, plan_path):
     rec = _status(kb, plan_path)
-    if not rec or rec.get("verdict") != "APPROVED":
+    if not rec or rec.get("verdict") not in ("APPROVED", "APPROVED-WITH-REVISIONS"):
         return
+    # The execution nudge fires on approval regardless of the mirror copy: bridge plan-approval
+    # -> kbt epic -> /dispatch. /decompose-tasks (parent-run) creates the epic+tasks and the parent
+    # checks the decomposition before dispatching (hooks can't invoke skills; this is a directive).
+    nudge = (f"Plan approved ({rec.get('verdict')}). Next: run `/decompose-tasks {plan_path}` to "
+             "create the kbt epic + child tasks, CHECK the decomposition against the plan, then "
+             "`/dispatch <epic>`.")
+    extra = ""
     root = rec.get("project_root", "")
-    if not root or not os.path.isdir(root):
-        return
-    slug = os.path.splitext(os.path.basename(plan_path))[0]
-    dest = os.path.join(root, ".kb", "plans", f"PLAN-{slug}.md")
-    try:
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        shutil.copyfile(plan_path, dest)
-        sys.stdout.write(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PostToolUse", "additionalContext": f"Approved plan mirrored to {dest}"}}))
-    except OSError:
-        pass
+    if root and os.path.isdir(root):
+        slug = os.path.splitext(os.path.basename(plan_path))[0]
+        dest = os.path.join(root, ".kb", "plans", f"PLAN-{slug}.md")
+        try:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copyfile(plan_path, dest)
+            extra = f" (plan mirrored to {dest})"
+        except OSError:
+            pass
+    sys.stdout.write(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PostToolUse", "additionalContext": nudge + extra}}))
 
 
 def main():
