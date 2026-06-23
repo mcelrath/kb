@@ -24,7 +24,44 @@ Env: KB_SERVER_URL (default http://127.0.0.1:8765). Any error -> no output.
 import json
 import os
 import sys
+import time
 import urllib.request
+from datetime import datetime, timezone
+
+
+def _rel_age(ts_iso: str) -> str:
+    """'now' / '5m' / '3h' / '5.6d' from an ISO-8601 ts; '' if unparseable."""
+    if not ts_iso:
+        return ""
+    try:
+        t = datetime.fromisoformat(str(ts_iso).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        sec = (datetime.now(timezone.utc) - t).total_seconds()
+    except Exception:
+        return ""
+    if sec < 90:
+        return "now"
+    if sec < 5400:
+        return f"{int(sec // 60)}m"
+    if sec < 172800:
+        return f"{int(sec // 3600)}h"
+    return f"{sec / 86400:.1f}d"
+
+
+def _sender_last_seen(sender: str) -> str:
+    """Relative age of the sender's bridge cursor mtime (liveness proxy); '' if unknown."""
+    try:
+        sec = time.time() - os.path.getmtime(os.path.expanduser(f"~/.agent-bridge/{sender}.cursor"))
+    except OSError:
+        return ""
+    if sec < 120:
+        return ""  # fresh — don't clutter
+    if sec < 5400:
+        return f"{int(sec // 60)}m"
+    if sec < 172800:
+        return f"{int(sec // 3600)}h"
+    return f"{sec / 86400:.1f}d"
 
 BASE = os.environ.get("KB_SERVER_URL", "http://127.0.0.1:8765")
 STATE_DIR = os.environ.get("KB_STATE_DIR", "/tmp/claude-kb-state")
@@ -154,7 +191,13 @@ def main():
         body = (m.get("body") or "").strip()
         nr = " [needs-reply]" if m.get("needs_reply") else ""
         rt = f" reply-to:#{m['reply_to']}" if m.get("reply_to") else ""
-        lines.append(f"[#{m.get('id')}] from={sender}{nr}{rt}  {subj}\n{body}")
+        age = _rel_age(m.get("ts", ""))
+        agetag = f" ({age} ago)" if age and age != "now" else ""
+        ls = _sender_last_seen(sender)
+        # Surface staleness so a multi-day-old message isn't mistaken for current and
+        # the sender isn't assumed online (cursor mtime is a proxy; absent => no claim).
+        stale = f"  ⟨sender last active {ls} ago — may be offline⟩" if ls else ""
+        lines.append(f"[#{m.get('id')}] from={sender}{nr}{rt}{agetag}{stale}  {subj}\n{body}")
     body_text = "\n---\n".join(lines)
 
     # goose PreToolUse = emit_blocking: no additionalContext channel -> stay silent

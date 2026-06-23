@@ -382,11 +382,32 @@ def _run_recv(args) -> None:
     if not msgs:
         print("(no messages)")
         return
+
+    def _age(ts_iso):
+        from datetime import datetime, timezone
+        try:
+            t = datetime.fromisoformat(str(ts_iso).replace("Z", "+00:00"))
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+            sec = (datetime.now(timezone.utc) - t).total_seconds()
+        except Exception:
+            return ""
+        if sec < 90:
+            return "now"
+        if sec < 5400:
+            return f"{int(sec // 60)}m"
+        if sec < 172800:
+            return f"{int(sec // 3600)}h"
+        return f"{sec / 86400:.1f}d"
+
     for m in msgs:
+        age = _age(m.get("ts"))
+        agetag = output.c(f" ({age} ago)", "yellow" if age and age.endswith("d") else "dim") if age and age != "now" else ""
         header = (
             output.c(f"[#{m.get('id')}]", "cyan")
             + output.c(" from ", "dim")
             + output.c(str(m.get("sender")), "bold")
+            + agetag
             + output.c(": ", "dim")
             + (m.get("subject") or "")
         )
