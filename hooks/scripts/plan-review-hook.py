@@ -20,6 +20,27 @@ import subprocess
 import sys
 
 
+def _resolve_kb():
+    """Resolve the kb CLI WITHOUT depending on the launching env's PATH. A GUI/desktop launch
+    or non-login shell often lacks ~/.local/bin, so shutil.which('kb') returns None and the gate
+    would silently fail-open (the observed 'inactive' bug). Mirror hooks/scripts/lib/venv-path.sh:
+    PATH -> $CLAUDE_PLUGIN_DATA/venv -> ~/.cache/kb/plugin-venv -> $CLAUDE_PLUGIN_ROOT/.venv ->
+    ~/.local/bin. First executable wins."""
+    cands = [shutil.which("kb")]
+    data = os.environ.get("CLAUDE_PLUGIN_DATA")
+    if data:
+        cands.append(os.path.join(data, "venv", "bin", "kb"))
+    cands.append(os.path.expanduser("~/.cache/kb/plugin-venv/bin/kb"))
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if root:
+        cands.append(os.path.join(root, ".venv", "bin", "kb"))
+    cands.append(os.path.expanduser("~/.local/bin/kb"))
+    for c in cands:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+
 def _plan_path(data):
     # PreToolUse carries tool_input.planFilePath; PostToolUse carries tool_response.filePath.
     ti = data.get("tool_input") or {}
@@ -99,11 +120,23 @@ def main():
         return
     if data.get("tool_name") != "ExitPlanMode":
         return
-    plan_path = _plan_path(data)
-    kb = shutil.which("kb")
-    if not kb or not plan_path or not os.path.isfile(plan_path):
-        return  # fail-open: nothing to gate/mirror on
     event = data.get("hook_event_name")
+    kb = _resolve_kb()
+    if not kb:
+        # VISIBLE fail-open: surface that the gate is OFF rather than silently allowing — this
+        # is the failure mode that made the integration look dead. Add a context note (no
+        # permissionDecision, so the tool still proceeds — we never hard-block on infra).
+        if event == "PreToolUse":
+            note = ("plan-review gate INACTIVE: the kb CLI was not found on PATH or in the "
+                    "plugin venv, so this plan is NOT being checked against kb:expert-review. "
+                    "Fix: `kb configure --install-wrappers` or add ~/.local/bin to PATH.")
+            sys.stdout.write(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "additionalContext": note}}))
+            sys.stderr.write(note + "\n")
+        return
+    plan_path = _plan_path(data)
+    if not plan_path or not os.path.isfile(plan_path):
+        return  # no plan path on the payload -> nothing to gate/mirror
     if event == "PreToolUse":
         _gate(data, kb, plan_path)
     elif event == "PostToolUse":
