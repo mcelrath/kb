@@ -9,6 +9,8 @@ copies are byte-identical to kb.py:66-67,81-112.
 import asyncio
 import json
 import os
+import sqlite3
+import time
 from pathlib import Path
 
 from starlette.requests import Request
@@ -17,6 +19,88 @@ from starlette.responses import JSONResponse, StreamingResponse
 # Module-level bridge paths (mirrors kb.py:66-67)
 BRIDGE_MESSAGES_PATH = Path.home() / ".agent-bridge" / "messages.jsonl"
 BRIDGE_AGENTS_PATH = Path.home() / ".agent-bridge" / "agents.json"
+
+# --- Bridge liveness (kb-jij Phase-6 additive) -----------------------------------------
+# Server-owned liveness in the bridge_agents table: agents.json stays canonical for
+# identity; this overlays last_seen + online so /bridge/agents can report real liveness.
+# last_seen is refreshed by SSE heartbeat and by message polls; online=1 while a live
+# /bridge/watch SSE connection is held (set on connect, cleared in the generator's finally
+# on disconnect/crash). A server crash leaves online=1 stale, but the last_seen TTL in
+# _classify() demotes it — so online is never trusted without a fresh heartbeat.
+_LIVENESS_DB = os.environ.get("KB_DB") or str(Path.home() / ".cache" / "kb" / "knowledge.db")
+
+
+def _liveness_conn():
+    c = sqlite3.connect(_LIVENESS_DB, timeout=5)
+    c.execute("PRAGMA busy_timeout=5000")
+    return c
+
+
+def _mark_seen(agent_id: str, session_id: str | None = None) -> None:
+    """Refresh last_seen (poll / heartbeat keep-alive); does NOT change online. Fail-open."""
+    if not agent_id:
+        return
+    try:
+        c = _liveness_conn()
+        c.execute(
+            "INSERT INTO bridge_agents(id, session_id, last_seen, online, updated_at) "
+            "VALUES(?, ?, ?, 0, datetime('now')) "
+            "ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen, "
+            "session_id=COALESCE(excluded.session_id, bridge_agents.session_id), "
+            "updated_at=excluded.updated_at",
+            (agent_id, session_id, time.time()),
+        )
+        c.commit()
+        c.close()
+    except Exception:
+        pass
+
+
+def _mark_online(agent_id: str, online: bool, session_id: str | None = None) -> None:
+    """Set online (SSE connect=True / disconnect=False) + refresh last_seen. Fail-open."""
+    if not agent_id:
+        return
+    try:
+        c = _liveness_conn()
+        c.execute(
+            "INSERT INTO bridge_agents(id, session_id, last_seen, online, updated_at) "
+            "VALUES(?, ?, ?, ?, datetime('now')) "
+            "ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen, online=excluded.online, "
+            "session_id=COALESCE(excluded.session_id, bridge_agents.session_id), "
+            "updated_at=excluded.updated_at",
+            (agent_id, session_id, time.time(), 1 if online else 0),
+        )
+        c.commit()
+        c.close()
+    except Exception:
+        pass
+
+
+def _liveness_map() -> dict:
+    """{id: (last_seen_epoch, online_int)} from bridge_agents. Fail-open to {}."""
+    try:
+        c = _liveness_conn()
+        rows = c.execute("SELECT id, last_seen, online FROM bridge_agents").fetchall()
+        c.close()
+        return {r[0]: (r[1] or 0.0, r[2] or 0) for r in rows}
+    except Exception:
+        return {}
+
+
+def _classify(last_seen: float, online: int) -> tuple[str, "float | None"]:
+    """(status, age_seconds) per the reviewed TTL ladder. 'no SSE connection' is IDLE, not
+    offline by itself (an actively-working agent isn't holding a watch). online requires a
+    live connection AND a heartbeat within 20s."""
+    if not last_seen:
+        return ("offline", None)
+    age = max(0.0, time.time() - last_seen)
+    if online and age <= 20:
+        return ("online", age)
+    if age <= 120:
+        return ("idle", age)
+    if age <= 600:
+        return ("stale", age)
+    return ("offline", age)
 BRIDGE_BIN = Path.home() / ".agent-bridge" / "bridge"
 
 
@@ -171,6 +255,10 @@ async def bridge_messages(request: Request) -> JSONResponse:
     Optional ?since=N returns only messages with id > N.
     """
     recipient = request.query_params.get("recipient", "").strip() or None
+    if recipient and recipient != "all":
+        # An agent polling its own mailbox is alive — keep-alive its last_seen. This is the
+        # main liveness signal for agents that work (poll) but don't hold an SSE watch.
+        _mark_seen(recipient)
     try:
         limit = int(request.query_params.get("limit", "50"))
     except ValueError:
@@ -191,16 +279,31 @@ async def bridge_messages(request: Request) -> JSONResponse:
 async def bridge_agents(request: Request) -> JSONResponse:
     """GET /bridge/agents
 
-    Returns the agent registry from ~/.agent-bridge/agents.json.
-    Fields: id, role, cwd, description, session_id, joined_at.
+    Identity from ~/.agent-bridge/agents.json (id, role, cwd, description, session_id,
+    joined_at) MERGED with the server-owned liveness overlay (bridge_agents table): each
+    agent gains `status` (online|idle|stale|offline) + `last_seen_age_sec`, so a multi-day
+    stale handle is no longer mistaken for online.
     """
-    if not BRIDGE_AGENTS_PATH.exists():
-        return JSONResponse({"agents": []})
-    try:
-        data = json.loads(BRIDGE_AGENTS_PATH.read_text())
-    except (OSError, json.JSONDecodeError) as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-    return JSONResponse(data)
+    agents: list = []
+    if BRIDGE_AGENTS_PATH.exists():
+        try:
+            data = json.loads(BRIDGE_AGENTS_PATH.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+        agents = data.get("agents", data) if isinstance(data, dict) else data
+    live = _liveness_map()
+    out = []
+    for a in agents:
+        aid = a.get("id")
+        last_seen, online = live.get(aid, (0.0, 0))
+        status, age = _classify(last_seen, online)
+        out.append({
+            **a,
+            "status": status,
+            "online": status == "online",
+            "last_seen_age_sec": round(age) if age is not None else None,
+        })
+    return JSONResponse({"agents": out})
 
 
 async def bridge_watch(request: Request) -> StreamingResponse | JSONResponse:
@@ -291,6 +394,7 @@ async def bridge_watch(request: Request) -> StreamingResponse | JSONResponse:
             if now - last_heartbeat >= 10.0:
                 yield b": ping\n\n"
                 last_heartbeat = now
+                _mark_seen(agent_id)
 
             new_msgs = _parse_bridge_messages(agent_id, limit=50, last_event_id=last_id,
                                               mode="directed")
@@ -308,8 +412,19 @@ async def bridge_watch(request: Request) -> StreamingResponse | JSONResponse:
 
             await asyncio.sleep(0.75)
 
+    async def _tracked():
+        # SSE-connection registry: mark online for the connection's lifetime; the finally
+        # fires when the client disconnects/crashes (StreamingResponse aclose -> GeneratorExit),
+        # clearing online. This is the crash-proof liveness signal — no timestamp needed.
+        _mark_online(agent_id, True)
+        try:
+            async for frame in event_generator():
+                yield frame
+        finally:
+            _mark_online(agent_id, False)
+
     return StreamingResponse(
-        event_generator(),
+        _tracked(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

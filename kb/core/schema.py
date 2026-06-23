@@ -422,6 +422,20 @@ SCHEMA_SQL = """
     CREATE INDEX IF NOT EXISTS idx_bridge_reply_to ON bridge_messages(reply_to);
     CREATE INDEX IF NOT EXISTS idx_bridge_substantive ON bridge_messages(is_substantive);
 
+    -- Bridge LIVENESS overlay (kb-jij Phase-6 additive: agents.json stays canonical for
+    -- identity; this table holds the SERVER-OWNED liveness the jsonl/agents.json never had).
+    -- last_seen = max(SSE heartbeat, message poll, write); online = a live /bridge/watch SSE
+    -- connection is currently held. /bridge/agents classifies online/idle/stale/offline from
+    -- these vs. TTLs (online: SSE held + heartbeat<=20s; idle<=2m; stale<=10m; offline>10m).
+    CREATE TABLE IF NOT EXISTS bridge_agents (
+        id TEXT PRIMARY KEY,          -- bridge handle (e.g. kb-dev)
+        session_id TEXT,              -- harness session id (for kb resume <agent>, kb-4c3ff4)
+        last_seen REAL,               -- epoch seconds; refreshed by SSE heartbeat / poll / write
+        online INTEGER NOT NULL DEFAULT 0,  -- 1 while a live /bridge/watch SSE connection is held
+        updated_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_bridge_agents_last_seen ON bridge_agents(last_seen DESC);
+
     CREATE VIRTUAL TABLE IF NOT EXISTS bridge_messages_fts USING fts5(
         subject, body,
         content='bridge_messages',

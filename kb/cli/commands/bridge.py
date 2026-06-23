@@ -157,6 +157,8 @@ def run_bridge(kb, args, bridge_parser) -> None:
         _run_send(args)
     elif cmd == "recv":
         _run_recv(args)
+    elif cmd == "agents":
+        _run_agents(args)
     elif cmd in ("announce", "join"):
         _run_announce(args)
     elif cmd == "owed":
@@ -416,6 +418,49 @@ def _run_recv(args) -> None:
         if b:
             # body is multi-line; print up to 400 chars but do not truncate per-line
             print(f"    {b[:400]}")
+
+
+def _run_agents(args) -> None:
+    """kb bridge agents — list bridge handles with server-computed liveness."""
+    import json
+    import urllib.request
+
+    def _age(sec):
+        if sec is None:
+            return "never"
+        if sec < 90:
+            return f"{int(sec)}s"
+        if sec < 5400:
+            return f"{int(sec // 60)}m"
+        if sec < 172800:
+            return f"{int(sec // 3600)}h"
+        return f"{sec / 86400:.1f}d"
+
+    _color = {"online": "green", "idle": "cyan", "stale": "yellow", "offline": "dim"}
+    try:
+        with urllib.request.urlopen(f"{_server_url()}/bridge/agents", timeout=8) as r:
+            data = json.loads(r.read())
+    except Exception as e:
+        print(f"kb bridge agents: kb-server unreachable ({e})", file=sys.stderr)
+        sys.exit(1)
+    agents = data.get("agents", []) if isinstance(data, dict) else data
+    if not agents:
+        print("(no agents)")
+        return
+    # online/idle first, then by recency
+    order = {"online": 0, "idle": 1, "stale": 2, "offline": 3}
+    agents.sort(key=lambda a: (order.get(a.get("status"), 9), a.get("last_seen_age_sec") or 1e12))
+    for a in agents:
+        st = a.get("status", "offline")
+        line = (
+            output.c(f"{st:8}", _color.get(st, "dim"))
+            + " " + output.c(str(a.get("id")), "bold")
+            + output.c(f"  last seen {_age(a.get('last_seen_age_sec'))}", "dim")
+        )
+        cwd = a.get("cwd")
+        if cwd:
+            line += output.c(f"  {cwd}", "dim")
+        print(output.fit_line(line))
 
 
 def _run_announce(args) -> None:

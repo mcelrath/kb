@@ -1096,6 +1096,9 @@ def main():
         help="Your id (default: AGENT_ID env)")
     bridge_recv_parser.add_argument("-n", "--limit", type=int, default=50, help="Max messages")
 
+    bridge_sub.add_parser("agents",
+        help="List bridge handles with server-computed liveness (online/idle/stale/offline + last-seen).")
+
     bridge_announce_parser = bridge_sub.add_parser("announce", aliases=["join"],
         help="Join the bridge: kb bridge announce <id> <focus> <offering>")
     bridge_announce_parser.add_argument("id", help="your agent id")
