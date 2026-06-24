@@ -28,6 +28,9 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from _state import STATE_DIR  # noqa: E402  (canonical reboot-surviving state root)
+
 
 def _rel_age(ts_iso: str) -> str:
     """'now' / '5m' / '3h' / '5.6d' from an ISO-8601 ts; '' if unparseable."""
@@ -64,7 +67,6 @@ def _sender_last_seen(sender: str) -> str:
     return f"{sec / 86400:.1f}d"
 
 BASE = os.environ.get("KB_SERVER_URL", "http://127.0.0.1:8765")
-STATE_DIR = os.environ.get("KB_STATE_DIR", "/tmp/claude-kb-state")
 
 
 def _notice(fresh: list) -> str:

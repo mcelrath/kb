@@ -72,7 +72,7 @@ except Exception:
 # Durable loop guard: block AT MOST ONCE per session, independent of stop_hook_active.
 # A harness that re-wakes the agent into a fresh turn resets stop_hook_active to false
 # each time; this disk marker survives that and breaks the infinite Stop loop.
-STATE_DIR="${KB_STATE_DIR:-${CLAUDE_STATE_DIR:-$HOME/.cache/kb/state}}"
+STATE_DIR="${CLAUDE_STATE_DIR:-$HOME/.claude/state}"
 mkdir -p "$STATE_DIR" 2>/dev/null
 GUARD_KEY="${SESSION_ID:-$PERSONA}"
 MARK="$STATE_DIR/${GUARD_KEY//[^A-Za-z0-9_-]/_}-kbt-inprogress-blocked"

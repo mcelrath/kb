@@ -18,7 +18,7 @@ SESSION_ID=$(printf '%s' "$INPUT" | python3 -c "import sys,json;print(json.load(
 [ -z "$SESSION_ID" ] && exit 0
 
 # Once-per-session gate. Portable across harnesses (no CLAUDE_* dependency).
-STATE_DIR="${KB_STATE_DIR:-${CLAUDE_STATE_DIR:-$HOME/.cache/kb/state}}"
+STATE_DIR="${CLAUDE_STATE_DIR:-$HOME/.claude/state}"
 mkdir -p "$STATE_DIR" 2>/dev/null
 MARK="$STATE_DIR/${SESSION_ID//[^A-Za-z0-9_-]/_}-instructions-injected"
 [ -f "$MARK" ] && exit 0

@@ -7,8 +7,9 @@
 #   PreToolUse — inject via exit-0 additionalContext JSON (NEVER exit 2: that
 #     blocks the call AND cancels the parallel tool batch).
 #   UserPromptSubmit — inject via stdout (becomes a system-reminder).
-# The kb-server is the transport API; the per-session cursor lives in
-# $KB_STATE_DIR/<session>-bridge-injected so a message injects exactly once.
+# The kb-server is the transport API; the per-session cursor lives in the canonical
+# session-state dir ($STATE_DIR, default ~/.claude/state) as <session>-bridge-injected
+# so a message injects exactly once. (_bridge_inject_fetch.py resolves STATE_DIR via lib/_state.)
 set -u
 BASE="${KB_SERVER_URL:-http://127.0.0.1:8765}"
 HERE="$(dirname "$(readlink -f "$0")")"

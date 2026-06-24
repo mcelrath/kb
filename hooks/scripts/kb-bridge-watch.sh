@@ -52,7 +52,7 @@ BASE="${BASE//\/\/127.0.0.1:/\/\/${HOSTALIAS}:}"
 #       inject cursor).
 # No session id / no cursors -> LAST="" -> fresh tail (unchanged legacy behavior; a brand
 # new session must not replay ancient history).
-INJ_STATE="${KB_STATE_DIR:-/tmp/claude-kb-state}"
+INJ_STATE="$STATE_DIR"   # SAME canonical root the fetcher (_bridge_inject_fetch.py) writes to
 mkdir -p "$INJ_STATE" 2>/dev/null   # post-reboot the dir may not exist yet
 WOKEN_CURSOR=""
 LAST=0
