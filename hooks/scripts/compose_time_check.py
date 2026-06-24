@@ -485,7 +485,7 @@ def query_route_to_tip(conn: sqlite3.Connection, tool_name: str, ti: dict, promp
     table — a friend's generic kb has no physics tables, so no route-to-tip
     advisory leaks. (kb-4mi)
     """
-    if tool_name != 'Agent':
+    if tool_name not in ('Task', 'Agent'):
         return []
     try:
         conn.execute('SELECT 1 FROM lean_work_queue LIMIT 1')
@@ -596,9 +596,12 @@ def main() -> None:
     tool_name = data.get('tool_name', '')
     ti = data.get('tool_input', {})
 
-    # Determine the text to scan
+    # Determine the text to scan. The subagent-dispatch tool is named 'Task' on
+    # Claude Code (the hook matcher) and 'Agent' on some other harnesses — accept both,
+    # else all dispatch-time surfacing (ALREADY-CODIFIED / ROUTE-TO-TIP / STRUCTURAL-FACT)
+    # is silently dead.
     prompt_text = ''
-    if tool_name == 'Agent':
+    if tool_name in ('Task', 'Agent'):
         prompt_text = ti.get('prompt', '')
     elif tool_name == 'Bash':
         cmd = ti.get('command', '')
