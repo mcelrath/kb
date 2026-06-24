@@ -96,6 +96,8 @@ kbt ready --json
 
 ```bash
 kbt create --title "Issue title" --description "Detailed context" --type task --priority 2
+kbt create --type epic --prefix <tag> --title "Plan: X" --design-file <plan-file>   # plan -> epic
+kbt create --title "Subtask" --type task --deps parent-child:<epic-id>              # child of an epic
 kbt create --title "Issue title" --description "Context" --priority 1 --deps discovered-from:<parent-id>
 ```
 
@@ -164,13 +166,10 @@ kbt show <id> --json          # --json works on read commands (show/list/ready/b
 
 ### Important Rules
 
-- ✅ Use `kbt` for ALL task tracking
-- ✅ Use `--json` on read commands for programmatic use
-- ✅ Link discovered work with `discovered-from` dependencies
-- ✅ Check `kbt ready` before asking "what should I work on?"
-- ❌ Do NOT create markdown TODO lists
-- ❌ Do NOT use external issue trackers
-- ❌ Do NOT duplicate tracking systems
+- Use `kbt` for ALL task tracking — it is the single tracking system; keep durable findings in `kb`.
+- Use `--json` on read commands for programmatic use.
+- Link a child task to its epic with `parent-child`, and discovered work with `discovered-from`.
+- Check `kbt ready` before asking "what should I work on?"
 
 > **Migrating from bd/beads?** `python -m kb.bd_import <bd-export.json>` imports an
 > existing `bd export --json` into the kbt issues tables. That importer is the
@@ -215,7 +214,9 @@ that defer work in free text without a tracker-ID.
 
 ## Landing the Plane (Session Completion)
 
-**When ending a work session**, complete ALL steps below. Work is NOT complete until `git push` succeeds.
+**This applies to the MAIN session at session-close only.** Subagents and worktree agents do NOT
+push — they hand verified work back to the dispatcher, which lands it. For the main session ending a
+work session, complete ALL steps below; work is NOT complete until `git push` succeeds.
 
 **MANDATORY WORKFLOW:**
 

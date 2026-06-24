@@ -46,9 +46,11 @@ Use kbt for ALL tracking; never markdown TODO lists.
   kbt ready                     # unblocked work
   kbt show <id> [--json]        # full detail + deps
   kbt create --title "..." --description "..." --type task|bug|feature|epic --priority 2
+  kbt create --type epic --prefix <tag> --title "Plan: ..." --design-file <plan>   # plan -> epic
   kbt update <id> --claim       # claim atomically ;  --status in_progress ;  --notes "..."
   kbt close <id> --reason "..." ;  kbt list --status open ;  kbt children <id> ;  kbt dep add <a> <b>
-Link discovered work with `--deps discovered-from:<parent-id>`. Priority 0 (critical) … 4 (backlog).
+Link a child task to its epic with `--deps parent-child:<epic-id>`; link discovered work with
+`--deps discovered-from:<parent-id>`. Priority 0 (critical) … 4 (backlog).
 
 === agent bridge (kb bridge) — coordinate with peers on this host ===
 Your sender id is INFERRED — just use `kb`. Messages addressed to you (or to `all` and naming you)
