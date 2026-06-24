@@ -514,7 +514,7 @@ def cmd_create(args: Any, kb: Any) -> int:
     else:
         prefix = args.prefix if hasattr(args, "prefix") and args.prefix else "kb"
 
-    result = kb.issue_create(
+    result = kb._issues.create(
         title=title,
         type=issue_type,
         description=description,
@@ -537,7 +537,7 @@ def cmd_create(args: Any, kb: Any) -> int:
             else:
                 # bare id → treat as blocks
                 dep_type, target = "blocks", dep_spec
-            kb.issue_add_dep(issue_id, target, dep_type)
+            kb._issues.add_dep(issue_id, target, dep_type)
 
     # Bulk children (kb-b6c2b0.6): --children-from FILE (one title per line) creates
     # a child task per line under this issue, so epic + N children = ONE invocation.
@@ -552,7 +552,7 @@ def cmd_create(args: Any, kb: Any) -> int:
             ct = line.strip()
             if not ct:
                 continue
-            cres = kb.issue_create(title=ct, type="task", priority=priority,
+            cres = kb._issues.create(title=ct, type="task", priority=priority,
                                    parent_id=issue_id, project=project, prefix=prefix)
             child_ids.append(cres["id"])
 
@@ -572,7 +572,7 @@ def cmd_create(args: Any, kb: Any) -> int:
 
 def cmd_show(args: Any, kb: Any) -> int:
     """kbt show ID [--json]"""
-    row = kb.issue_get(args.id)
+    row = kb._issues.get(args.id)
     if row is None:
         print(f"kbt: issue not found: {args.id}", file=sys.stderr)
         return 1
@@ -625,7 +625,7 @@ def _print_issue_human(row: dict[str, Any], kb: Any = None) -> None:
     # children inline (kb-b6c2b0.12): show the issue's graph context in ONE read,
     # not a separate `kbt children` call.
     if kb is not None:
-        kids = kb.issue_list(parent_id=issue_id)
+        kids = kb._issues.list(parent_id=issue_id)
         if kids:
             print(f"  children ({len(kids)}):")
             for k in kids:
@@ -638,7 +638,7 @@ def cmd_update(args: Any, kb: Any) -> int:
 
     if args.claim:
         assignee = args.assignee or os.environ.get("USER", "unknown")
-        result = kb.issue_claim(issue_id, assignee)
+        result = kb._issues.claim(issue_id, assignee)
         if result.get("claimed"):
             print(f"Claimed: {issue_id}")
             return 0
@@ -650,7 +650,7 @@ def cmd_update(args: Any, kb: Any) -> int:
             return 1
 
     if args.status:
-        kb.issue_set_status(issue_id, args.status)
+        kb._issues.set_status(issue_id, args.status)
         print(f"Updated status: {issue_id} → {args.status}")
 
     if args.assignee and not args.claim:
@@ -676,7 +676,7 @@ def cmd_update(args: Any, kb: Any) -> int:
     # the description with a '---' separator, which (a) bloated the body and (b)
     # had no distinct event stream. Route to issue_add_comment; description unchanged.
     if args.notes:
-        kb.issue_add_comment(issue_id, args.notes, author=os.environ.get("USER"))
+        kb._issues.add_comment(issue_id, args.notes, author=os.environ.get("USER"))
         print(f"Added note (comment): {issue_id}")
 
     return 0
@@ -686,7 +686,7 @@ def cmd_close(args: Any, kb: Any) -> int:
     """kbt close ID [--reason TEXT]"""
     issue_id = args.id
     close_reason = getattr(args, "reason", None)
-    result = kb.issue_set_status(issue_id, "closed", close_reason=close_reason)
+    result = kb._issues.set_status(issue_id, "closed", close_reason=close_reason)
     print(f"Closed: {result['id']}")
     return 0
 
@@ -752,7 +752,7 @@ def cmd_list(args: Any, kb: Any) -> int:
 
     # When scoping, fetch unfiltered (the project COLUMN is mostly unset; grouping
     # is by id-prefix) then post-filter, applying the limit after.
-    rows = kb.issue_list(project=None, status=status, parent_id=parent,
+    rows = kb._issues.list(project=None, status=status, parent_id=parent,
                          type=itype, assignee=assignee,
                          limit=(None if scope else limit))
     if scope:
@@ -765,7 +765,7 @@ def cmd_list(args: Any, kb: Any) -> int:
         # Fetch full rows to get updated_at etc.
         out = []
         for r in rows:
-            full = kb.issue_get(r["id"])
+            full = kb._issues.get(r["id"])
             if full:
                 item = _project_list_item(full, kb.conn)
                 out.append(item)
@@ -779,7 +779,7 @@ def cmd_list(args: Any, kb: Any) -> int:
 def cmd_dep_add(args: Any, kb: Any) -> int:
     """kbt dep add ISSUE DEPENDS-ON [--type TYPE]"""
     dep_type = getattr(args, "type", "blocks") or "blocks"
-    result = kb.issue_add_dep(args.issue, args.depends_on, dep_type)
+    result = kb._issues.add_dep(args.issue, args.depends_on, dep_type)
     # Usage is `dep add ISSUE DEPENDS-ON`; print it in dependency direction (not a
     # misleading blocker-arrow): for 'blocks', depends_on must finish before issue.
     print(f"Dep added: {args.issue} depends-on {args.depends_on} [{dep_type}] (new={result['is_new']})")
@@ -789,18 +789,18 @@ def cmd_dep_add(args: Any, kb: Any) -> int:
 def cmd_dep_list(args: Any, kb: Any) -> int:
     """kbt dep list ID [--json]"""
     as_json = getattr(args, "json", False)
-    deps = kb.issue_list_deps(args.id)
+    deps = kb._issues.list_deps(args.id)
 
     if as_json:
         # Emit flat list of dep-target items in bd dep-list element shape
         out: list[dict[str, Any]] = []
         for d in deps.get("outgoing", []):
-            target = kb.issue_get(d["id"])
+            target = kb._issues.get(d["id"])
             if target:
                 item = _project_dep_list_item(target, kb.conn, d["type"])
                 out.append(item)
         for d in deps.get("incoming", []):
-            target = kb.issue_get(d["id"])
+            target = kb._issues.get(d["id"])
             if target:
                 item = _project_dep_list_item(target, kb.conn, d["type"])
                 out.append(item)
@@ -818,7 +818,7 @@ def cmd_dep_list(args: Any, kb: Any) -> int:
 def cmd_comments_add(args: Any, kb: Any) -> int:
     """kbt comments add ID BODY"""
     author = os.environ.get("USER")
-    result = kb.issue_add_comment(args.id, args.body, author=author)
+    result = kb._issues.add_comment(args.id, args.body, author=author)
     print(f"Comment added: {result['id']}")
     return 0
 
@@ -826,12 +826,12 @@ def cmd_comments_add(args: Any, kb: Any) -> int:
 def cmd_children(args: Any, kb: Any) -> int:
     """kbt children ID [--json]"""
     as_json = getattr(args, "json", False)
-    rows = kb.issue_list(parent_id=args.id)
+    rows = kb._issues.list(parent_id=args.id)
 
     if as_json:
         out = []
         for r in rows:
-            full = kb.issue_get(r["id"])
+            full = kb._issues.get(r["id"])
             if full:
                 item = _project_list_item(full, kb.conn)
                 out.append(item)
@@ -846,7 +846,7 @@ def cmd_ready(args: Any, kb: Any) -> int:
     """kbt ready [--json] [--all]"""
     as_json = getattr(args, "json", False)
     scope = _resolve_scope(args)
-    rows = kb.issue_ready(project=None)
+    rows = kb._issues.ready(project=None)
     if scope:
         scoped = [r for r in rows if _belongs_to_project(r, scope)]
         _hint_if_scoped_empty(scope, scoped, rows)
@@ -856,7 +856,7 @@ def cmd_ready(args: Any, kb: Any) -> int:
         out = []
         for r in rows:
             # ready() returns summary rows; fetch full for design field
-            full = kb.issue_get(r["id"])
+            full = kb._issues.get(r["id"])
             if full:
                 item = _project_ready_item(full, kb.conn)
             else:
@@ -873,7 +873,7 @@ def cmd_blocked(args: Any, kb: Any) -> int:
     """kbt blocked [--json] [--all]"""
     as_json = getattr(args, "json", False)
     scope = _resolve_scope(args)
-    rows = kb.issue_blocked(project=None)
+    rows = kb._issues.blocked(project=None)
     if scope:
         scoped = [r for r in rows if _belongs_to_project(r, scope)]
         _hint_if_scoped_empty(scope, scoped, rows)
@@ -883,7 +883,7 @@ def cmd_blocked(args: Any, kb: Any) -> int:
         out = []
         for r in rows:
             # blocked() returns rows with blocker_ids
-            full = kb.issue_get(r["id"])
+            full = kb._issues.get(r["id"])
             if full:
                 full["blocker_ids"] = r.get("blocker_ids", [])
                 item = _project_blocked_item(full, kb.conn)
@@ -902,7 +902,7 @@ def cmd_blocked(args: Any, kb: Any) -> int:
 def cmd_search(args: Any, kb: Any) -> int:
     """kbt search QUERY"""
     project = getattr(args, "project", None)
-    rows = kb.issue_search(args.query, project=project)
+    rows = kb._issues.search(args.query, project=project)
     for r in rows:
         sim = r.get("similarity")
         score = f"sim={sim:.3f}" if isinstance(sim, (int, float)) else "fts"

@@ -21,21 +21,21 @@ from kb.bd_import import _build_test_kb
 def tmp_kb(tmp_path):
     """Real isolated kb instance with a handful of issues."""
     kb = _build_test_kb(tmp_path / "test.db")
-    ep1 = kb.issue_create(title="Epic one", type="epic", priority=0)["id"]
-    t1 = kb.issue_create(
+    ep1 = kb._issues.create(title="Epic one", type="epic", priority=0)["id"]
+    t1 = kb._issues.create(
         title="Ready task with a very long title that might get truncated in user mode",
         type="task",
         priority=1,
         parent_id=ep1,
     )["id"]
-    t2 = kb.issue_create(
+    t2 = kb._issues.create(
         title="Blocked task",
         type="task",
         priority=3,
         parent_id=ep1,
     )["id"]
     # dep: t2 blocks t1
-    kb.issue_add_dep(t2, t1, "blocks")
+    kb._issues.add_dep(t2, t1, "blocks")
     kb._test_ep1 = ep1
     kb._test_t1 = t1
     kb._test_t2 = t2

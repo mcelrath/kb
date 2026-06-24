@@ -664,7 +664,7 @@ Finding 2: {candidate['content'][:300]}"""
                     "similarity": r.get("similarity", 0)
                 })
 
-        scripts = self.script_search(content, project=project, limit=3)
+        scripts = self._scripts.search(content, project=project, limit=3)
         for s in scripts:
             if s.get("similarity", 0) > 0.5:
                 suggestions["scripts"].append({
@@ -674,7 +674,7 @@ Finding 2: {candidate['content'][:300]}"""
                     "similarity": s.get("similarity", 0)
                 })
 
-        docs = self.doc_search(content, project=project)
+        docs = self._documents.search(content, project=project)
         for d in docs[:3]:
             suggestions["docs"].append({
                 "id": d["id"],
@@ -721,82 +721,13 @@ Finding 2: {s['content'][:300]}"""
 
         return contradictions
 
-    # =========================================================================
-    # Scripts delegation
-    # =========================================================================
-
-    def script_add(self, path: str, purpose: str, **kwargs: Any) -> str:
-        """Add a script."""
-        result = self._scripts.add(path, purpose, **kwargs)
-        return str(result["id"])
-
-    def script_get(self, script_id: str) -> dict[str, Any] | None:
-        """Get a script."""
-        return self._scripts.get(script_id)
-
-    def script_search(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
-        """Search scripts."""
-        return self._scripts.search(query, **kwargs)
-
-    def script_list(self, **kwargs: Any) -> list[dict[str, Any]]:
-        """List scripts."""
-        return self._scripts.list(**kwargs)
-
-    def script_link_finding(self, finding_id: str, script_id: str, relationship: str = "generated_by") -> None:
-        """Link finding to script."""
-        self._scripts.link_finding(finding_id, script_id, relationship)
-
-    def script_findings(self, script_id: str) -> list[dict[str, Any]]:
-        """Get findings for script."""
-        return self._scripts.get_findings(script_id)
-
     def finding_scripts(self, finding_id: str) -> list[dict[str, Any]]:
         """Get scripts for finding."""
         return self._scripts.get_for_finding(finding_id)
 
-    def script_delete(self, script_id: str) -> bool:
-        """Delete a script."""
-        return self._scripts.delete(script_id)
-
-    # =========================================================================
-    # Documents delegation
-    # =========================================================================
-
-    def doc_add(self, title: str, doc_type: str, **kwargs: Any) -> str:
-        """Add a document."""
-        return self._documents.add(title, doc_type, **kwargs)
-
-    def doc_get(self, doc_id: str) -> dict[str, Any] | None:
-        """Get a document."""
-        return self._documents.get(doc_id)
-
-    def doc_list(self, **kwargs: Any) -> list[dict[str, Any]]:
-        """List documents."""
-        return self._documents.list(**kwargs)
-
-    def doc_search(self, query: str, project: str | None = None) -> list[dict[str, Any]]:
-        """Search documents."""
-        return self._documents.search(query, project)
-
-    def doc_supersede(self, doc_id: str, new_doc_id: str) -> bool:
-        """Supersede a document."""
-        return self._documents.supersede(doc_id, new_doc_id)
-
-    def doc_cite(self, finding_id: str, doc_id: str, **kwargs: Any) -> bool:
-        """Cite a document."""
-        return self._documents.cite(finding_id, doc_id, **kwargs)
-
-    def doc_citations(self, doc_id: str) -> list[dict[str, Any]]:
-        """Get citations for document."""
-        return self._documents.get_citations(doc_id)
-
     def finding_docs(self, finding_id: str) -> list[dict[str, Any]]:
         """Get documents for finding."""
         return self._documents.get_docs_for_finding(finding_id)
-
-    def doc_delete(self, doc_id: str) -> bool:
-        """Delete a document."""
-        return self._documents.delete(doc_id)
 
     # =========================================================================
     # Utility methods
@@ -1918,101 +1849,6 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         self.conn.commit()
         return {"updated": updated, "failed": failed, "total": len(findings)}
 
-    # =========================================================================
-    # Theorem index methods
-    # =========================================================================
-
-    def theorem_add(self, **kwargs: Any) -> dict[str, Any]:
-        return self._theorems.add(**kwargs)
-
-    def theorem_get(self, theorem_id: str) -> dict[str, Any] | None:
-        return self._theorems.get(theorem_id)
-
-    def theorem_search(self, query: str, module: str | None = None, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-        return self._theorems.search(query, module=module, project=project, limit=limit)
-
-    def theorem_search_by_tex(self, tex_ref: str) -> list[dict[str, Any]]:
-        return self._theorems.search_by_tex_source(tex_ref)
-
-    def theorem_list_module(self, module_path: str) -> list[dict[str, Any]]:
-        return self._theorems.list_module(module_path)
-
-    def theorem_add_dependency(self, theorem_id: str, depends_on_id: str) -> None:
-        self._theorems.add_dependency(theorem_id, depends_on_id)
-
-    def theorem_get_dependencies(self, theorem_id: str) -> list[dict[str, Any]]:
-        return self._theorems.get_dependencies(theorem_id)
-
-    def theorem_update_statement_pure(self, theorem_id: str, statement_pure: str) -> None:
-        self._theorems.update_statement_pure(theorem_id, statement_pure)
-
-    # =========================================================================
-    # Concept register methods
-    # =========================================================================
-
-    def concept_add(self, domain: str, claim: str, status: str = "open", correct_framing: str | None = None, project: str | None = None) -> dict[str, Any]:
-        return self._concepts.add(domain, claim, status, correct_framing, project)
-
-    def concept_get(self, concept_id: str) -> dict[str, Any] | None:
-        return self._concepts.get(concept_id)
-
-    def concept_list(self, domain: str | None = None, status: str | None = None, project: str | None = None) -> list[dict[str, Any]]:
-        return self._concepts.list(domain, status, project)
-
-    def concept_search(self, query: str, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-        return self._concepts.search(query, project=project, limit=limit)
-
-    def concept_verify(self, concept_id: str) -> None:
-        self._concepts.verify(concept_id)
-
-    def concept_supersede(self, concept_id: str, new_claim: str, domain: str | None = None, project: str | None = None) -> dict[str, Any]:
-        return self._concepts.supersede(concept_id, new_claim, domain, project)
-
-    def concept_link_theorem(self, concept_id: str, theorem_id: str, role: str = "evidence") -> None:
-        self._concepts.link_theorem(concept_id, theorem_id, role)
-
-    def concept_link_finding(self, concept_id: str, finding_id: str, role: str = "evidence") -> None:
-        self._concepts.link_finding(concept_id, finding_id, role)
-
-    def concept_render_register(self, project: str | None = None, max_tokens: int = 600, framework_hints: list[str] | None = None, technique_hints: list[str] | None = None) -> str:
-        return self._concepts.render_register(project, max_tokens, framework_hints, technique_hints)
-
-    # =========================================================================
-    # Issue tracker methods
-    # =========================================================================
-
-    def issue_create(self, title: str, **kwargs) -> dict[str, Any]:
-        return self._issues.create(title, **kwargs)
-
-    def issue_get(self, issue_id: str) -> dict[str, Any] | None:
-        return self._issues.get(issue_id)
-
-    def issue_list(self, project: str | None = None, status: str | None = None, type: str | None = None, parent_id: str | None = None, assignee: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
-        return self._issues.list(project=project, status=status, type=type, parent_id=parent_id, assignee=assignee, limit=limit)
-
-    def issue_search(self, query: str, project: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-        return self._issues.search(query, project=project, limit=limit)
-
-    def issue_add_dep(self, issue_id: str, depends_on_id: str, dep_type: str, created_by: str | None = None) -> dict[str, Any]:
-        return self._issues.add_dep(issue_id, depends_on_id, dep_type, created_by=created_by)
-
-    def issue_list_deps(self, issue_id: str) -> dict[str, Any]:
-        return self._issues.list_deps(issue_id)
-
-    def issue_add_comment(self, issue_id: str, body: str, author: str | None = None) -> dict[str, Any]:
-        return self._issues.add_comment(issue_id, body, author=author)
-
-    def issue_set_status(self, issue_id: str, status: str, close_reason: str | None = None, closed_by_session: str | None = None) -> dict[str, Any]:
-        return self._issues.set_status(issue_id, status, close_reason=close_reason, closed_by_session=closed_by_session)
-
-    def issue_ready(self, project: str | None = None) -> list[dict[str, Any]]:
-        return self._issues.ready(project=project)
-
-    def issue_blocked(self, project: str | None = None) -> list[dict[str, Any]]:
-        return self._issues.blocked(project=project)
-
-    def issue_claim(self, issue_id: str, assignee: str) -> dict[str, Any]:
-        return self._issues.claim(issue_id, assignee)
 
     # =========================================================================
     # Python symbol index methods
