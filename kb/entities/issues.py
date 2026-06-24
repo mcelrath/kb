@@ -576,6 +576,36 @@ class IssuesRepository(EntityRepository):
         return results
 
     @retry_on_locked
+    def set_assignee(self, issue_id: str, assignee: str) -> None:
+        """Update the assignee of an issue."""
+        now = datetime.utcnow().isoformat()
+        self.conn.execute(
+            "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
+            (assignee, now, issue_id),
+        )
+        self.conn.commit()
+
+    @retry_on_locked
+    def set_priority(self, issue_id: str, priority: int) -> None:
+        """Update the priority of an issue."""
+        now = datetime.utcnow().isoformat()
+        self.conn.execute(
+            "UPDATE issues SET priority = ?, updated_at = ? WHERE id = ?",
+            (priority, now, issue_id),
+        )
+        self.conn.commit()
+
+    @retry_on_locked
+    def set_design_file(self, issue_id: str, content: str) -> None:
+        """Update the design_file content of an issue."""
+        now = datetime.utcnow().isoformat()
+        self.conn.execute(
+            "UPDATE issues SET design_file = ?, updated_at = ? WHERE id = ?",
+            (content, now, issue_id),
+        )
+        self.conn.commit()
+
+    @retry_on_locked
     def claim(self, issue_id: str, assignee: str) -> dict[str, Any]:
         """Atomically claim an issue for an assignee.
 

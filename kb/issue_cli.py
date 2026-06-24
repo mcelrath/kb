@@ -290,26 +290,39 @@ def _comment_count(conn: Any, issue_id: str) -> int:
     ).fetchone()[0]
 
 
+def _project_header(row: dict[str, Any]) -> dict[str, Any]:
+    """Build the 9-field header block shared by all bd JSON projectors.
+
+    This is the common prefix: id, title, status, priority, issue_type, owner,
+    created_by, created_at, updated_at. Callers extend the returned dict with
+    their view-specific fields. Does NOT call _dep_counts or _comment_count —
+    callers that need those counts add them explicitly.
+    """
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "status": row["status"],
+        "priority": row["priority"],
+        "issue_type": row["type"],
+        "owner": row.get("assignee"),
+        "created_by": row.get("assignee"),  # kb has no created_by column; use assignee
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
 def _project_show(row: dict[str, Any], conn: Any) -> dict[str, Any]:
     """Project a full issue row (from issue_get) to bd show --json shape."""
     issue_id = row["id"]
     dep_count, dep_on_count = _dep_counts(conn, issue_id)
     cmt_count = _comment_count(conn, issue_id)
 
-    out: dict[str, Any] = {
-        "id": row["id"],
-        "title": row["title"],
-        "status": row["status"],
-        "priority": row["priority"],
-        "issue_type": row["type"],
-        "owner": row["assignee"],
-        "created_by": row.get("assignee"),  # kb has no created_by column; use assignee
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
+    out = _project_header(row)
+    out.update({
         "dependent_count": dep_on_count,
         "dependency_count": dep_count,
         "comment_count": cmt_count,
-    }
+    })
 
     # description + comments: the issue BODY. Omitting them made `kbt show --json`
     # unable to surface the text at all (kb-b6c2b0.8) — include them always.
@@ -361,20 +374,12 @@ def _project_list_item(row: dict[str, Any], conn: Any) -> dict[str, Any]:
     dep_count, dep_on_count = _dep_counts(conn, issue_id)
     cmt_count = _comment_count(conn, issue_id)
 
-    out: dict[str, Any] = {
-        "id": row["id"],
-        "title": row["title"],
-        "status": row["status"],
-        "priority": row["priority"],
-        "issue_type": row["type"],
-        "owner": row.get("assignee"),
-        "created_at": row.get("created_at"),
-        "created_by": row.get("assignee"),
-        "updated_at": row.get("updated_at"),
+    out = _project_header(row)
+    out.update({
         "dependency_count": dep_count,
         "dependent_count": dep_on_count,
         "comment_count": cmt_count,
-    }
+    })
     if row.get("parent_id"):
         out["parent"] = row["parent_id"]
     return out
@@ -388,21 +393,11 @@ def _project_dep_list_item(dep_row: dict[str, Any], conn: Any, dep_type: str) ->
       created_by, updated_at, dependency_type }
     dispatch.md:49 reads .type/.id/.title/.status from these;
     bd actually emits `dependency_type` not `type` in dep list elements.
-    We emit both for full compat.
+    We emit both for full compat. Does NOT call _dep_counts/_comment_count.
     """
-    out: dict[str, Any] = {
-        "id": dep_row["id"],
-        "title": dep_row["title"],
-        "status": dep_row["status"],
-        "priority": dep_row["priority"],
-        "issue_type": dep_row["type"],
-        "owner": dep_row.get("assignee"),
-        "created_at": dep_row.get("created_at"),
-        "created_by": dep_row.get("assignee"),
-        "updated_at": dep_row.get("updated_at"),
-        "dependency_type": dep_type,
-        "type": dep_type,  # dispatch.md jq reads .type
-    }
+    out = _project_header(dep_row)
+    out["dependency_type"] = dep_type
+    out["type"] = dep_type  # dispatch.md jq reads .type
     if dep_row.get("design_file"):
         out["design"] = dep_row["design_file"]
     return out
@@ -413,43 +408,28 @@ def _project_ready_item(row: dict[str, Any], conn: Any) -> dict[str, Any]:
     issue_id = row["id"]
     dep_count, dep_on_count = _dep_counts(conn, issue_id)
     cmt_count = _comment_count(conn, issue_id)
-    out: dict[str, Any] = {
-        "id": row["id"],
-        "title": row["title"],
-        "status": row["status"],
-        "priority": row["priority"],
-        "issue_type": row["type"],
-        "owner": row.get("assignee"),
-        "created_at": row.get("created_at"),
-        "created_by": row.get("assignee"),
-        "updated_at": row.get("updated_at"),
+
+    out = _project_header(row)
+    out.update({
         "dependency_count": dep_count,
         "dependent_count": dep_on_count,
         "comment_count": cmt_count,
-    }
+    })
     # ready items include design when set (live bd does this)
-    # We fetch it from the full row if available
-    design = row.get("design_file")
-    if design:
-        out["design"] = design
+    if row.get("design_file"):
+        out["design"] = row["design_file"]
     return out
 
 
 def _project_blocked_item(row: dict[str, Any], conn: Any) -> dict[str, Any]:
-    """Project a blocked row to bd blocked --json element shape."""
-    out: dict[str, Any] = {
-        "id": row["id"],
-        "title": row["title"],
-        "status": row["status"],
-        "priority": row["priority"],
-        "issue_type": row["type"],
-        "owner": row.get("assignee"),
-        "created_at": row.get("created_at"),
-        "created_by": row.get("assignee"),
-        "updated_at": row.get("updated_at"),
-        "blocked_by": row.get("blocker_ids", []),
-        "blocked_by_count": len(row.get("blocker_ids", [])),
-    }
+    """Project a blocked row to bd blocked --json element shape.
+
+    Does NOT call _dep_counts or _comment_count — blocked shape uses blocker_ids
+    from the blocked() query result directly.
+    """
+    out = _project_header(row)
+    out["blocked_by"] = row.get("blocker_ids", [])
+    out["blocked_by_count"] = len(row.get("blocker_ids", []))
     return out
 
 
@@ -674,20 +654,12 @@ def cmd_update(args: Any, kb: Any) -> int:
         print(f"Updated status: {issue_id} → {args.status}")
 
     if args.assignee and not args.claim:
-        kb.conn.execute(
-            "UPDATE issues SET assignee = ?, updated_at = ? WHERE id = ?",
-            (args.assignee, _now(), issue_id),
-        )
-        kb.conn.commit()
+        kb._issues.set_assignee(issue_id, args.assignee)
         print(f"Updated assignee: {issue_id} → {args.assignee}")
 
     # --priority (kb-b6c2b0.3): re-prioritize after create.
     if getattr(args, "priority", None) is not None:
-        kb.conn.execute(
-            "UPDATE issues SET priority = ?, updated_at = ? WHERE id = ?",
-            (args.priority, _now(), issue_id),
-        )
-        kb.conn.commit()
+        kb._issues.set_priority(issue_id, args.priority)
         print(f"Updated priority: {issue_id} → P{args.priority}")
 
     # --design-file (kb-b6c2b0.3): attach a plan to an epic after creation (reads
@@ -697,11 +669,7 @@ def cmd_update(args: Any, kb: Any) -> int:
         if not p.exists():
             print(f"kbt: design-file not found: {args.design_file}", file=sys.stderr)
             return 1
-        kb.conn.execute(
-            "UPDATE issues SET design_file = ?, updated_at = ? WHERE id = ?",
-            (p.read_text(), _now(), issue_id),
-        )
-        kb.conn.commit()
+        kb._issues.set_design_file(issue_id, p.read_text())
         print(f"Updated design-file: {issue_id}")
 
     # --notes -> a first-class COMMENT (kb-b6c2b0.5). It used to concatenate onto
@@ -1315,11 +1283,6 @@ def build_parser():
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
-
-def _now() -> str:
-    from datetime import datetime
-    return datetime.utcnow().isoformat()
-
 
 def run(argv: list[str] | None = None) -> int:
     """Parse argv and dispatch to the appropriate command.
