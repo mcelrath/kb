@@ -166,6 +166,7 @@ class BridgeMessagesRepository(EntityRepository):
             (msg_id, ts, sender, recipients, subject, body, event_type,
              reply_to, substantive, now),
         )
+        self.conn.commit()  # self-commit like every sibling repo (was: silent loss if caller forgot)
         return {"id": msg_id, "is_new": True, "is_substantive": bool(substantive), "embedded": False}
 
     def embed_pending(self, limit: int = 500, commit_every: int = 1) -> int:

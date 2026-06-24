@@ -43,11 +43,6 @@ def _fake_queue_kb(rows):
     return FakeKB()
 
 
-def _fake_reconcile_kb():
-    """Minimal fake kb; run_reconcile imports DocumentReconciler; we patch that."""
-    return object()
-
-
 # ---------------------------------------------------------------------------
 # bridge._run_search — agent mode
 # ---------------------------------------------------------------------------
@@ -178,52 +173,60 @@ def test_lean_queue_defer_list_user_color_and_truncate(monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
-# misc.run_reconcile — agent mode
+# misc.run_reconcile — delegates to the real DocumentReconciler API (B3 fix).
+# The handler now constructs DocumentReconciler(kb, project), calls
+# reconcile(doc_dir), and prints reconciler.format_report(report) — no in-handler
+# colorization. It validates: --project required, document must be a directory.
 # ---------------------------------------------------------------------------
 
-def test_misc_reconcile_agent_no_color(monkeypatch, capsys):
-    monkeypatch.setattr(output, "AGENT_MODE", True)
+def _patch_reconciler(monkeypatch):
+    import sys
 
     class FakeReconciler:
-        def __init__(self, kb): pass
-        def reconcile(self, doc, project=None):
-            return {"doc_claims": 5, "kb_findings": 4, "matched": 3,
-                    "missing": 2, "extra": 1}
+        def __init__(self, kb, project):
+            self.project = project
 
-    monkeypatch.setattr(misc_mod, "_get_reconciler", None, raising=False)
-    import sys
+        def reconcile(self, doc_dir):
+            return {"stub": True}
+
+        def format_report(self, report):
+            return "KB RECONCILIATION REPORT\nWell matched: 3"
+
+        def export_missing_json(self, report):
+            return [{"content": "x"}]
+
     fake_mod = types.ModuleType("kb_reconcile")
     fake_mod.DocumentReconciler = FakeReconciler
     monkeypatch.setitem(sys.modules, "kb_reconcile", fake_mod)
 
-    args = types.SimpleNamespace(document="doc.md", project=None,
-                                  import_missing=None, export_missing=None)
+
+def test_misc_reconcile_prints_format_report(monkeypatch, capsys, tmp_path):
+    _patch_reconciler(monkeypatch)
+    args = types.SimpleNamespace(document=str(tmp_path), project="proj", export_missing=None)
     misc_mod.run_reconcile(None, args)
-    out = capsys.readouterr().out
-    assert "\033[" not in out
-    assert "Matched: 3" in out
+    assert "Well matched: 3" in capsys.readouterr().out
 
 
-def test_misc_reconcile_user_color(monkeypatch, capsys):
-    monkeypatch.setattr(output, "AGENT_MODE", False)
-    monkeypatch.setattr(output, "term_width", lambda default=100: 40)
+def test_misc_reconcile_requires_project(monkeypatch, tmp_path):
+    _patch_reconciler(monkeypatch)
+    args = types.SimpleNamespace(document=str(tmp_path), project=None, export_missing=None)
+    with pytest.raises(SystemExit):
+        misc_mod.run_reconcile(None, args)
 
-    class FakeReconciler:
-        def __init__(self, kb): pass
-        def reconcile(self, doc, project=None):
-            return {"doc_claims": 5, "kb_findings": 4, "matched": 3,
-                    "missing": 2, "extra": 1}
 
-    import sys
-    fake_mod = types.ModuleType("kb_reconcile")
-    fake_mod.DocumentReconciler = FakeReconciler
-    monkeypatch.setitem(sys.modules, "kb_reconcile", fake_mod)
+def test_misc_reconcile_requires_directory(monkeypatch, tmp_path):
+    _patch_reconciler(monkeypatch)
+    f = tmp_path / "doc.md"
+    f.write_text("x")
+    args = types.SimpleNamespace(document=str(f), project="proj", export_missing=None)
+    with pytest.raises(SystemExit):
+        misc_mod.run_reconcile(None, args)
 
-    args = types.SimpleNamespace(document="doc.md", project=None,
-                                  import_missing=None, export_missing=None)
+
+def test_misc_reconcile_export_missing(monkeypatch, tmp_path):
+    import json
+    _patch_reconciler(monkeypatch)
+    outp = tmp_path / "missing.json"
+    args = types.SimpleNamespace(document=str(tmp_path), project="proj", export_missing=str(outp))
     misc_mod.run_reconcile(None, args)
-    out = capsys.readouterr().out
-    assert "\033[" in out
-    for line in out.splitlines():
-        if line.strip():
-            assert output.visible_len(line) <= 40, f"line too wide: {repr(line)}"
+    assert json.loads(outp.read_text()) == [{"content": "x"}]

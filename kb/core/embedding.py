@@ -237,6 +237,13 @@ class EmbeddingService:
 
         embedding = self._embed_remote(text, max_retries=max_retries, timeout=timeout)
         embedding = l2_normalize(embedding)
+        if len(embedding) != self.embedding_dim:
+            raise RuntimeError(
+                f"Embedding dim mismatch: server returned {len(embedding)} floats but KB is "
+                f"configured for {self.embedding_dim}. A model/dim change requires "
+                f"`kb reembed --force` (drops+recreates the _vec tables at the new dim). "
+                f"Refusing to insert a wrong-dim vector that would corrupt the _vec tables."
+            )
         self._cache_put(text_hash, embedding)
         return serialize_f32(embedding)
 
