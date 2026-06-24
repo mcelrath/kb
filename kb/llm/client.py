@@ -44,6 +44,7 @@ class LLMClient:
         system_prompt: str | None = None,
         json_mode: bool = False,
         thinking: bool = False,
+        url: str | None = None,
     ) -> str | None:
         """Generic LLM completion helper.
 
@@ -57,10 +58,13 @@ class LLMClient:
             system_prompt: System prompt for chat mode
             json_mode: If True, request JSON output format (llama.cpp response_format)
             thinking: If True, enable Qwen3 thinking mode (enable_thinking=True in chat_template_kwargs)
+            url: Override the endpoint for this call (else self.llm_url). Lets callers
+                 (e.g. expand_query) supply a URL derived from the embedding host.
 
         Returns the completion text, or None on failure.
         """
-        if not self.llm_url:
+        effective_url = url or self.llm_url
+        if not effective_url:
             return None
 
         try:
@@ -71,7 +75,7 @@ class LLMClient:
                 # `reasoning_content`. Raw /completion with hand-built ChatML
                 # does NOT suppress thinking because the chat template still
                 # injects <think> after the assistant token.
-                chat_url = self.llm_url
+                chat_url = effective_url
                 if chat_url.endswith("/completion"):
                     chat_url = chat_url[: -len("/completion")] + "/v1/chat/completions"
                 elif not chat_url.endswith("/v1/chat/completions"):
@@ -122,7 +126,7 @@ class LLMClient:
                 # Raw completion path (no chat template, no thinking control).
                 # Used by expand_query and other shapes that hand-build the prompt.
                 req = Request(
-                    self.llm_url,
+                    effective_url,
                     data=json.dumps({
                         "prompt": prompt,
                         "n_predict": max_tokens,
@@ -342,34 +346,31 @@ Output: "quaternion rotation" "unit quaternion" SO(3) "rotation matrix" "Euler a
 Query: {query}
 Output:"""
 
-        req = Request(
-            llm_url,
-            data=json.dumps({
-                "prompt": prompt,
-                "n_predict": 150,
-                "temperature": 0.2,
-                "stop": ["\n\n", "\nQuery:", "\n\n"],
-            }).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+        # Delegate the raw-completion HTTP to complete(use_chat=False); pass the
+        # resolved url so the embedding-host fallback above is honored even when
+        # self.llm_url is empty. (complete() applies _strip_thinking, harmless here.)
+        content = self.complete(
+            prompt,
+            max_tokens=150,
+            temperature=0.2,
+            stop=["\n\n", "\nQuery:"],
+            timeout=20,
+            use_chat=False,
+            url=llm_url,
         )
-
-        try:
-            with urlopen(req, timeout=20) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                expansion = data.get("content", "").strip()
-                # Handle JSON-wrapped responses from LLM
-                expansion = self.extract_text_from_json(expansion, keys=["expansion", "terms", "output", "result"])
-                # Clean up: remove any newlines, extra whitespace
-                expansion = " ".join(expansion.split())
-                if expansion:
-                    expanded = f"{query} {expansion}"
-                    self._expansion_cache[cache_key] = expanded
-                    if verbose:
-                        print(f"Expanded: {expanded}", file=sys.stderr)
-                    return expanded
-        except (URLError, TimeoutError, KeyError, json.JSONDecodeError) as e:
-            if verbose:
-                print(f"Warning: Query expansion failed ({e})", file=sys.stderr)
+        if content:
+            # Handle JSON-wrapped responses; collapse whitespace to a single line.
+            expansion = self.extract_text_from_json(
+                content, keys=["expansion", "terms", "output", "result"])
+            expansion = " ".join(expansion.split())
+            if expansion:
+                expanded = f"{query} {expansion}"
+                self._expansion_cache[cache_key] = expanded
+                if verbose:
+                    print(f"Expanded: {expanded}", file=sys.stderr)
+                return expanded
+        elif verbose:
+            print("Warning: Query expansion failed", file=sys.stderr)
 
         # Cache and return original on failure
         self._expansion_cache[cache_key] = query
