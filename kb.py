@@ -1118,10 +1118,9 @@ def main():
 
     # Reconcile command
     reconcile_parser = _add_parser("reconcile", "Reconcile KB with source document", user_visible=False)
-    reconcile_parser.add_argument("document", type=Path, help="Source document to reconcile against")
-    reconcile_parser.add_argument("-p", "--project", help="Project name")
-    reconcile_parser.add_argument("--export-missing", type=Path, help="Export missing claims to file")
-    reconcile_parser.add_argument("--import-missing", type=Path, help="Import missing claims from file")
+    reconcile_parser.add_argument("document", type=Path, help="Directory of source documents to reconcile against")
+    reconcile_parser.add_argument("-p", "--project", required=True, help="Project name")
+    reconcile_parser.add_argument("--export-missing", type=Path, help="Export missing claims to a JSON file")
 
     # Notation audit command
     audit_parser = _add_parser("notation-audit", "Audit notations against source document", user_visible=False)

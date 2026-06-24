@@ -168,14 +168,14 @@ def _classify_body(body: str) -> str:
     return "prose"
 
 
-def _extract_tables(body: str) -> list[tuple[str, str]]:
-    """Extract table blocks from prose body; return list of (table_md, remainder).
+def _extract_tables(body: str) -> list[tuple[str, int, int]]:
+    """Extract table blocks from a body; return list of (table_md, start_line, end_line).
 
-    Each tuple: table_md is the raw markdown table text; remainder is the body
-    with that table block removed. In practice we just split all table blocks
-    out and return them individually.
+    start_line/end_line index into body.splitlines(keepends=True), so callers strip
+    a table by its LINE SPAN rather than by string match — a string match would delete
+    every identical-looking block, including legitimately repeated table text.
     """
-    result: list[tuple[str, str]] = []
+    result: list[tuple[str, int, int]] = []
     lines = body.splitlines(keepends=True)
     i = 0
     while i < len(lines):
@@ -191,7 +191,7 @@ def _extract_tables(body: str) -> list[tuple[str, str]]:
                 i += 1
             table_block = "".join(lines[start:i]).strip()
             if table_block:
-                result.append(table_block)
+                result.append((table_block, start, i))
         else:
             i += 1
     return result
@@ -253,11 +253,15 @@ def _build_intermediate(
         body = sec["raw_body"]
 
         # Extract inline tables as separate table leaves
-        table_blocks = _extract_tables(body)
-        # Strip tables from the prose body
-        prose_body = body
-        for tb in table_blocks:
-            prose_body = prose_body.replace(tb, '').strip()
+        table_spans = _extract_tables(body)
+        table_blocks = [blk for blk, _s, _e in table_spans]
+        # Strip tables from the prose body by LINE SPAN — string-replace would delete
+        # every identical-looking block, including legitimately repeated table text.
+        body_lines = body.splitlines(keepends=True)
+        covered: set[int] = set()
+        for _blk, s, e in table_spans:
+            covered.update(range(s, e))
+        prose_body = "".join(l for idx, l in enumerate(body_lines) if idx not in covered).strip()
 
         # Prose / figure classification on the de-tabled body
         if prose_body:

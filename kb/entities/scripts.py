@@ -162,7 +162,7 @@ class ScriptsRepository(EntityRepository):
                 "purpose": row[5],
                 "project": row[6],
                 "language": row[7],
-                "similarity": 1.0 - float(row[10]) / 2.0,
+                "similarity": 1 - (float(row[10]) ** 2) / 2,
             }
             if project is None or script.get("project") == project:
                 results.append(script)
