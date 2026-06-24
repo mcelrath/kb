@@ -668,14 +668,6 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
         )
     """)
 
-    # Schema migration: bridge_messages table (added 2026-06-13)
-    _bm_cols = {row[1] for row in conn.execute("PRAGMA table_info(bridge_messages)").fetchall()}
-    if not _bm_cols:
-        # Table doesn't exist yet — SCHEMA_SQL above handles creation via CREATE TABLE IF NOT EXISTS;
-        # this branch fires only if the table somehow exists without columns (shouldn't happen).
-        pass
-    # Idempotent: table already created by SCHEMA_SQL executescript above.
-
     # Schema migration: add finding_id column to lean_theorems if not exists
     try:
         _ = conn.execute("SELECT finding_id FROM lean_theorems LIMIT 1")
@@ -701,89 +693,9 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
     if "language" not in _ps_cols:
         conn.execute("ALTER TABLE symbols ADD COLUMN language TEXT")
 
-    # Schema migration: structural_facts table (added 2026-06-07)
-    try:
-        _ = conn.execute("SELECT id FROM structural_facts LIMIT 1")
-    except sqlite3.OperationalError:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS structural_facts (
-                id TEXT PRIMARY KEY,
-                relation_type TEXT NOT NULL
-                    CHECK(relation_type IN ('commutator','anticommutator','eigenvalue',
-                                            'trace','charpoly','identity','negative')),
-                lhs_operator TEXT NOT NULL,
-                rhs_operator TEXT,
-                result_exact TEXT NOT NULL,
-                negative INTEGER DEFAULT 0,
-                certified_data_key TEXT,
-                lean_thm TEXT,
-                project TEXT,  -- caller-supplied; no hardcoded default (kb-4mi: was 'algebraic-genesis', silently mis-tagged other users' rows)
-                notes TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_structural_facts_lhs ON structural_facts(lhs_operator);
-            CREATE INDEX IF NOT EXISTS idx_structural_facts_rhs ON structural_facts(rhs_operator);
-            CREATE INDEX IF NOT EXISTS idx_structural_facts_type ON structural_facts(relation_type);
-            CREATE INDEX IF NOT EXISTS idx_structural_facts_lhs_rhs
-                ON structural_facts(lhs_operator, rhs_operator);
-        """)
-
-    # Schema migration: lean_work_queue table (added 2026-06-07)
-    try:
-        _ = conn.execute("SELECT id FROM lean_work_queue LIMIT 1")
-    except sqlite3.OperationalError:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS lean_work_queue (
-                id TEXT PRIMARY KEY,
-                file TEXT NOT NULL,
-                decl_name TEXT,
-                class TEXT NOT NULL CHECK(class IN (
-                    'cleared-contract','docstring-pass','discharge-pad',
-                    'statement-suspect','routing-deposit','agent-returns-verify','review-class'
-                )),
-                readiness TEXT NOT NULL DEFAULT 'EXECUTE-READY'
-                    CHECK(readiness IN ('EXECUTE-READY','DESIGN-NEEDED')),
-                bd_id TEXT,
-                defer_reason TEXT,
-                defer_detail TEXT,
-                provenance_grade TEXT,
-                agent_id TEXT,
-                bead_date TEXT,
-                divergence_flag INTEGER NOT NULL DEFAULT 0,
-                project TEXT,  -- caller-supplied; no hardcoded default (kb-4mi: was 'algebraic-genesis', silently mis-tagged other users' rows)
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            CREATE INDEX IF NOT EXISTS idx_lwq_file ON lean_work_queue(file);
-            CREATE INDEX IF NOT EXISTS idx_lwq_class ON lean_work_queue(class);
-            CREATE INDEX IF NOT EXISTS idx_lwq_defer ON lean_work_queue(defer_reason);
-            CREATE INDEX IF NOT EXISTS idx_lwq_readiness ON lean_work_queue(readiness);
-            CREATE INDEX IF NOT EXISTS idx_lwq_divergence ON lean_work_queue(divergence_flag);
-        """)
-
-    # Schema migration: persona_index table
-    _pi_cols = {row[1] for row in conn.execute("PRAGMA table_info(persona_index)").fetchall()}
-    if not _pi_cols:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS persona_index (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                project TEXT NOT NULL,
-                role TEXT,
-                file_path TEXT NOT NULL,
-                file_mtime REAL NOT NULL,
-                content_hash TEXT NOT NULL,
-                reviewers_yaml_path TEXT,
-                reviewers_yaml_mtime REAL,
-                top_level_dir_count INTEGER,
-                finding_id TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_persona_index_project ON persona_index(project);
-            CREATE INDEX IF NOT EXISTS idx_persona_index_name ON persona_index(name);
-            CREATE INDEX IF NOT EXISTS idx_persona_index_finding ON persona_index(finding_id);
-        """)
+    # NOTE: structural_facts, lean_work_queue, persona_index, and bridge_messages are
+    # all created unconditionally by SCHEMA_SQL (CREATE TABLE IF NOT EXISTS) above, so
+    # the old try/except-CREATE "migration" blocks for them were dead (the SELECT always
+    # succeeded; the except never fired) and were removed (R6 / kb-b3e837).
 
     conn.commit()

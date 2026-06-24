@@ -14,6 +14,22 @@ if str(_PKG_ROOT) not in sys.path:
 
 LLM_URL = "http://tardis:9510/completion"
 
+_VENV_PYTHON = _PKG_ROOT / ".venv" / "bin" / "python"
+
+
+def _run_kb(args: list[str]):
+    """Run `kb.py <args>` under the repo venv with the standard embedding env.
+    Shared by the skip-registered listing and the per-script add (was duplicated)."""
+    import os
+    import subprocess
+    return subprocess.run(
+        [str(_VENV_PYTHON), "kb.py", *args],
+        capture_output=True, text=True, cwd=_PKG_ROOT,
+        env={**os.environ,
+             "KB_EMBEDDING_URL": "http://ash:8081/embedding",
+             "KB_EMBEDDING_DIM": "4096"},
+    )
+
 
 def generate_purpose(script_path: Path) -> str | None:
     """Use local LLM to generate a purpose description for a script."""
@@ -84,17 +100,7 @@ def run(
     # Get already registered scripts if needed
     registered_hashes: set[str] = set()
     if skip_registered:
-        import subprocess
-        import os
-        venv_python = Path(__file__).parent.parent.parent / ".venv" / "bin" / "python"
-        result = subprocess.run(
-            [str(venv_python), "kb.py", "script", "list", "-n", "1000"],
-            capture_output=True, text=True,
-            cwd=Path(__file__).parent.parent.parent,
-            env={**os.environ,
-                 "KB_EMBEDDING_URL": "http://ash:8081/embedding",
-                 "KB_EMBEDDING_DIM": "4096"}
-        )
+        result = _run_kb(["script", "list", "-n", "1000"])
         for line in result.stdout.split('\n'):
             if '.py:' in line or '.sage:' in line:
                 parts = line.strip().split(':')
@@ -115,18 +121,8 @@ def run(
             print(f"  Purpose: {purpose}")
 
             if not dry_run:
-                import subprocess
-                import os
-                venv_python = Path(__file__).parent.parent.parent / ".venv" / "bin" / "python"
-                result = subprocess.run(
-                    [str(venv_python), "kb.py", "script", "add", str(script_path),
-                     "--purpose", purpose, "-p", project],
-                    capture_output=True, text=True,
-                    cwd=Path(__file__).parent.parent.parent,
-                    env={**os.environ,
-                         "KB_EMBEDDING_URL": "http://ash:8081/embedding",
-                         "KB_EMBEDDING_DIM": "4096"}
-                )
+                result = _run_kb(["script", "add", str(script_path),
+                                  "--purpose", purpose, "-p", project])
                 if result.returncode == 0:
                     print(f"  Registered!")
                 else:

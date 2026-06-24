@@ -263,12 +263,6 @@ def _get_params(num_perm: int) -> list[tuple[int, int]]:
     return _DEFAULT_PARAMS[:num_perm]
 
 
-def _hash_shingle(shingle: str, a: int, b: int) -> int:
-    """Hash a shingle string to a 32-bit integer using (a*sha_int + b) mod 2^32."""
-    raw = int(hashlib.sha256(shingle.encode()).hexdigest()[:8], 16)  # 32-bit from sha256
-    return ((a * raw + b) & 0xFFFFFFFF)
-
-
 def minhash_signature(shingles_set: set[str], num_perm: int = 128) -> list[int]:
     """
     Compute a MinHash signature of *shingles_set* using *num_perm* permutations.
