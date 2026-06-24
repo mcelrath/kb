@@ -180,11 +180,12 @@ For more details, see README.md.
 
 ## Planning & the expert-review gate
 
-Plans are authored in **native plan mode** (Shift+Tab) — the plan-mode harness writes the
-plan to `~/.claude/plans/<slug>.md` with no permission prompt. The kb plugin then GATES
-approval on review: a `PreToolUse(ExitPlanMode)` hook (`plan-review-gate.py`) blocks
-ExitPlanMode until the plan carries a recorded **APPROVED** verdict, keyed to a sha256 of
-the exact normalized plan text (any edit re-blocks).
+Plans are authored in **native plan mode** (Shift+Tab) — the plan-mode harness owns the
+plan file at `~/.claude/plans/<slug>.md` and writes its own active plan file with no
+permission prompt (that is the authoring surface). The kb plugin then GATES approval on
+review: a `PreToolUse(ExitPlanMode)` hook (`plan-review-hook.py`) blocks ExitPlanMode until
+the plan carries a recorded **APPROVED** (or **APPROVED-WITH-REVISIONS**) verdict, keyed to
+a sha256 of the exact normalized plan text (any edit re-blocks).
 
 Flow:
 
@@ -192,9 +193,10 @@ Flow:
 # 1. Author the plan in plan mode (Shift+Tab).
 # 2. Review it BEFORE exiting plan mode — the gate denies ExitPlanMode otherwise:
 Task(subagent_type="kb:expert-review", prompt="FULL REVIEW: epic=<id> plan=<plan_path> project_root=<root>")
-#    REJECTED -> revise (the hash changes; the gate stays closed). APPROVED -> the agent records the marker.
+#    REJECTED -> revise (the hash changes; the gate stays closed). APPROVED* -> the agent records the marker.
 # 3. ExitPlanMode — now allowed; on approval the plan auto-mirrors (PostToolUse hook) to
-#    <project-root>/.kb/plans/PLAN-<slug>.md, committed alongside the code.
+#    <project-root>/.kb/plans/PLAN-<slug>.md, committed alongside the code, and nudges step 4.
+# 4. /decompose-tasks <plan> (parent-run) -> kbt epic + child tasks -> you verify -> /dispatch <epic>.
 ```
 
 The verdict marker is a transport-agnostic core any agent host can call:

@@ -61,12 +61,18 @@ automatic — you are woken on a directed message.
 Reply to every message marked --needs-reply, using --reply <its-id>.
 
 === planning — author in plan mode, GATED on kb:expert-review ===
-Author plans in native plan mode (Shift+Tab) → ~/.claude/plans/<slug>.md (harness-owned, no prompt).
-A PreToolUse(ExitPlanMode) gate BLOCKS approval until kb:expert-review records an APPROVED verdict for
-the EXACT plan text (sha256-keyed; any edit re-blocks). So, before ExitPlanMode:
-  Task(subagent_type="kb:expert-review", prompt="FULL REVIEW: epic=<id> plan=<plan_path> project_root=<root>")
-  REJECTED -> revise + re-review ;  APPROVED -> ExitPlanMode now passes; the plan auto-mirrors to
-  <project>/.kb/plans/PLAN-<slug>.md on approval. Verdict lives in the marker+kbt, NOT the filename.
-  Every deferred/follow-up item must be a real kbt issue (--deps discovered-from:<epic>) BEFORE review.
+Author plans in native plan mode (Shift+Tab); the harness owns the plan file at ~/.claude/plans/<slug>.md
+(its own active plan file writes without a prompt — that is the plan-authoring surface). A
+PreToolUse(ExitPlanMode) gate BLOCKS approval until kb:expert-review records an APPROVED (or
+APPROVED-WITH-REVISIONS) verdict for the EXACT plan text (sha256-keyed; any edit re-blocks). Full flow:
+  1. Plan mode (Shift+Tab) → draft the plan in the harness plan file.
+  2. Before ExitPlanMode: Task(subagent_type="kb:expert-review",
+       prompt="FULL REVIEW: epic=<id> plan=<plan_path> project_root=<root>")
+     REJECTED -> revise + re-review ;  APPROVED* -> the marker is recorded.
+  3. ExitPlanMode now passes; on approval the plan auto-mirrors to <project>/.kb/plans/PLAN-<slug>.md
+     (committed alongside code) and you are nudged to the next step.
+  4. /decompose-tasks <plan> (parent-run) → kbt epic + child tasks → you verify → /dispatch <epic>.
+Verdict lives in the marker+kbt, NOT the filename. Every deferred/follow-up item must be a real kbt
+issue (--deps discovered-from:<epic>) BEFORE review.
 INSTRUCTIONS
 exit 0
