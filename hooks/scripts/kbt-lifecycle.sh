@@ -12,8 +12,8 @@ COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin
 # Only fire on git commit commands
 echo "$COMMAND" | grep -qE '^\s*git\s+commit\b' || exit 0
 
-# Check if commit succeeded (tool_result exit code)
-EXIT_CODE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_result',{}).get('exitCode', d.get('tool_result',{}).get('exit_code', 0)))" 2>/dev/null)
+# Check if commit succeeded (PostToolUse payload key is tool_response; fall back to tool_result)
+EXIT_CODE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('tool_response') or d.get('tool_result') or {}; r=r if isinstance(r,dict) else {}; print(r.get('exitCode', r.get('exit_code', 0)))" 2>/dev/null)
 [[ "$EXIT_CODE" != "0" ]] && exit 0
 
 # Extract bd issue references from the commit message in the command
@@ -30,10 +30,12 @@ if [[ -n "$BD_IDS" ]]; then
         kbt close "$id" 2>/dev/null && echo "Auto-closed kbt issue: $id"
     done <<< "$BD_IDS"
 else
-    # Warn if implementation files changed but no issue referenced
-    STAGED=$(git diff --cached --name-only HEAD~1 2>/dev/null | grep -vE '\.(md|txt|json)$' | head -1)
+    # Warn if implementation files changed but no issue referenced. Use HEAD~1 HEAD
+    # (the just-created commit's diff) — NOT --cached HEAD~1, which is ambiguous
+    # post-commit (the index equals HEAD, so anything else staged would skew it).
+    STAGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -vE '\.(md|txt|json)$' | head -1)
     if [[ -n "$STAGED" ]]; then
-        echo "NOTE: Commit touches implementation files but doesn't reference a bd issue. Consider: fixes <issue-id>"
+        echo "NOTE: Commit touches implementation files but doesn't reference a kbt issue. Consider: fixes <issue-id>"
     fi
 fi
 

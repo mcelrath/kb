@@ -15,7 +15,7 @@ KB_SCRIPT="${PLUGIN_ROOT}/kb.py"
 
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null) || exit 0
-EXIT_CODE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('tool_result',{}); print(r.get('exitCode', r.get('exit_code', 0)))" 2>/dev/null) || exit 0
+EXIT_CODE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('tool_response') or d.get('tool_result') or {}; r=r if isinstance(r,dict) else {}; print(r.get('exitCode', r.get('exit_code', 0)))" 2>/dev/null) || exit 0
 
 [[ "$TOOL_NAME" != "Bash" ]] && exit 0
 [[ "$EXIT_CODE" == "0" ]] && exit 0
@@ -31,7 +31,9 @@ echo "$COMMAND" | grep -qE '(make|ninja|cmake|cargo build|cargo test|lake build|
 OUTPUT=$(echo "$INPUT" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-r = d.get('tool_result', {})
+r = d.get('tool_response') or d.get('tool_result') or {}
+if not isinstance(r, dict):
+    r = {}
 stdout = r.get('stdout', '') or ''
 stderr = r.get('stderr', '') or ''
 combined = stdout[-1500:] + stderr[-1500:]

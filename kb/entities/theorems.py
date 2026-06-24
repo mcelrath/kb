@@ -54,7 +54,7 @@ class TheoremRepository(EntityRepository):
                     """SELECT id FROM findings
                        WHERE content LIKE ? OR tags LIKE ?
                        LIMIT 1""",
-                    (f"%lean:{lean_name_base}%", f"%{lean_name_base}%"),
+                    (f"%lean:{lean_name_base}%", f"%lean:{lean_name_base}%"),
                 ).fetchone()
                 if matching_finding:
                     self.conn.execute(

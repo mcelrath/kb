@@ -232,11 +232,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/kb-precompact.sh\"",
-            "timeout": 180
-          },
-          {
-            "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hooks/scripts/read-index-stop.py\"",
             "timeout": 12
           },
