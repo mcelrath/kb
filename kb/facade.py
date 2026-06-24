@@ -170,7 +170,9 @@ class KnowledgeBase:
     def _generate_summary(self, content: str, evidence: str | None = None) -> str | None:
         """Generate summary for finding.
 
-        Routing controlled by KB_SUMMARY_MODE env var (default: extractive).
+        Routing controlled by load_config().summary_mode — config.toml [llm]
+        summary_mode, with KB_SUMMARY_MODE env overriding it (precedence resolved
+        in kb/config.py). Default: extractive.
           extractive       -> no-LLM first-sentence blurb (DEFAULT — zero VRAM/cost,
                               no second model; the easy out-of-the-box path)
           none             -> always return None (search shows raw content)
@@ -179,7 +181,8 @@ class KnowledgeBase:
                               ANTHROPIC_API_KEY scrubbed so stale key is bypassed)
           api              -> same as local-llm for now (future: direct API path)
         """
-        mode = os.environ.get("KB_SUMMARY_MODE", "extractive")
+        from .config import load_config
+        mode = load_config().summary_mode
         if mode == "none":
             return None
         if mode == "extractive":
