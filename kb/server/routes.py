@@ -8,12 +8,36 @@ now live in kb.server.renderers — no kb.py import or importlib hack required.
 """
 
 import html as _html
+from urllib.parse import quote, urlencode
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse
 
 from ..markdown import format_finding_markdown, markdown_to_html
 from .renderers import render_html_page, render_sidebar
+
+
+def _finding_card(f: dict, meta_html: str) -> str:
+    """Render one finding card. EVERY interpolation of finding data is escaped here
+    (id/type/content/tags); `meta_html` is the caller's already-escaped meta fragment.
+    Centralized so no route hand-builds a card with an unescaped field."""
+    fid = _html.escape(str(f["id"]))
+    ftype = _html.escape(str(f["type"]))
+    raw = f["content"][:200] + "..." if len(f["content"]) > 200 else f["content"]
+    summary = _html.escape(raw)
+    tags_html = " ".join(
+        f'<span class="tag">{_html.escape(t)}</span>'
+        for t in f.get("tags", [])[:5]
+    )
+    return (
+        f'<div class="finding">'
+        f'<span class="finding-type {ftype}">[{ftype}]</span>'
+        f'<a href="/finding/{quote(str(f["id"]), safe="")}">{fid}</a>'
+        f'<span class="meta">{meta_html}</span>'
+        f'<p>{summary}</p>'
+        f'{f"<div>{tags_html}</div>" if tags_html else ""}'
+        f'</div>'
+    )
 
 
 def make_web_handlers(kb):
@@ -59,34 +83,20 @@ def make_web_handlers(kb):
 
         items = []
         for f in findings:
-            type_class = f["type"]
-            raw = f["content"][:200] + "..." if len(f["content"]) > 200 else f["content"]
-            summary = _html.escape(raw)
             proj = f"({_html.escape(f['project'])})" if f.get("project") else ""
-            tags_html = " ".join(
-                f'<span class="tag">{_html.escape(t)}</span>'
-                for t in f.get("tags", [])[:5]
-            )
-            items.append(
-                f"""<div class="finding">
-                        <span class="finding-type {type_class}">[{f['type']}]</span>
-                        <a href="/finding/{f['id']}">{f['id']}</a>
-                        <span class="meta">{proj}</span>
-                        <p>{summary}</p>
-                        {f'<div>{tags_html}</div>' if tags_html else ''}
-                    </div>"""
-            )
+            items.append(_finding_card(f, proj))
 
-        # Pagination
+        # Pagination — urlencode percent-encodes every value, so reflected query
+        # params (project/type/tag) cannot break out of the href attribute.
         pagination = '<div class="pagination">'
         if page > 1:
             prev_params = dict(filters)
             prev_params["page"] = page - 1
-            pagination += f'<a href="/?{"&".join(f"{k}={v}" for k,v in prev_params.items())}">← Prev</a>'
+            pagination += f'<a href="/?{urlencode(prev_params)}">← Prev</a>'
         if has_more:
             next_params = dict(filters)
             next_params["page"] = page + 1
-            pagination += f'<a href="/?{"&".join(f"{k}={v}" for k,v in next_params.items())}">Next →</a>'
+            pagination += f'<a href="/?{urlencode(next_params)}">Next →</a>'
         pagination += "</div>"
 
         title = "Findings"
@@ -108,25 +118,11 @@ def make_web_handlers(kb):
             results = kb.search(query, limit=50)
             items = []
             for f in results:
-                type_class = f["type"]
-                raw = f["content"][:200] + "..." if len(f["content"]) > 200 else f["content"]
-                summary = _html.escape(raw)
                 proj = f"({_html.escape(f['project'])})" if f.get("project") else ""
                 score = f.get("score", 0)
                 sim = f.get("similarity", 0)
-                tags_html = " ".join(
-                    f'<span class="tag">{_html.escape(t)}</span>'
-                    for t in f.get("tags", [])[:5]
-                )
-                items.append(
-                    f"""<div class="finding">
-                            <span class="finding-type {type_class}">[{f['type']}]</span>
-                            <a href="/finding/{f['id']}">{f['id']}</a>
-                            <span class="meta">score={score:.4f} sim={sim:.3f} {proj}</span>
-                            <p>{summary}</p>
-                            {f'<div>{tags_html}</div>' if tags_html else ''}
-                        </div>"""
-                )
+                meta = f"score={score:.4f} sim={sim:.3f} {proj}"
+                items.append(_finding_card(f, meta))
 
             content = f"""<form class="search-form" method="get">
                         <input type="text" name="q" value="{_html.escape(query)}" placeholder="Search findings...">
