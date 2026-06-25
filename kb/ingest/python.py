@@ -475,7 +475,7 @@ def run(
     if deleted:
         for fpath in deleted:
             fpath_str = str(Path(fpath).expanduser().resolve())
-            n = kb.delete_symbols_for_file(fpath_str)
+            n = kb._symbols.delete_symbols_for_file(fpath_str)
             print(f"Deleted {n} rows for removed file: {fpath_str}", file=sys.stderr)
         return 0
 
@@ -547,7 +547,7 @@ def run(
     sym_iter = _tqdm(all_symbols, desc="insert", unit="sym", dynamic_ncols=True) if _tqdm else all_symbols
     try:
         for i, s in enumerate(sym_iter, 1):
-            result = kb.add_symbol(
+            result = kb._symbols.add_symbol(
                 name=s["name"],
                 kind=s["kind"],
                 module=s["module"],
@@ -590,7 +590,7 @@ def run(
             file_to_live[fpath_str].add((s["name"], s["module"]))
         for fpath in [str(Path(f).expanduser().resolve()) for f in files]:
             live = file_to_live.get(fpath, set())
-            n = kb.prune_symbols_for_file(fpath, live)
+            n = kb._symbols.prune_symbols_for_file(fpath, live)
             if n:
                 print(f"  Pruned {n} stale symbol(s) from {fpath}", file=sys.stderr)
             pruned_total += n

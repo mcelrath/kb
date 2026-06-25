@@ -29,7 +29,7 @@ import kb.cli.output as output
 
 def _query_symbols(kb: Any, query: str, limit: int, project: str | None, min_sim: float) -> list[dict[str, Any]]:
     try:
-        raw = kb.search_symbols(query, limit=limit, project=project)
+        raw = kb._symbols.search_symbols(query, limit=limit, project=project)
         return [r for r in (raw or []) if r.get("similarity", 0) >= min_sim]
     except Exception:
         return []

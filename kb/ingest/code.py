@@ -99,7 +99,7 @@ def ingest_code(
     if deleted:
         for fpath in deleted:
             fpath_str = str(Path(fpath).expanduser().resolve())
-            n = kb.delete_symbols_for_file(fpath_str)
+            n = kb._symbols.delete_symbols_for_file(fpath_str)
             print(f"Deleted {n} rows for removed file: {fpath_str}", file=sys.stderr)
         return 0
 
@@ -150,7 +150,7 @@ def ingest_code(
     sym_iter = _tqdm(all_symbols, desc="insert", unit="sym", dynamic_ncols=True) if _tqdm else all_symbols
     try:
         for i, s in enumerate(sym_iter, 1):
-            result = kb.add_symbol(
+            result = kb._symbols.add_symbol(
                 name=s["name"], kind=s["kind"], module=s["module"], signature=s["signature"],
                 file=s["file"], line=s["line"], status="public",
                 docstring_summary=s["docstring_summary"], lean_citations=[], kb_refs=[],
@@ -182,7 +182,7 @@ def ingest_code(
             file_to_live.setdefault(s["file"], set()).add((s["name"], s["module"]))
         pruned_total = 0
         for fpath in [str(Path(f).expanduser().resolve()) for f in files]:
-            n = kb.prune_symbols_for_file(fpath, file_to_live.get(fpath, set()))
+            n = kb._symbols.prune_symbols_for_file(fpath, file_to_live.get(fpath, set()))
             if n:
                 print(f"  Pruned {n} stale symbol(s) from {fpath}", file=sys.stderr)
             pruned_total += n

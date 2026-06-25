@@ -17,7 +17,7 @@ from kb.cli.commands.doc import run_doc
 
 def _fake_kb(symbols=(), findings=(), bridge_hits=()):
     kb = MagicMock()
-    kb.search_symbols.return_value = list(symbols)
+    kb._symbols.search_symbols.return_value = list(symbols)
     kb.search.return_value = list(findings)
     kb._bridge.search.return_value = list(bridge_hits)
     return kb
