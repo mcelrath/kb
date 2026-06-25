@@ -254,8 +254,12 @@ Finding 2: {candidate['content'][:300]}"""
         return self._analyzer.summarize_evidence(evidence, max_length)
 
     def detect_notations(self, content: str, project: str | None = None) -> list[dict[str, Any]]:
-        """Detect notations in content."""
-        # Get existing symbols for project
+        """Detect notations in content. No-ops if physics tables not initialised."""
+        _tables = {r[0] for r in self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='notations'"
+        ).fetchall()}
+        if "notations" not in _tables:
+            return []
         sql = "SELECT current_symbol FROM notations"
         params: list[Any] = []
         if project:
@@ -1508,14 +1512,14 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             stored_dim is not None and stored_dim != configured_dim
         )
 
-        # The 7 vec tables we own and will repopulate.
+        # The 5 generic vec tables we own and will repopulate.
+        # Physics vec tables (lean_theorems_vec, tex_annotations_vec) are owned by
+        # kb-ag and managed by init_physics_schema — excluded here.
         ALL_VEC_TABLES = [
             "findings_vec",
             "scripts_vec",
-            "lean_theorems_vec",
             "issues_vec",
             "symbols_vec",
-            "tex_annotations_vec",
             "document_sections_vec",
         ]
 
@@ -1541,10 +1545,8 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
         counts = {
             "findings": self.conn.execute("SELECT COUNT(*) FROM findings").fetchone()[0],
             "scripts": self.conn.execute("SELECT COUNT(*) FROM scripts").fetchone()[0],
-            "lean_theorems": self.conn.execute("SELECT COUNT(*) FROM lean_theorems").fetchone()[0],
             "issues": self.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0],
             "symbols": self.conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0],
-            "tex_annotations": self.conn.execute("SELECT COUNT(*) FROM tex_annotations").fetchone()[0],
             "document_sections": self.conn.execute("SELECT COUNT(*) FROM document_sections").fetchone()[0],
         }
         grand_total = sum(counts.values())
@@ -1648,12 +1650,6 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             lambda r: r["purpose"] or "",
         )
         _do_table(
-            "lean_theorems",
-            "SELECT id, statement_pure, statement FROM lean_theorems",
-            "lean_theorems_vec",
-            lambda r: r["statement_pure"] if r["statement_pure"] else r["statement"],
-        )
-        _do_table(
             "issues",
             "SELECT id, title, description FROM issues",
             "issues_vec",
@@ -1683,37 +1679,6 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             base_blob_update=_update_python_symbol_blob,
         )
 
-        # tex_annotations: regenerate embed text as add_tex_annotation does it,
-        # and write BOTH the _vec row AND the base-table embedding BLOB.
-        def _tex_annotations_text(row: Any) -> str:
-            parts = []
-            if row["section_title"]:
-                parts.append(row["section_title"])
-            if row["section_label"]:
-                parts.append(row["section_label"])
-            if row["python_refs"]:
-                parts.append(f"python:{row['python_refs']}")
-            if row["lean_refs"]:
-                parts.append(f"lean:{row['lean_refs']}")
-            if row["context"]:
-                parts.append(row["context"])
-            return " ".join(filter(None, parts))
-
-        def _update_tex_annotation_blob(conn: Any, row_id: str, emb: bytes) -> None:
-            conn.execute(
-                "UPDATE tex_annotations SET embedding = ? WHERE id = ?",
-                (emb, row_id),
-            )
-
-        _do_table(
-            "tex_annotations",
-            "SELECT id, section_label, section_title, python_refs, lean_refs, context "
-            "FROM tex_annotations",
-            "tex_annotations_vec",
-            _tex_annotations_text,
-            base_blob_update=_update_tex_annotation_blob,
-        )
-
         # document_sections: embed embed_text if present, else content.
         def _document_sections_text(row: Any) -> str:
             return row["embed_text"] or row["content"] or row["heading"] or ""
@@ -1727,15 +1692,14 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
         # POST-REEMBED ASSERTION: each _vec must have >= base embedded-row count.
         # For findings/scripts/lean_theorems/concepts/issues: all rows should have a vec entry.
-        # For symbols/tex_annotations: rows with non-null embedding should match.
+        # For symbols: rows with non-null embedding should match.
+        # Physics vec tables (lean_theorems_vec, tex_annotations_vec) are excluded:
+        # they are owned by kb-ag and not guaranteed to exist in generic databases.
         assertion_checks = [
             ("findings_vec",           "SELECT COUNT(*) FROM findings"),
             ("scripts_vec",            "SELECT COUNT(*) FROM scripts"),
-            ("lean_theorems_vec",      "SELECT COUNT(*) FROM lean_theorems"),
-            ("concepts_vec",           "SELECT COUNT(*) FROM concepts"),
             ("issues_vec",             "SELECT COUNT(*) FROM issues"),
             ("symbols_vec",            "SELECT COUNT(*) FROM symbols WHERE embedding IS NOT NULL"),
-            ("tex_annotations_vec",    "SELECT COUNT(*) FROM tex_annotations WHERE embedding IS NOT NULL"),
             ("document_sections_vec",  "SELECT COUNT(*) FROM document_sections"),
         ]
         assertion_errors = []

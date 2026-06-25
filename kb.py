@@ -679,6 +679,16 @@ def main():
         help="Suppress per-file output; only print summary line",
     )
 
+    # ensure-physics-schema: idempotent physics DDL init (called by kb-ag SessionStart hook)
+    ensure_physics_parser = _add_parser(
+        "ensure-physics-schema",
+        "Idempotently create physics/Lean/TeX tables in the kb database (kb-ag hook use)",
+        agent_visible=True,
+    )
+    ensure_physics_parser.add_argument(
+        "--quiet", action="store_true", help="Suppress output"
+    )
+
     # configure: host-wide and per-project config UX (Phase 5, kb-2c3)
     # plan-review: content-hash verdict markers gating native plan-mode approval
     # on expert-review (epic kb-318a8b). DB-free; dispatched early like configure.
@@ -946,6 +956,7 @@ def main():
         "embed-status": _cmd_admin.run_embed_status,
         "reembed": _cmd_admin.run_reembed,
         "flush-pending": _cmd_admin.run_flush_pending,
+        "ensure-physics-schema": _cmd_admin.run_ensure_physics_schema,
         "review": _cmd_maintenance.run_review,
         "refresh": _cmd_maintenance.run_refresh,
         "ask": _cmd_maintenance.run_ask,

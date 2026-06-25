@@ -305,3 +305,19 @@ def run_flush_pending(kb, args) -> None:
     total = len(txt_files) + len(kb_md_files)
     print(f"flush-pending: {ok} ok, {fail} failed, {total} total")
     sys.exit(0 if fail == 0 else 1)
+
+
+# ---------------------------------------------------------------------------
+# ensure-physics-schema
+# ---------------------------------------------------------------------------
+
+def run_ensure_physics_schema(kb, args) -> None:
+    """Idempotently create physics/Lean/TeX tables in the kb database.
+
+    Called by the kb-ag SessionStart hook so physics tables exist before any
+    physics hook queries them. Safe to run repeatedly (CREATE TABLE IF NOT EXISTS).
+    """
+    from kb.core.physics_schema import init_physics_schema
+    init_physics_schema(kb.conn, kb.embedding_dim)
+    if not args.quiet:
+        print("physics schema: ok")
