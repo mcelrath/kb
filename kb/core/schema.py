@@ -205,40 +205,6 @@ SCHEMA_SQL = """
         VALUES (new.rowid, new.name, new.statement, new.statement_pure, new.lean_name);
     END;
 
-    -- Concept register
-    CREATE TABLE IF NOT EXISTS concepts (
-        id TEXT PRIMARY KEY,
-        domain TEXT NOT NULL,
-        status TEXT DEFAULT 'open'
-            CHECK(status IN ('open','active','verified','superseded','procedure')),
-        claim TEXT NOT NULL,
-        correct_framing TEXT,
-        supersedes_id TEXT REFERENCES concepts(id),
-        project TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_concepts_project ON concepts(project);
-    CREATE INDEX IF NOT EXISTS idx_concepts_domain ON concepts(domain);
-    CREATE INDEX IF NOT EXISTS idx_concepts_status ON concepts(status);
-
-    -- Pointer tables
-    CREATE TABLE IF NOT EXISTS concept_theorems (
-        concept_id TEXT REFERENCES concepts(id) ON DELETE CASCADE,
-        theorem_id TEXT REFERENCES lean_theorems(id) ON DELETE CASCADE,
-        role TEXT DEFAULT 'evidence'
-            CHECK(role IN ('evidence','depends_on','motivates')),
-        PRIMARY KEY (concept_id, theorem_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS concept_findings (
-        concept_id TEXT REFERENCES concepts(id) ON DELETE CASCADE,
-        finding_id TEXT REFERENCES findings(id) ON DELETE CASCADE,
-        role TEXT DEFAULT 'evidence',
-        PRIMARY KEY (concept_id, finding_id)
-    );
-
     CREATE TABLE IF NOT EXISTS theorem_dependencies (
         theorem_id TEXT REFERENCES lean_theorems(id) ON DELETE CASCADE,
         depends_on_id TEXT REFERENCES lean_theorems(id) ON DELETE CASCADE,
@@ -585,15 +551,9 @@ def init_schema(conn: sqlite3.Connection, embedding_dim: int) -> None:
         )
     """)
 
-    # Create vector tables for theorems and concepts
+    # Create vector table for theorems
     _ = conn.execute(f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS lean_theorems_vec USING vec0(
-            id TEXT PRIMARY KEY,
-            embedding float[{embedding_dim}]
-        )
-    """)
-    _ = conn.execute(f"""
-        CREATE VIRTUAL TABLE IF NOT EXISTS concepts_vec USING vec0(
             id TEXT PRIMARY KEY,
             embedding float[{embedding_dim}]
         )

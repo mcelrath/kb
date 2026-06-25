@@ -29,7 +29,6 @@ from .search.hybrid import HybridSearch
 from .entities.scripts import ScriptsRepository
 from .entities.documents import DocumentsRepository
 from .entities.theorems import TheoremRepository
-from .entities.concepts import ConceptRepository
 from .entities.issues import IssuesRepository
 from .entities.bridge import BridgeMessagesRepository
 from .entities.symbols import SymbolsRepository
@@ -92,7 +91,6 @@ class KnowledgeBase:
     _scripts: ScriptsRepository
     _documents: DocumentsRepository
     _theorems: TheoremRepository
-    _concepts: ConceptRepository
     _issues: IssuesRepository
     _bridge: BridgeMessagesRepository
     _symbols: SymbolsRepository
@@ -142,7 +140,6 @@ class KnowledgeBase:
         )
         self._documents = DocumentsRepository(self.conn)
         self._theorems = TheoremRepository(self.conn, self._embedding)
-        self._concepts = ConceptRepository(self.conn, self._embedding)
         self._issues = IssuesRepository(self.conn, self._embedding)
         self._bridge = BridgeMessagesRepository(self.conn, self._embedding)
         self._symbols = SymbolsRepository(self.conn, self._embedding)
@@ -1511,12 +1508,11 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             stored_dim is not None and stored_dim != configured_dim
         )
 
-        # The 8 vec tables we own and will repopulate.
+        # The 7 vec tables we own and will repopulate.
         ALL_VEC_TABLES = [
             "findings_vec",
             "scripts_vec",
             "lean_theorems_vec",
-            "concepts_vec",
             "issues_vec",
             "symbols_vec",
             "tex_annotations_vec",
@@ -1546,7 +1542,6 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             "findings": self.conn.execute("SELECT COUNT(*) FROM findings").fetchone()[0],
             "scripts": self.conn.execute("SELECT COUNT(*) FROM scripts").fetchone()[0],
             "lean_theorems": self.conn.execute("SELECT COUNT(*) FROM lean_theorems").fetchone()[0],
-            "concepts": self.conn.execute("SELECT COUNT(*) FROM concepts").fetchone()[0],
             "issues": self.conn.execute("SELECT COUNT(*) FROM issues").fetchone()[0],
             "symbols": self.conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0],
             "tex_annotations": self.conn.execute("SELECT COUNT(*) FROM tex_annotations").fetchone()[0],
@@ -1657,12 +1652,6 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
             "SELECT id, statement_pure, statement FROM lean_theorems",
             "lean_theorems_vec",
             lambda r: r["statement_pure"] if r["statement_pure"] else r["statement"],
-        )
-        _do_table(
-            "concepts",
-            "SELECT id, claim FROM concepts",
-            "concepts_vec",
-            lambda r: r["claim"] or "",
         )
         _do_table(
             "issues",
