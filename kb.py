@@ -277,6 +277,7 @@ def main():
     from kb.cli.commands import serve as _cmd_serve
     from kb.cli.commands import surface as _cmd_surface
     from kb.cli.commands import doc as _cmd_doc
+    from kb.cli.commands import peers as _cmd_peers
 
     parser = argparse.ArgumentParser(
         description="Knowledge Base",
@@ -523,6 +524,24 @@ def main():
     doc_get_parser.add_argument("--subtree", action="store_true",
         help="Include all descendant sections")
     doc_get_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # Peers command group: federated-kb peer registry (epic kb-907fc8 P1)
+    peers_parser = _add_parser("peers", "Manage federated-kb peers (list/add/remove/health)",
+                               agent_visible=True)
+    peers_sub = peers_parser.add_subparsers(dest="peers_cmd")
+    peers_sub.add_parser("list", help="List registered peers (default)")
+    _peers_add = peers_sub.add_parser("add", help="Add/update a peer kb-server")
+    _peers_add.add_argument("url", help="Peer kb-server base URL, e.g. http://tardis:8765")
+    _peers_add.add_argument("--label", help="Human/agent name for the peer")
+    _peers_add.add_argument("--model-id", dest="model_id", help="Peer's embedding model id")
+    _peers_add.add_argument("--dim", type=int, help="Peer's embedding dim")
+    _peers_add.add_argument("--quant", help="Peer's embedding quantization (Q4/F16/...)")
+    _peers_add.add_argument("--instruction-prefix", dest="instruction_prefix",
+        help="Peer's query instruction prefix")
+    _peers_add.add_argument("--token", help="Bearer token to authenticate to this peer")
+    _peers_rm = peers_sub.add_parser("remove", help="Remove a peer")
+    _peers_rm.add_argument("url", help="Peer URL to remove")
+    peers_sub.add_parser("health", help="Probe each peer's reachability + update last_seen")
 
     # Bridge command group: ingest/search/promote agent bridge messages
     bridge_parser = _add_parser("bridge", "Ingest/search/promote agent bridge messages",
@@ -900,6 +919,7 @@ def main():
         "bridge": lambda kb, args: _cmd_bridge.run_bridge(kb, args, bridge_parser),
         "serve": _cmd_serve.run_serve,
         "surface": _cmd_surface.run_surface,
+        "peers": _cmd_peers.run_peers,
     }
 
     handler = _dispatch.get(args.command)

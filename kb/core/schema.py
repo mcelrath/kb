@@ -364,6 +364,26 @@ SCHEMA_SQL = """
         updated_at TEXT
     );
 
+    -- Federated-kb peer registry (epic kb-907fc8 P1): the DECENTRALIZED peer list for
+    -- cross-employee federated search. NO central registry — each node holds its own
+    -- peers. model_id/dim/quant/instruction_prefix gate vector-comparability (only
+    -- compare cosine across peers on the SAME standardized embedding); token authenticates
+    -- to the peer; last_seen tracks reachability for offline-tolerant fan-out.
+    CREATE TABLE IF NOT EXISTS peers (
+        url TEXT PRIMARY KEY,            -- peer kb-server base URL (e.g. http://tardis:8765)
+        label TEXT,                      -- human/agent name for the peer
+        model_id TEXT,                   -- peer's embedding model id
+        dim INTEGER,                     -- peer's embedding dim
+        quant TEXT,                      -- peer's embedding quantization (Q4/F16/...) — affects cosine
+        instruction_prefix TEXT,         -- peer's query instruction prefix (asymmetry gate)
+        token TEXT,                      -- bearer token to authenticate to this peer
+        enabled INTEGER NOT NULL DEFAULT 1,  -- 1 = include in federated fan-out
+        last_seen REAL,                  -- epoch seconds of last successful contact
+        added_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_peers_enabled ON peers(enabled);
+
 """
 
 

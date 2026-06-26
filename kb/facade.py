@@ -31,6 +31,7 @@ from .entities.documents import DocumentsRepository
 from .entities.issues import IssuesRepository
 from .entities.bridge import BridgeMessagesRepository
 from .entities.symbols import SymbolsRepository
+from .entities.peers import PeersRepository
 
 
 class KnowledgeBase:
@@ -140,6 +141,7 @@ class KnowledgeBase:
         self._issues = IssuesRepository(self.conn, self._embedding)
         self._bridge = BridgeMessagesRepository(self.conn, self._embedding)
         self._symbols = SymbolsRepository(self.conn, self._embedding)
+        self._peers = PeersRepository(self.conn)
 
     # =========================================================================
     # Backward-compatible methods delegating to subsystems
