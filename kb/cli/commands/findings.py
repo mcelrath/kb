@@ -65,6 +65,10 @@ def run_add(kb, args, add_content: str, queue_async_add_fn) -> None:
 # ---------------------------------------------------------------------------
 
 def run_search(kb, args, load_session_seen_ids_fn) -> None:
+    if getattr(args, "federated", False):
+        from .fed_search import run_federated_search
+        run_federated_search(kb, args)
+        return
     exclude_ids: set[str] = set(args.exclude or [])
     if not args.no_dedup:
         exclude_ids |= load_session_seen_ids_fn()

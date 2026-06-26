@@ -346,6 +346,8 @@ def main():
         help="Disable automatic exclusion of session-seen IDs")
     search_parser.add_argument("--json", action="store_true",
         help="Output results as JSON array (full metadata, for hook/script use)")
+    search_parser.add_argument("--federated", action="store_true",
+        help="Also search registered peers (kb peers) and merge by similarity (epic kb-907fc8)")
 
     # List command
     list_parser = _add_parser("list", "List findings", agent_visible=True)
