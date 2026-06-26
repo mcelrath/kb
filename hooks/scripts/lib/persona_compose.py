@@ -16,18 +16,29 @@ Contract:
     emit whatever remains (partial > blank). The caller hook falls back to a flat cat only on
     a non-zero exit, so missing-file is intentionally NOT fatal.
 
-Frontmatter is parsed by the real parser in kb.ingest.personas (no second parser).
+This module is PURE STDLIB by design: it runs on the SessionStart hot path for every agent,
+so it must not import the kb package (which pulls kb.facade/core/search + numpy, ~170ms).
+The frontmatter parser is inlined for the same reason — a 13-line copy beats a heavy import.
+(It mirrors kb.ingest.personas._parse_frontmatter; both are single-value-per-key, ---...---.)
 """
 
 import sys
 from pathlib import Path
 
-# hooks/scripts/lib/persona_compose.py -> plugin root is parents[3]
-_PKG_ROOT = Path(__file__).resolve().parents[3]
-if str(_PKG_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PKG_ROOT))
 
-from kb.ingest.personas import _parse_frontmatter
+def _parse_frontmatter(text: str) -> dict[str, str]:
+    """Parse single-value YAML-style frontmatter (---...---) from markdown text."""
+    fm: dict[str, str] = {}
+    if not text.startswith("---"):
+        return fm
+    end = text.find("---", 3)
+    if end == -1:
+        return fm
+    for line in text[3:end].splitlines():
+        if ":" in line:
+            key, _, val = line.partition(":")
+            fm[key.strip()] = val.strip().strip('"').strip("'")
+    return fm
 
 
 def _strip_frontmatter(text: str) -> str:
