@@ -39,5 +39,5 @@ start/compact.
       ```
       After this, `kb bridge recv`/`send` and the next idle watcher resolve `$FULL_ID`; the
       persona's mail + records trail are now this session's.
-   3. **Read `<base>.md` IN FULL** and adopt it as your binding operating role; read any files it references in full.
+   3. **Read `<base>.md` IN FULL** and adopt it as your binding operating role; read any files it references in full. If `<base>.md` carries an `archetype: <name>` frontmatter key, your FULL operating role is the COMPOSED text the `session-persona.sh` hook emits — archetype L1 (`skills/persona/archetypes/<name>.md`) + augmentation L2 (the `augmentation:` file, or the persona body) + any instance body — not the persona file alone; read the archetype and augmentation files in full too. The `--role` for the bridge announce still comes from the persona file's OWN frontmatter (step 3.2), not the archetype.
    4. Confirm: active persona, bridge id (with suffix), and that it re-loads after compaction.

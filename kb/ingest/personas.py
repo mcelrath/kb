@@ -165,6 +165,8 @@ def discover_personas(roots: list[Path]) -> list[dict[str, Any]]:
             fm = _parse_frontmatter(text)
             name = fm.get("name", md_file.stem)
             role = fm.get("role", fm.get("combines", ""))
+            archetype = fm.get("archetype", "")
+            augmentation = fm.get("augmentation", "")
             project = git_root.name if git_root else "unknown"
             content_hash = hashlib.sha256(text.encode()).hexdigest()
             file_mtime = md_file.stat().st_mtime
@@ -176,9 +178,15 @@ def discover_personas(roots: list[Path]) -> list[dict[str, Any]]:
             dir_count = _count_top_level_dirs(git_root) if git_root else 0
 
             # Build searchable text: name + role + description + domain tags from content
-            # Extract first meaningful paragraph after frontmatter as role description
-            body_start = text.find("---", 3)
-            body = text[body_start + 3:].lstrip("---\n").strip() if body_start != -1 else text
+            # Extract the body after the frontmatter block. Slice AFTER the closing '---'
+            # LINE — NOT lstrip('---\n'), which strips the char-set {'-','\n'} and would eat
+            # a body that starts with a markdown list dash.
+            close = text.find("\n---", 3) if text.startswith("---") else -1
+            if close != -1:
+                nl = text.find("\n", close + 1)
+                body = text[nl + 1:].strip() if nl != -1 else ""
+            else:
+                body = text
             # First 1000 chars of body as searchable content
             searchable_body = body[:1000].strip()
 
@@ -193,7 +201,10 @@ def discover_personas(roots: list[Path]) -> list[dict[str, Any]]:
                 "reviewers_yaml_mtime": reviewers_yaml_mtime,
                 "top_level_dir_count": dir_count,
                 "git_root": str(git_root) if git_root else None,
-                "searchable_content": f"Persona: {name}\nProject: {project}\nRole: {role}\n\n{searchable_body}",
+                "searchable_content": (
+                    f"Persona: {name}\nProject: {project}\nRole: {role}\n"
+                    f"Archetype: {archetype}\nAugmentation: {augmentation}\n\n{searchable_body}"
+                ),
             })
 
     return found

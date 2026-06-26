@@ -16,6 +16,10 @@
 BRIDGE="$HOME/.agent-bridge/bridge"
 [[ ! -x "$BRIDGE" ]] && exit 0
 
+# Plugin root (for the persona composer + archetype dir). Env first, else 2 levels up
+# from this script (hooks/scripts/) — matches kb-error-extract.sh:7 / kb-precompact.sh:6.
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+
 # session_id: env, else from the hook-input JSON on stdin.
 SID="${CLAUDE_SESSION_ID:-}"
 if [[ -z "$SID" && ! -t 0 ]]; then
@@ -62,7 +66,16 @@ PERSONA_FILE="$PERSONA_DIR/$BASE.md"
 BRIDGE_ID="${AGENT_ID:-$PERSONA}"
 echo "ACTIVE PERSONA: $BASE (agent $BRIDGE_ID). This is your BINDING operating role for the session — it persists across compaction because this SessionStart hook re-injects it. Read any files it references in full and adopt it now:"
 echo "---"
-cat "$PERSONA_FILE"
+# Compose archetype (L1) + augmentation (L2) + instance body per the persona's frontmatter.
+# Fail-safe: any composer error falls back to the flat persona file, so a parser bug can
+# never blank a session's persona (same discipline as the SID parse above).
+COMPOSED=$(python3 "$PLUGIN_ROOT/hooks/scripts/lib/persona_compose.py" \
+    "$PERSONA_FILE" "$PLUGIN_ROOT" "$PERSONA_DIR" 2>/dev/null)
+if [[ $? -eq 0 && -n "$COMPOSED" ]]; then
+    printf '%s\n' "$COMPOSED"
+else
+    cat "$PERSONA_FILE"
+fi
 echo "---"
 echo "(To switch: /persona <name>. To list: /persona)"
 echo ""
