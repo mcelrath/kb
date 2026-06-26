@@ -18,26 +18,24 @@ start/compact.
 
 ## What to do
 
-1. **Resolve the persona dir** (first that exists): `$(git rev-parse --show-toplevel)/.claude/agents/personas` → `$PWD/.claude/agents/personas` → `~/.claude/agents/personas`.
+Run the helper — it does list-or-adopt in ONE call (dir-resolution, validation, session pin,
+bridge `announce --steal`, and emitting the COMPOSED role). Do NOT improvise `ls`/`find`/`cat`;
+the script handles all of it. One Bash call:
 
-2. **No argument — LIST.** Show each `*.md` as `name — <first description line>`; tell the user to `/persona <name>`. If the dir is empty/absent, say the project defines no personas.
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/skills/persona/persona.sh" "<name-or-empty>"
+```
 
-3. **Argument names a persona** (or `<base>-<suffix>`; lower-case; base = before first `-`):
-   1. Confirm `<base>.md` exists; else list valid names.
-   2. Pin the id AND claim the bridge id (EXPLICIT adoption = a deliberate action, so it
-      `announce --steal`s NOW — the takeover path; the automatic SessionStart re-announce
-      never steals, it qualifies-on-conflict, so the steal must happen here, kb-72f717.3):
-      ```bash
-      FULL_ID="<full-id>"
-      D="$(git -C . rev-parse --show-toplevel 2>/dev/null || echo .)/.claude/.persona"
-      SID="${CLAUDE_SESSION_ID:-unknown}"
-      mkdir -p "$D"; echo "$FULL_ID" > "$D/session-${SID}"
-      BR="$HOME/.agent-bridge/bridge"
-      [ -x "$BR" ] && "$BR" announce --id "$FULL_ID" --role "<role from <base>.md frontmatter>" \
-        --focus "adopted via /persona" --offering "<offering>" --steal </dev/null 2>/dev/null \
-        && echo "pinned + claimed bridge id '$FULL_ID' (--steal)"
-      ```
-      After this, `kb bridge recv`/`send` and the next idle watcher resolve `$FULL_ID`; the
-      persona's mail + records trail are now this session's.
-   3. **Read `<base>.md` IN FULL** and adopt it as your binding operating role; read any files it references in full. If `<base>.md` carries an `archetype: <name>` frontmatter key, your FULL operating role is the COMPOSED text the `session-persona.sh` hook emits — archetype L1 (`skills/persona/archetypes/<name>.md`) + augmentation L2 (the `augmentation:` file, or the persona body) + any instance body — not the persona file alone; read the archetype and augmentation files in full too. The `--role` for the bridge announce still comes from the persona file's OWN frontmatter (step 3.2), not the archetype.
-   4. Confirm: active persona, bridge id (with suffix), and that it re-loads after compaction.
+- **No argument** → it prints the available personas. Relay them; tell the user `/persona <name>`.
+- **Argument** (`<name>` or `<base>-<suffix>`, lower-case; base = before first `-`) → it pins the
+  session, claims the bridge id with `--steal` (explicit adoption = takeover; the SessionStart
+  re-announce never steals, kb-72f717.3), and prints the **composed operating role** under
+  `----- composed operating role -----`: archetype L1 (`skills/persona/archetypes/<archetype>.md`)
+  + augmentation L2 (the `augmentation:` file, or the persona body) + any instance body. **READ
+  that block IN FULL and adopt it as your binding role**; read any files it references in full.
+  Then confirm to the user: active persona, bridge id (with suffix), re-loads after compaction.
+  On `Unknown persona`, relay the valid names it lists.
+
+The `--role` for the bridge announce comes from the persona file's own `role:`/`archetype:`
+frontmatter (the script reads it). After adoption, `kb bridge recv`/`send` and the next idle
+watcher resolve the full id; the persona's mail + records trail are now this session's.
