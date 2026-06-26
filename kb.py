@@ -196,13 +196,13 @@ _AGENT_CMDS = [
 ]
 
 _MAINT_CMDS = [
-    ("refresh",       "retag + resummarize + reembed  [-p PROJECT] [--all] [--theorems]"),
+    ("refresh",       "retag + resummarize + reembed  [-p PROJECT] [--all]"),
     ("review",        "findings needing attention  [-p PROJECT]"),
     ("questions",     "LLM: identify research gaps  [-p PROJECT] [-n N] [-i N] [query]"),
     ("ask",           'LLM: answer a question from KB  "question" [-p PROJECT]'),
     ("stats",         "counts by type and project"),
     ("flush-pending", "drain the offline-add queue"),
-    ("ingest",        "md | pdf | lean | python | typescript | rust | tex | scripts | personas   <file|dir>"),
+    ("ingest",        "md | pdf | python | typescript | rust | scripts | personas   <file|dir>"),
     ("delete",        "<kb-id> [--force]"),
     ("export",        "<file.json> [-p PROJECT]"),
     ("import",        "<file.json>"),
@@ -275,7 +275,6 @@ def main():
     from kb.cli.commands import bridge as _cmd_bridge
     from kb.cli.commands import lean as _cmd_lean
     from kb.cli.commands import serve as _cmd_serve
-    from kb.cli.commands import misc as _cmd_misc
     from kb.cli.commands import surface as _cmd_surface
     from kb.cli.commands import doc as _cmd_doc
 
@@ -427,25 +426,10 @@ def main():
     refresh_parser.add_argument("-n", "--limit", type=int, default=0,
         help="Max rows to process (0 = no limit)")
     refresh_parser.add_argument("--dry-run", action="store_true")
-    refresh_parser.add_argument("--theorems", action="store_true",
-        help="Also backfill statement_pure for lean theorems")
-    refresh_parser.add_argument("--theorem-workers", type=int, default=8,
-        help="Parallel workers for theorem backfill (default 8)")
 
     # Ingest command group
     ingest_parser = _add_parser("ingest", "Ingest external content into KB")
     ingest_sub = ingest_parser.add_subparsers(dest="ingest_cmd")
-
-    ingest_lean_parser = ingest_sub.add_parser("lean",
-        help="Ingest Lean theorems (proofs/ + mathlib4/ag, auto-discovered) with LLM summaries")
-    ingest_lean_parser.add_argument("--dry-run", action="store_true")
-    ingest_lean_parser.add_argument("--limit", type=int, default=None)
-    ingest_lean_parser.add_argument("--no-summarize", action="store_true",
-        help="Skip LLM summary generation (post-commit hook uses this automatically)")
-    ingest_lean_parser.add_argument("--summarize-only", action="store_true",
-        help="Only fill missing statement_pure for already-ingested theorems")
-    ingest_lean_parser.add_argument("--files", nargs="+", metavar="FILE",
-        help="Incremental: process only these absolute .lean paths")
 
     ingest_scripts_parser = ingest_sub.add_parser("scripts", help="Register scripts with LLM-generated purposes")
     ingest_scripts_parser.add_argument("directory", type=Path, help="Directory to scan")
@@ -482,14 +466,6 @@ def main():
         help="Remove all symbols rows for these deleted/renamed files")
     ingest_rust_parser.add_argument("--project", default="kb")
     ingest_rust_parser.add_argument("--dry-run", action="store_true")
-
-    ingest_tex_parser = ingest_sub.add_parser("tex", help="Index Python/Lean/Epic annotation comment blocks from TeX files")
-    ingest_tex_parser.add_argument("--root", default=str(Path.home() / "Physics/claude"),
-        help="Root of tex corpus (default: ~/Physics/claude)")
-    ingest_tex_parser.add_argument("--files", nargs="+", metavar="FILE",
-        help="Specific files to process (overrides --root glob)")
-    ingest_tex_parser.add_argument("--project", default="algebraic-genesis")
-    ingest_tex_parser.add_argument("--dry-run", action="store_true")
 
     ingest_md_parser = ingest_sub.add_parser("md", help="Ingest a markdown file into document + sections by heading tree")
     ingest_md_parser.add_argument("file", help="Markdown file to ingest (.md or .markdown)")
@@ -614,23 +590,6 @@ def main():
         help="Clear ALL owed --needs-reply messages for this agent (stale backlog).")
     bridge_clear_owed_parser.add_argument("agent_id", nargs="?", default=None,
         help="Your id (default: inferred from persona pin / AGENT_ID / whoami)")
-
-    # Reconcile command
-    reconcile_parser = _add_parser("reconcile", "Reconcile KB with source document", user_visible=False)
-    reconcile_parser.add_argument("document", type=Path, help="Directory of source documents to reconcile against")
-    reconcile_parser.add_argument("-p", "--project", required=True, help="Project name")
-    reconcile_parser.add_argument("--export-missing", type=Path, help="Export missing claims to a JSON file")
-
-    # Notation audit command
-    audit_parser = _add_parser("notation-audit", "Audit notations against source document", user_visible=False)
-    audit_parser.add_argument("document", type=Path, help="Source document")
-    audit_parser.add_argument("-p", "--project", help="Project name")
-
-    # lean-verify subcommand: re-run lean-audit on cited file, flag proof drift
-    lean_verify_parser = _add_parser("lean-verify", "Re-run lean-audit on a lean:proven entry's cited file and flag drift")
-    lean_verify_parser.add_argument("id", help="KB entry ID to verify")
-    lean_verify_parser.add_argument("--search-path", nargs="*", metavar="DIR",
-        help="Additional directories to search for the .lean file")
 
     # embed-status: show configured vs stored embedding metadata + verdict
     embed_status_parser = _add_parser(
@@ -777,32 +736,6 @@ def main():
     configure_parser.add_argument(
         "--install-wrappers", action="store_true",
         help="Install kb + kbt wrapper scripts on PATH (~/.local/bin); agents/hooks call kbt by name"
-    )
-
-    # queue-defer: set a defer_reason on a lean_work_queue row
-    queue_defer_parser = _add_parser(
-        "queue-defer",
-        "Set or clear a defer reason on a lean_work_queue row",
-        agent_visible=True,
-    )
-    queue_defer_parser.add_argument("row_id", nargs="?", help="lean_work_queue row id (16-char hex); not required with --list")
-    queue_defer_parser.add_argument(
-        "reason",
-        nargs="?",
-        help=(
-            "Defer reason (valid: data_blocked_on:<bd-id>, design-pending:<decision>, "
-            "file-conflict:<agent-id>, agent-cap, user-gate:<adj>, verify-first:<row-id>). "
-            "Omit to CLEAR the defer (re-activates the row)."
-        ),
-    )
-    queue_defer_parser.add_argument(
-        "detail",
-        nargs="?",
-        help="Optional free-text detail appended after reason",
-    )
-    queue_defer_parser.add_argument(
-        "--list", action="store_true",
-        help="List all deferred rows (read-only)",
     )
 
     # surface: unified multi-source semantic surfacing (code symbols + findings + bridge)
@@ -965,10 +898,6 @@ def main():
         "ingest": lambda kb, args: _cmd_ingest.run_ingest(kb, args, ingest_parser),
         "doc": lambda kb, args: _cmd_doc.run_doc(kb, args, doc_parser),
         "bridge": lambda kb, args: _cmd_bridge.run_bridge(kb, args, bridge_parser),
-        "reconcile": _cmd_misc.run_reconcile,
-        "notation-audit": _cmd_misc.run_notation_audit,
-        "lean-verify": _cmd_lean.run_lean_verify,
-        "queue-defer": _cmd_lean.run_queue_defer,
         "serve": _cmd_serve.run_serve,
         "surface": _cmd_surface.run_surface,
     }

@@ -230,11 +230,6 @@ def run_refresh(kb, args) -> None:
           f"(project={project or 'ALL'}, all={args.all}, dry={args.dry_run})"
           f"\n  (Ctrl+C safe: each row committed immediately after I/O completes)")
     _run_refresh(kb, rows, dry_run=args.dry_run, commit_every=1)
-    if args.theorems:
-        _backfill_statement_pure(
-            kb, project=project,
-            workers=args.theorem_workers, dry_run=args.dry_run,
-        )
 
 
 # ---------------------------------------------------------------------------
