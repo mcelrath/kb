@@ -23,6 +23,7 @@ if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 
 from kb import KnowledgeBase, DEFAULT_DB_PATH
+from kb.entities.tex_annotations import TexAnnotationsRepository
 
 
 # Regex: annotation line starts with % Python:, % Lean:, % Epic:, or % kb-YYYYMMDD
@@ -272,6 +273,7 @@ def run(
         root = Path.home() / "Physics" / "claude"
 
     kb = KnowledgeBase(db_path=db_path)
+    tex_repo = TexAnnotationsRepository(kb.conn, kb.embedding)
     root = Path(root).expanduser().resolve()
 
     # Collect files
@@ -328,7 +330,7 @@ def run(
     ann_iter = _tqdm(all_annotations, desc="ingest", unit="ann", dynamic_ncols=True) if _tqdm else all_annotations
     try:
         for i, ann in enumerate(ann_iter, 1):
-            result = kb.add_tex_annotation(
+            result = tex_repo.add(
                 file=ann["file"],
                 line=ann["line"],
                 section_label=ann.get("section_label"),

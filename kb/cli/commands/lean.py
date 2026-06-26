@@ -284,7 +284,13 @@ def run_queue_defer(kb, args) -> None:
     )
 
     if args.list or not args.row_id:
-        rows = kb.list_deferred_queue_rows(limit=50)
+        rows = kb.conn.execute("""
+            SELECT id, file, decl_name, class, readiness, defer_reason, defer_detail, updated_at
+            FROM lean_work_queue
+            WHERE defer_reason IS NOT NULL AND defer_reason != ''
+            ORDER BY updated_at DESC
+            LIMIT 50
+        """).fetchall()
         if not rows:
             print("lean_work_queue: no deferred rows")
         else:
@@ -307,13 +313,20 @@ def run_queue_defer(kb, args) -> None:
         sys.exit(0)
 
     row_id = args.row_id
-    existing = kb.get_queue_row(row_id)
+    existing = kb.conn.execute(
+        "SELECT id, class, readiness, defer_reason FROM lean_work_queue WHERE id = ?",
+        (row_id,),
+    ).fetchone()
     if not existing:
         print(f"queue-defer: row '{row_id}' not found in lean_work_queue", file=sys.stderr)
         sys.exit(1)
 
     if args.reason is None:
-        kb.clear_defer_reason(row_id)
+        kb.conn.execute(
+            "UPDATE lean_work_queue SET defer_reason = NULL, defer_detail = NULL, updated_at = datetime('now') WHERE id = ?",
+            (row_id,),
+        )
+        kb.conn.commit()
         print(output.c(f"queue-defer: cleared defer on {row_id[:10]} (row re-activated)", "green"))
         sys.exit(0)
 
@@ -329,7 +342,11 @@ def run_queue_defer(kb, args) -> None:
         )
         sys.exit(1)
 
-    kb.set_defer_reason(row_id, reason, detail or None)
+    kb.conn.execute(
+        "UPDATE lean_work_queue SET defer_reason = ?, defer_detail = ?, updated_at = datetime('now') WHERE id = ?",
+        (reason, detail or None, row_id),
+    )
+    kb.conn.commit()
     _, cls, readiness, _ = existing
     msg = (f"queue-defer: deferred {row_id[:10]} ({readiness} {cls}) — reason: {reason}"
            + (f" ({detail})" if detail else ""))

@@ -119,7 +119,9 @@ def _backfill_statement_pure(kb, project=None, limit=None, workers=8, dry_run=Fa
     import time as _time
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    rows = kb._theorems.fetch_missing_statement_pure(project=project, limit=limit)
+    from kb.entities.theorems import TheoremRepository
+    theorems = TheoremRepository(kb.conn, kb.embedding)
+    rows = theorems.fetch_missing_statement_pure(project=project, limit=limit)
     print(f"  theorem backfill: {len(rows)} without statement_pure")
     if not rows:
         return {"updated": 0, "failed": 0}
@@ -147,14 +149,14 @@ def _backfill_statement_pure(kb, project=None, limit=None, workers=8, dry_run=Fa
 
     updated = failed = 0
     t0 = _time.time()
-    conn = kb._theorems.conn
+    conn = kb.conn
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(restate_one, row): row for row in rows}
         for i, fut in enumerate(as_completed(futures), 1):
             tid, lean_name, pure = fut.result()
             if pure:
-                kb._theorems.set_statement_pure(tid, pure)
+                theorems.set_statement_pure(tid, pure)
                 updated += 1
             else:
                 failed += 1
@@ -174,7 +176,7 @@ def _backfill_statement_pure(kb, project=None, limit=None, workers=8, dry_run=Fa
             "WHERE statement_pure IS NOT NULL AND statement_pure != ''"
         ).fetchall()
         for j, (tid, pure) in enumerate(updated_rows):
-            kb._theorems.reembed_statement_pure(tid, pure)
+            theorems.reembed_statement_pure(tid, pure)
             if j % 100 == 0:
                 conn.commit()
         conn.commit()

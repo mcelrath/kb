@@ -28,7 +28,6 @@ from .llm.analysis import ContentAnalyzer
 from .search.hybrid import HybridSearch
 from .entities.scripts import ScriptsRepository
 from .entities.documents import DocumentsRepository
-from .entities.theorems import TheoremRepository
 from .entities.issues import IssuesRepository
 from .entities.bridge import BridgeMessagesRepository
 from .entities.symbols import SymbolsRepository
@@ -90,7 +89,6 @@ class KnowledgeBase:
     _search: HybridSearch
     _scripts: ScriptsRepository
     _documents: DocumentsRepository
-    _theorems: TheoremRepository
     _issues: IssuesRepository
     _bridge: BridgeMessagesRepository
     _symbols: SymbolsRepository
@@ -139,7 +137,6 @@ class KnowledgeBase:
             finding_exists=lambda fid: self.get(fid) is not None
         )
         self._documents = DocumentsRepository(self.conn)
-        self._theorems = TheoremRepository(self.conn, self._embedding)
         self._issues = IssuesRepository(self.conn, self._embedding)
         self._bridge = BridgeMessagesRepository(self.conn, self._embedding)
         self._symbols = SymbolsRepository(self.conn, self._embedding)
@@ -147,6 +144,11 @@ class KnowledgeBase:
     # =========================================================================
     # Backward-compatible methods delegating to subsystems
     # =========================================================================
+
+    @property
+    def embedding(self) -> "EmbeddingService":
+        """Public accessor for the embedding service (used by physics repositories)."""
+        return self._embedding
 
     def _embed(self, text: str) -> bytes:
         """Generate embedding for text."""
@@ -1792,138 +1794,6 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
 
 
     # =========================================================================
-    # TeX annotation index methods
-    # =========================================================================
-
-    def add_tex_annotation(
-        self,
-        file: str,
-        line: int,
-        section_label: str | None = None,
-        section_title: str | None = None,
-        python_refs: list[str] | None = None,
-        lean_refs: list[str] | None = None,
-        epic_refs: list[str] | None = None,
-        kb_refs: list[str] | None = None,
-        context: str | None = None,
-        project: str | None = None,
-    ) -> dict[str, Any]:
-        """Add or update a TeX annotation in the index.
-
-        Returns dict with 'id', 'is_new'.
-        """
-        existing = self.conn.execute(
-            "SELECT id FROM tex_annotations WHERE file = ? AND line = ?",
-            (file, line),
-        ).fetchone()
-
-        now = datetime.now().isoformat()
-        ann_id = f"texann-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-
-        embed_text = " ".join(filter(None, [
-            section_title or "",
-            section_label or "",
-            f"python:{json.dumps(python_refs or [])}",
-            f"lean:{json.dumps(lean_refs or [])}",
-            context or "",
-        ]))
-        embedding = self._embed(embed_text)
-
-        python_json = json.dumps(python_refs or [])
-        lean_json = json.dumps(lean_refs or [])
-        epic_json = json.dumps(epic_refs or [])
-        kb_json = json.dumps(kb_refs or [])
-
-        if existing:
-            ann_id = existing[0]
-            self.conn.execute("""
-                UPDATE tex_annotations SET section_label=?, section_title=?,
-                    python_refs=?, lean_refs=?, epic_refs=?, kb_refs=?,
-                    context=?, updated_at=?, embedding=?
-                WHERE id=?
-            """, (section_label, section_title, python_json, lean_json, epic_json,
-                  kb_json, context, now, embedding, ann_id))
-            self.conn.execute("DELETE FROM tex_annotations_vec WHERE id = ?", (ann_id,))
-            self.conn.execute(
-                "INSERT INTO tex_annotations_vec (id, embedding) VALUES (?, ?)",
-                (ann_id, embedding),
-            )
-            self.conn.commit()
-            return {"id": ann_id, "is_new": False}
-
-        self.conn.execute("""
-            INSERT INTO tex_annotations
-                (id, section_label, section_title, python_refs, lean_refs, epic_refs,
-                 kb_refs, context, file, line, created_at, updated_at, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ann_id, section_label, section_title, python_json, lean_json, epic_json,
-              kb_json, context, file, line, now, now, embedding))
-        self.conn.execute(
-            "INSERT INTO tex_annotations_vec (id, embedding) VALUES (?, ?)",
-            (ann_id, embedding),
-        )
-        self.conn.commit()
-        return {"id": ann_id, "is_new": True}
-
-    def search_tex_annotations(
-        self,
-        query: str,
-        file: str | None = None,
-        section_label: str | None = None,
-        limit: int = 10,
-    ) -> list[dict[str, Any]]:
-        """Search TeX annotations by semantic similarity."""
-        embedding = self._embed(query)
-
-        conditions = []
-        params: list[Any] = []
-        if file:
-            conditions.append("t.file = ?")
-            params.append(file)
-        if section_label:
-            conditions.append("t.section_label = ?")
-            params.append(section_label)
-
-        vec_results = self.conn.execute(
-            f"""SELECT v.id, v.distance
-                FROM tex_annotations_vec v
-                JOIN tex_annotations t ON t.id = v.id
-                WHERE v.embedding MATCH ? AND k = ?
-                {"AND " + " AND ".join(conditions) if conditions else ""}
-                ORDER BY v.distance""",
-            (embedding, limit * 2, *params),
-        ).fetchall()
-
-        seen: dict[str, float] = {}
-        for sid, dist in vec_results:
-            if dist is not None:
-                seen[sid] = 1 - (dist ** 2) / 2
-
-        top_ids = sorted(seen, key=lambda x: seen[x], reverse=True)[:limit]
-        results = []
-        for sid in top_ids:
-            row = self.conn.execute(
-                """SELECT id, section_label, section_title, python_refs, lean_refs,
-                          epic_refs, kb_refs, context, file, line
-                   FROM tex_annotations WHERE id = ?""",
-                (sid,),
-            ).fetchone()
-            if row:
-                r = dict(zip([
-                    "id", "section_label", "section_title", "python_refs", "lean_refs",
-                    "epic_refs", "kb_refs", "context", "file", "line"
-                ], row))
-                r["similarity"] = round(seen[sid], 4)
-                for fld in ("python_refs", "lean_refs", "epic_refs", "kb_refs"):
-                    if r.get(fld):
-                        try:
-                            r[fld] = json.loads(r[fld])
-                        except json.JSONDecodeError:
-                            r[fld] = []
-                results.append(r)
-        return results
-
-    # =========================================================================
     # Findings refresh methods (encapsulate inline SQL from _run_refresh /
     # _fetch_refresh_rows in kb.py so schema changes localize here)
     # =========================================================================
@@ -1991,44 +1861,6 @@ Include: coherent summary, key facts, open questions, contradictions. Cite findi
                 "INSERT INTO findings_vec (id, embedding) VALUES (?,?)",
                 (fid, embedding),
             )
-        self.conn.commit()
-
-    # =========================================================================
-    # lean_work_queue repository methods (encapsulate queue-defer SQL so the
-    # CLI handler no longer opens its own sqlite3 connection)
-    # =========================================================================
-
-    def list_deferred_queue_rows(self, limit: int = 50) -> list[Any]:
-        """Return deferred lean_work_queue rows (defer_reason IS NOT NULL)."""
-        return self.conn.execute("""
-            SELECT id, file, decl_name, class, readiness, defer_reason, defer_detail, updated_at
-            FROM lean_work_queue
-            WHERE defer_reason IS NOT NULL AND defer_reason != ''
-            ORDER BY updated_at DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
-
-    def get_queue_row(self, row_id: str) -> Any:
-        """Return a single lean_work_queue row by id, or None."""
-        return self.conn.execute(
-            "SELECT id, class, readiness, defer_reason FROM lean_work_queue WHERE id = ?",
-            (row_id,),
-        ).fetchone()
-
-    def set_defer_reason(self, row_id: str, reason: str, detail: str | None) -> None:
-        """Set defer_reason (and optional detail) on a lean_work_queue row."""
-        self.conn.execute(
-            "UPDATE lean_work_queue SET defer_reason = ?, defer_detail = ?, updated_at = datetime('now') WHERE id = ?",
-            (reason, detail or None, row_id),
-        )
-        self.conn.commit()
-
-    def clear_defer_reason(self, row_id: str) -> None:
-        """Clear defer_reason on a lean_work_queue row (re-activates it)."""
-        self.conn.execute(
-            "UPDATE lean_work_queue SET defer_reason = NULL, defer_detail = NULL, updated_at = datetime('now') WHERE id = ?",
-            (row_id,),
-        )
         self.conn.commit()
 
     def close(self) -> None:

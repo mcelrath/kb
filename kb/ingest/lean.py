@@ -357,7 +357,7 @@ def run(
         kb = KnowledgeBase(db_path=db_path)
     else:
         kb = KnowledgeBase()
-    conn = kb._theorems.conn
+    conn = kb.conn
 
     llm = None
     if not no_summarize:
@@ -462,7 +462,7 @@ def run(
             return 0, len(unique)
 
         embed_texts = [t["statement"] or t["lean_name"] for t in new_thms]
-        embeddings  = kb._theorems.embedding_service.embed_batch(embed_texts)
+        embeddings  = kb.embedding.embed_batch(embed_texts)
         now = datetime.now(timezone.utc).isoformat()
 
         a = 0

@@ -36,9 +36,25 @@ def _fake_bridge_kb(results):
 
 def _fake_queue_kb(rows):
     """Minimal fake kb for run_queue_defer --list."""
+    class FakeCursor:
+        def __init__(self, data):
+            self._data = data
+        def fetchall(self):
+            return self._data
+        def fetchone(self):
+            return self._data[0] if self._data else None
+
+    class FakeConn:
+        def __init__(self, data):
+            self._data = data
+        def execute(self, sql, params=()):
+            return FakeCursor(self._data)
+        def commit(self):
+            pass
+
     class FakeKB:
-        def list_deferred_queue_rows(self, limit=50):
-            return rows
+        def __init__(self):
+            self.conn = FakeConn(rows)
 
     return FakeKB()
 
