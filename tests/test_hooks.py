@@ -37,14 +37,16 @@ def test_kb_db_path_honors_env_and_default(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# compose_time_check.query_route_to_tip — physics advisory must not leak to a
+# physics_queries.query_route_to_tip — physics advisory must not leak to a
 # generic (non-physics) db (kb-4mi)
 # --------------------------------------------------------------------------
-def _load_ctc():
+def _load_physics_queries():
     import importlib.util
     import sys as _sys
     _sys.path.insert(0, os.path.join(SCRIPTS, "lib"))
-    spec = importlib.util.spec_from_file_location("ctc", os.path.join(SCRIPTS, "compose_time_check.py"))
+    spec = importlib.util.spec_from_file_location(
+        "physics_queries", os.path.join(SCRIPTS, "lib", "physics_queries.py")
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -52,11 +54,11 @@ def _load_ctc():
 
 def test_route_to_tip_inert_without_physics_tables():
     import sqlite3
-    m = _load_ctc()
+    m = _load_physics_queries()
     ti = {"subagent_type": "general-purpose"}
     txt = "please prove this theorem and discharge the lemma"
     conn = sqlite3.connect(":memory:")
-    assert m.query_route_to_tip(conn, "Agent", ti, txt) == []        # friend db → no leak
+    assert m.query_route_to_tip(conn, "Agent", ti, txt) == []        # generic db → no leak
     conn.execute("CREATE TABLE lean_work_queue(id TEXT)")
     assert m.query_route_to_tip(conn, "Agent", ti, txt) != []        # physics db → active
 
