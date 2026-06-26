@@ -16,8 +16,16 @@ def run_serve(kb, args) -> None:
         sys.exit(1)
 
     from kb.server import create_app
+    from kb.server.auth import resolve_server_token
     app = create_app(kb)
     print(f"Starting KB server at http://{args.host}:{args.port}")
+    if args.host not in ("127.0.0.1", "::1", "localhost"):
+        if resolve_server_token():
+            print("Federation auth: bearer token configured — non-loopback federation endpoints require it.")
+        else:
+            print("WARNING: bound to a routable interface with NO server token. Federation endpoints "
+                  "default-deny all non-loopback access; set KB_SERVER_TOKEN (or config.toml [server] token) "
+                  "to enable peer federation. (Existing bridge/web endpoints remain open.)")
     print("WebSocket live updates enabled at /ws")
     # timeout_graceful_shutdown bounds SIGTERM handling: the bridge /watch SSE and
     # /ws WebSocket are infinite streams that never drain on their own, so without
